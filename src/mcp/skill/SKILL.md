@@ -43,7 +43,7 @@ Rules that hold on every recording:
   precision.
 - Correlation does not establish causation. Report it as co-movement.
 - On a multi-recording archive of one run, the tools read every recording
-  together unless a `recording` selector (e.g. `{"source": "redis"}`) names
+  together unless a `recording` selector (e.g. `{"alias": "redis"}`) names
   one: each series carries its recording's labels, so `sum by (host)`
   answers per host and `{host="web-01"}` selects one. `extract_features`
   needs a selector, and so does every tool on a comparison (recordings

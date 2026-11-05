@@ -37,7 +37,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -68,7 +68,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -93,7 +93,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -120,7 +120,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -148,7 +148,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -172,7 +172,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -230,7 +230,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             },
             "source": {
@@ -278,7 +278,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -317,7 +317,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             },
             "step": {
@@ -442,7 +442,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             },
             "source": {

@@ -129,8 +129,8 @@ System and service endpoints can also share an archive:
 
 ```bash
 rezolus record --duration 60s \
-  --endpoint http://localhost:4241,source=system \
-  --endpoint http://localhost:9121/metrics,source=valkey \
+  --endpoint http://localhost:4241,alias=system \
+  --endpoint http://localhost:9121/metrics,alias=valkey \
   -o combined.dendro
 ```
 
@@ -201,7 +201,7 @@ rezolus mcp query run.dendro 'sum(irate(cpu_cycles[1m]))'
 
 For a multi-recording archive, first run `describe-recording` without a selector
 to list the recordings. The recordings of one run are read together, each
-series under its recording's labels; pass `--recording source=system` (or
+series under its recording's labels; pass `--recording alias=system` (or
 another matching label set) to read one alone, as `extract-features` and a
 comparison's tools require. MCP tools take the equivalent `recording` object.
 A selector must identify exactly one recording.

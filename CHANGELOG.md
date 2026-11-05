@@ -463,15 +463,42 @@
 
 ### Changed
 
+- **`--endpoint` takes `alias=`, `tier=` and `service_kind=`, and
+  `source=` is read as `alias=`.** `alias=` names an endpoint's recording;
+  `tier=` labels its role in a benchmark (`client`, `server`); and
+  `service_kind=` labels the role its producer runs in (`prefill`), which
+  refines the KPI template it takes. The same keys are accepted in a
+  `--config` file's `[[endpoints]]`. `source=` on an endpoint, `--metadata
+  source=` with `--url` and `--label source=` are read as `alias=`, with a
+  note that `source=` is deprecated; a `source=` and an `alias=` that
+  disagree are refused. A recording's `source` label is now only the one its
+  producer declares, so an older cachecannon's or llm-perf's KPI template,
+  which selects that `source`, shows its KPIs for an endpoint the user
+  named: the gap the move to metriken-recorder 0.7 opened is closed. A
+  selector `source=X` (`--recording`, `--baseline`, `--experiment`, MCP's
+  `recording`) also matches a recording whose `alias` or `__producer__` is
+  `X`, with a note on the command line (MCP's `recording` argument prints
+  none). The end-of-run messages and `record`'s warning name an endpoint by
+  its alias. `scripts/rezolus-capture` and `docker/rezolus-capture` name
+  their endpoints with `alias=`. A `template=` file, or saved PromQL, that
+  selects `source="NAME"` for a name given with `source=` now selects
+  nothing; select `alias="NAME"`. `--metadata source=` with `--endpoint` or
+  `--config` stays plain metadata on every recording of the run. An empty
+  or padded `source`, `alias`, `tier` or `service_kind`, from `--endpoint`,
+  `--config` or `--metadata source=` with `--url`, is refused (exit 2), as
+  are two `--label source=` or two `--metadata source=` with `--url` that
+  disagree. An endpoint's `source=` now outranks a run-wide `--label
+  source=`, as every per-endpoint label outranks `--label`.
+
 - **`record`, hindsight and the live viewer record with metriken-recorder
   0.7.** Each recording carries its identity layers (metriken-storage
   `layers`), and its labels are their merged result:
   - the URL it was recorded from is the label `endpoint`;
   - the recorder infers no `source` from the URL: a recording has a
-    `source` label only when the endpoint was given one
-    (`--endpoint URL,source=NAME`) or its producer declares one, and a
-    `source` metadata key only when `--metadata source=` gave one or its
-    producer's handshake metadata carries one;
+    `source` label only when its producer declares one (an endpoint's
+    `source=` is its `alias`, above), and a `source` metadata key only when
+    its producer's handshake metadata carries one, or `--metadata source=`
+    gave one with `--endpoint` or `--config`;
   - a Rezolus agent's recording carries `__producer__=rezolus`, from the
     producer identity its stream handshake now declares
     (`metriken.producer.*`: name, version and hostname) and from the probe
@@ -480,17 +507,11 @@
   - the producer epochs are the recorder layer's entries, in place of the
     flat `producer_epoch` and `producer_epochs` keys.
 
-  `record`'s warning for an endpoint given no `source` now says that its
-  recording has none. The viewer's section header, a saved selection and
+  `record` warns about an endpoint whose recording has neither an alias nor
+  a producer-declared `source`. The viewer's section header, a saved selection and
   MCP `describe-recording` show a recording without a `source` key by its
   `alias`, `source` label or producer. `record --help`, `docs/usage.md` and
   `docs/parquet_metadata.md` describe the new precedence.
-
-  Known gap until `--endpoint` takes `alias=`: a KPI template that selects
-  its producer's `source` (cachecannon through v0.0.34, llm-perf through
-  v0.1.21) shows empty KPIs for an endpoint given another `source=`, since a
-  recording with layers is not read as a legacy one. Leave `source=` unset
-  on such an endpoint; its recording is told apart by its `endpoint` label.
 
 - **The viewer serves its chart modules from metriken-charts.** `/lib/charts/`
   and `/lib/charts.css` are the metriken-charts crate's `assets/charts/` and

@@ -142,17 +142,19 @@ Identifies the recording's source(s).
 **Set at record time** in a parquet written by a 5.x recorder, inferred from
 the endpoint type unless `--metadata source=<name>` gave it; the viewer picks
 a built-in KPI template by it. In a `.dendro` written by 6.x `record` the
-`source` is a label, given by `source=` on `--endpoint` (or `--metadata
-source=` with `--url`) or by the producer's handshake, and the recorder
-infers none; the recording has a `source` metadata key only when
-`--metadata source=` gave one or its producer's handshake metadata carries
-one.
+`source` label is the one the producer's handshake declares, and the
+recorder infers none; the user names a recording with `alias=` on
+`--endpoint`, and `source=` there, `--label source=` and `--metadata source=`
+with `--url` are read as `alias`. The recording has a `source` metadata key
+only when its producer's handshake metadata carries one, or when `--metadata
+source=` is given with `--endpoint` or `--config`, where it applies to every
+recording of the run as plain metadata.
 
 **Not set after recording in 6.x.** A 5.x `recording annotate --source NAME`
 (`--overwrite` to replace one) rewrote this key. In a `.dendro` the source is
-a label of the recording, set when it is recorded (`record --endpoint
-URL,source=NAME`), and 6.x does not relabel a recording: `annotate --source`
-is refused. A parquet file's `source` becomes its recording's `source` label
+a label of the recording, its producer's, and the user's name for it is its
+`alias` label, set when it is recorded (`record --endpoint URL,alias=NAME`);
+6.x does not relabel a recording: `annotate --source` is refused. A parquet file's `source` becomes its recording's `source` label
 when `recording upgrade` converts it. A combined file becomes one recording
 per input file, each labelled with that input's `source` and its `node` or
 `instance`.

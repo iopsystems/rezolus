@@ -25,8 +25,8 @@ $PROGRAM - Capture system and service metrics, then view the results.
 The Rezolus agent must already be running (started by the container entrypoint).
 This script records system metrics from the local agent and optionally service
 metrics from Prometheus-compatible endpoints into one .dendro archive,
-capture.dendro, holding a recording per endpoint (source=rezolus for the agent,
-source=<NAME> for each service), and launches the Rezolus viewer on it.
+capture.dendro, holding a recording per endpoint (alias=rezolus for the agent,
+alias=<NAME> for each service), and launches the Rezolus viewer on it.
 
 USAGE:
     $PROGRAM <--duration <DURATION> | --command <CMD...> | --pid <PID>> [OPTIONS]
@@ -41,8 +41,8 @@ CAPTURE MODE (exactly one required):
 OPTIONS:
     --endpoint <URL>            Service metrics endpoint (Prometheus-compatible).
                                 Can be specified multiple times for multiple services.
-    --source <NAME>             Source name for service metrics: the source label
-                                of that endpoint's recording. Must be specified
+    --source <NAME>             Name for service metrics: the alias label of that
+                                endpoint's recording. Must be specified
                                 once per --endpoint, in the same order.
     --interval <INTERVAL>       Sampling interval (default: 1s)
     --output-dir <DIR>          Directory capture.dendro is written to (default: /data);
@@ -170,7 +170,7 @@ fi
 
 # Validate source names: each names one recording in the archive, so they
 # must be unique, and `rezolus` is the agent's. A `,` or `=` would split the
-# `--endpoint url,source=NAME` value into other options. A nested loop rather
+# `--endpoint url,alias=NAME` value into other options. A nested loop rather
 # than an associative array, which the bash 3.2 macOS ships does not have.
 for i in "${!SOURCES[@]}"; do
     if [ "${SOURCES[$i]}" = "rezolus" ]; then
@@ -232,16 +232,16 @@ trap cleanup EXIT
 
 # One recorder for every endpoint: the agent is recorded from its stream and
 # each service endpoint is scraped, each into its own recording of one
-# archive, told apart by its source label.
-RECORD=("$REZOLUS" record --endpoint "${AGENT},source=rezolus")
+# archive, named by its alias label.
+RECORD=("$REZOLUS" record --endpoint "${AGENT},alias=rezolus")
 for i in "${!ENDPOINTS[@]}"; do
-    RECORD+=(--endpoint "${ENDPOINTS[$i]},source=${SOURCES[$i]}")
+    RECORD+=(--endpoint "${ENDPOINTS[$i]},alias=${SOURCES[$i]}")
 done
 RECORD+=(-o "$STAGED_FILE" -i "$INTERVAL")
 
-echo "Recording from $AGENT (source: rezolus)..."
+echo "Recording from $AGENT (alias: rezolus)..."
 for i in "${!ENDPOINTS[@]}"; do
-    echo "Recording from ${ENDPOINTS[$i]} (source: ${SOURCES[$i]})..."
+    echo "Recording from ${ENDPOINTS[$i]} (alias: ${SOURCES[$i]})..."
 done
 
 # The recorder runs in its own process group (`set -m`), so a terminal's

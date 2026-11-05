@@ -496,8 +496,8 @@ fn a_prometheus_endpoint_records_into_a_dendro() {
         "the scrape must land in its own acquisition group table: {stdout}"
     );
     assert!(
-        stdout.contains("source=svc"),
-        "the recording keeps its source label: {stdout}"
+        stdout.contains("alias=svc"),
+        "the recording keeps its alias label: {stdout}"
     );
 
     let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
@@ -701,7 +701,7 @@ fn several_prometheus_endpoints_each_become_their_own_recording() {
         .expect("failed to run rezolus mcp describe-recording");
     let listing = String::from_utf8_lossy(&described.stdout);
     assert!(
-        listing.contains("source=alpha") && listing.contains("source=beta"),
+        listing.contains("alias=alpha") && listing.contains("alias=beta"),
         "both targets must be recordings in the archive: {listing}"
     );
 
@@ -784,7 +784,7 @@ fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive(
     for (source, table) in [("agent", "fake/ops"), ("svc", "prometheus/scrape")] {
         let recording = sources
             .iter()
-            .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+            .find(|s| s.labels.get("alias").map(String::as_str) == Some(source))
             .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
         assert!(recording.complete, "{source} is finalized");
         let tables = catalog.tables(recording.id).unwrap();
@@ -844,7 +844,7 @@ fn a_dendro_records_agents_serving_legacy_and_metriken_stream_names() {
     for source in ["legacy", "current"] {
         let recording = sources
             .iter()
-            .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+            .find(|s| s.labels.get("alias").map(String::as_str) == Some(source))
             .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
         assert!(recording.complete, "{source} is finalized");
         let sealed = catalog
@@ -1318,7 +1318,7 @@ fn view_refuses_a_recording_selector_it_cannot_resolve() {
     let (code, text) = view(&["--baseline", "source=nope"]);
     assert_eq!(code, Some(1), "a dead selector must exit non-zero: {text}");
     assert!(
-        text.contains("source=redis") && text.contains("source=valkey"),
+        text.contains("alias=redis") && text.contains("alias=valkey"),
         "the refusal must list the archive's recordings: {text}"
     );
     assert!(
@@ -1769,7 +1769,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
     let by_source = |name: &str| {
         sources
             .iter()
-            .find(|s| s.labels.get("source").map(String::as_str) == Some(name))
+            .find(|s| s.labels.get("alias").map(String::as_str) == Some(name))
             .unwrap_or_else(|| panic!("a recording for {name}: {sources:?}"))
     };
     let agent_src = by_source("agent");
@@ -2053,7 +2053,7 @@ fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
     );
     assert!(
         stderr.contains(&format!(
-            "http://127.0.0.1:{port}/ was given no source and its producer declares none"
+            "http://127.0.0.1:{port}/ was given no alias and its producer declares no source"
         )),
         "{stderr}"
     );
@@ -2122,12 +2122,62 @@ fn an_endpoint_answering_5xx_is_pending_then_streamed() {
     assert_eq!(sources.len(), 2, "{sources:?}");
     let late = sources
         .iter()
-        .find(|s| s.labels.get("source").map(String::as_str) == Some("late"))
+        .find(|s| s.labels.get("alias").map(String::as_str) == Some("late"))
         .unwrap_or_else(|| panic!("a recording for the late endpoint: {sources:?}"));
     assert!(late.complete, "finalized");
     let rows = catalog.segment_span(late.id, "fake/ops").unwrap().1.rows
         + catalog.live_wal_span(late.id, "fake/ops").unwrap().rows;
     assert!(rows > 0, "the late endpoint was streamed");
+}
+
+/// An endpoint given `source=` is named by it as `alias`, with a note that
+/// `source=` is deprecated, and its producer's own `source` stays: an older
+/// cachecannon's KPI template selects `source="cachecannon"`, which the
+/// recording still carries though the user named it `cc-a`.
+#[test]
+fn an_endpoints_source_is_its_alias_and_the_producers_source_stays() {
+    let port = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            labels: &[("source", "cachecannon")],
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("aliased.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port},source=cc-a"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    assert!(stderr.contains("source=cc-a on"), "{stderr}");
+    assert!(stderr.contains("is read as alias=cc-a"), "{stderr}");
+    assert!(!stderr.contains("was given no alias"), "{stderr}");
+
+    let (labels, _, rows) = the_recording(&output, "fake/ops");
+    assert_eq!(
+        labels.get("alias").map(String::as_str),
+        Some("cc-a"),
+        "{labels:?}"
+    );
+    assert_eq!(
+        labels.get("source").map(String::as_str),
+        Some("cachecannon"),
+        "{labels:?}"
+    );
+    assert!(rows > 0, "the stream was recorded");
 }
 
 /// A producer that is not a Rezolus agent and names itself in its stream
@@ -2162,7 +2212,7 @@ fn a_producers_handshake_names_its_recording() {
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "exits 0:\n{stderr}");
-    assert!(!stderr.contains("was given no source"), "{stderr}");
+    assert!(!stderr.contains("was given no alias"), "{stderr}");
 
     let (labels, metadata, rows) = the_recording(&output, "fake/ops");
     assert_eq!(
@@ -2210,7 +2260,7 @@ fn rows_of(output: &std::path::Path, source: &str, table: &str) -> u64 {
     let sources = catalog.sources().expect("the catalog reads");
     let found = sources
         .iter()
-        .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+        .find(|s| s.labels.get("alias").map(String::as_str) == Some(source))
         .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
     catalog.segment_span(found.id, table).unwrap().1.rows
         + catalog.live_wal_span(found.id, table).unwrap().rows

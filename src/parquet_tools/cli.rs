@@ -283,7 +283,7 @@ impl<'a> Host<'a> {
     /// refusal that cannot relabel one.
     pub(super) fn how_labels_are_set(&self) -> String {
         match self.record {
-            Some(r) => format!(" (`{r} --endpoint URL,source=NAME` or `--label k=v`)"),
+            Some(r) => format!(" (`{r} --endpoint URL,alias=NAME` or `--label k=v`)"),
             None => String::new(),
         }
     }
@@ -429,7 +429,7 @@ pub struct CheckArgs {
         id = "RECORDING",
         long = "recording",
         value_name = "KEY=VALUE",
-        help = "Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)\n\
+        help = "Which recording of a multi-recording archive to check, as key=value (e.g. --recording alias=redis)\n\
                 Repeatable: the pairs are ANDed and must together name exactly one\n\
                 recording. Without it every recording is checked."
     )]
