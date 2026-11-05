@@ -861,9 +861,9 @@ fn a_dendro_records_agents_serving_legacy_and_metriken_stream_names() {
 }
 
 /// An agent that restarts mid-recording is recorded in the archive's
-/// metadata: `producer_epochs` gains the new process from its first row, and
-/// `producer_epoch` and `version` name the new process, which reports a new
-/// version.
+/// metadata: the recorder layer gains an entry for the new process from its
+/// first row, carrying the new version, and the recording's `version` is the
+/// new process's.
 #[test]
 fn an_agent_restart_is_written_into_the_recording_metadata() {
     use metriken_storage::Catalog;
@@ -900,31 +900,40 @@ fn an_agent_restart_is_written_into_the_recording_metadata() {
     assert_eq!(sources.len(), 1, "{sources:?}");
     let metadata = &sources[0].metadata;
     assert_eq!(
-        metadata.get("producer_epoch").map(String::as_str),
-        Some(AFTER_RESTART.0),
-        "{metadata:?}"
-    );
-    assert_eq!(
         metadata.get("version").map(String::as_str),
         Some(AFTER_RESTART.1),
         "{metadata:?}"
     );
-    let epochs: serde_json::Value = serde_json::from_str(
-        metadata
-            .get("producer_epochs")
-            .unwrap_or_else(|| panic!("no producer_epochs: {metadata:?}")),
-    )
-    .unwrap();
-    let epochs = epochs.as_array().unwrap();
+    let epochs = recorded_epochs(metadata);
     assert_eq!(epochs.len(), 2, "{epochs:?}");
-    assert_eq!(epochs[0]["epoch"], BEFORE_RESTART.0);
-    assert_eq!(epochs[0]["version"], BEFORE_RESTART.1);
-    assert_eq!(epochs[1]["epoch"], AFTER_RESTART.0);
-    assert_eq!(epochs[1]["version"], AFTER_RESTART.1);
-    assert!(
-        epochs[1]["from_ts"].as_u64() > epochs[0]["from_ts"].as_u64(),
-        "the new epoch starts after the first: {epochs:?}"
+    assert_eq!(epochs[0].0, BEFORE_RESTART.0);
+    assert_eq!(
+        epochs[0].1, None,
+        "the opening epoch covers from the first row"
     );
+    assert_eq!(epochs[1].0, AFTER_RESTART.0);
+    assert!(epochs[1].1.is_some(), "the restart starts at its first row");
+    assert_eq!(epochs[1].2.as_deref(), Some(AFTER_RESTART.1));
+}
+
+/// The producer epochs a recording's recorder layer records, in the order
+/// they were appended: each epoch's id, its `from_ts` (none for the one the
+/// recording opened with), and the `version` its entry carries.
+fn recorded_epochs(
+    metadata: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, Option<u64>, Option<String>)> {
+    let layers = metriken_storage::layers::Layers::read(metadata)
+        .expect("the layers parse")
+        .expect("the recording has identity layers");
+    layers
+        .recorder
+        .entries
+        .iter()
+        .filter_map(|e| {
+            let epoch = e.epoch.clone()?;
+            Some((epoch, e.from_ts, e.metadata.get("version").cloned()))
+        })
+        .collect()
 }
 
 /// An agent that cannot serve `/metrics/stream` (older than 5.21.0) is
@@ -2013,8 +2022,9 @@ fn the_recording(output: &std::path::Path, table: &str) -> Recording {
 
 /// A Prometheus endpoint given by its root URL, with no source, is detected
 /// by stream: its stream route 404s, `/status` and `/` answer without naming
-/// an agent, and it is scraped at `/metrics` under a source inferred from the
-/// URL. GO check 3 of metriken's recorder entry.
+/// an agent, and it is scraped at `/metrics`. Its recording is labelled by
+/// the URL it was scraped from (`endpoint`) and has no `source`, since the
+/// recorder infers none. GO check 3 of metriken's recorder entry.
 #[test]
 fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
     let port = spawn_strict_exporter();
@@ -2041,12 +2051,19 @@ fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
         )),
         "{stderr}"
     );
+    assert!(
+        stderr.contains(&format!(
+            "http://127.0.0.1:{port}/ was given no source and its producer declares none"
+        )),
+        "{stderr}"
+    );
     let (labels, _, rows) = the_recording(&output, "prometheus/scrape");
     assert_eq!(
-        labels.get("source").map(String::as_str),
-        Some(format!("127.0.0.1-{port}").as_str()),
+        labels.get("endpoint").map(String::as_str),
+        Some(format!("http://127.0.0.1:{port}/").as_str()),
         "{labels:?}"
     );
+    assert!(!labels.contains_key("source"), "{labels:?}");
     assert!(rows > 0, "the scrapes were recorded");
 }
 
@@ -2145,7 +2162,7 @@ fn a_producers_handshake_names_its_recording() {
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "exits 0:\n{stderr}");
-    assert!(!stderr.contains("no source name specified"), "{stderr}");
+    assert!(!stderr.contains("was given no source"), "{stderr}");
 
     let (labels, metadata, rows) = the_recording(&output, "fake/ops");
     assert_eq!(
@@ -2153,11 +2170,9 @@ fn a_producers_handshake_names_its_recording() {
         Some("cachecannon"),
         "{labels:?}"
     );
-    assert_eq!(
-        metadata.get("source").map(String::as_str),
-        Some("cachecannon"),
-        "{metadata:?}"
-    );
+    // The handshake's `source` is a label in the producer layer; the recorder
+    // writes no `source` metadata key beside it.
+    assert!(!metadata.contains_key("source"), "{metadata:?}");
     assert_eq!(
         metadata.get("version").map(String::as_str),
         Some("0.9.1"),

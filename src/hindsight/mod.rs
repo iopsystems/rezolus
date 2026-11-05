@@ -369,8 +369,8 @@ pub fn run(config: Config) {
                         info!("the agent's stream reconnected");
                     }
                     Some(mr::Event::Restarted { version, .. }) => info!(
-                        "the buffer's metadata now records the agent restart (producer_epochs; \
-                         version {})",
+                        "the buffer's metadata now records the agent restart (an epoch entry \
+                         in its recorder layer; version {})",
                         version.as_deref().unwrap_or("not reported")
                     ),
                     Some(mr::Event::Refused { reason, .. }) if !refused => {

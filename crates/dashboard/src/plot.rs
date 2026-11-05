@@ -103,7 +103,7 @@ pub struct View {
 impl View {
     pub fn new(data: &dyn MetricsSource, sections: Vec<Section>) -> Self {
         let interval = data.interval();
-        let source = data.source();
+        let source = crate::identity::display_source(data);
         let version = data.version();
 
         // Epoch milliseconds (source is seconds).

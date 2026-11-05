@@ -1592,8 +1592,8 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
 }
 
 /// An agent that restarts while hindsight runs is recorded in the buffer's
-/// metadata: `producer_epochs` gains the new process from its first row, and
-/// `producer_epoch` names it.
+/// metadata: the recorder layer gains an entry for the new process from its
+/// first row.
 #[test]
 fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
     use metriken_storage::Catalog;
@@ -1608,26 +1608,35 @@ fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
 
     let catalog = metriken_storage::DendroCatalog::open(&dest).expect("the dump opens");
     let sources = catalog.sources().unwrap();
-    let metadata = &sources[0].metadata;
-    assert_eq!(
-        metadata.get("producer_epoch").map(String::as_str),
-        Some(RESTARTED_EPOCH),
-        "{metadata:?}"
-    );
-    let epochs: serde_json::Value = serde_json::from_str(
-        metadata
-            .get("producer_epochs")
-            .unwrap_or_else(|| panic!("no producer_epochs: {metadata:?}")),
-    )
-    .unwrap();
-    let epochs = epochs.as_array().unwrap();
+    let epochs = recorded_epochs(&sources[0].metadata);
     assert_eq!(epochs.len(), 2, "{epochs:?}");
-    assert_eq!(epochs[0]["epoch"], EPOCH);
-    assert_eq!(epochs[1]["epoch"], RESTARTED_EPOCH);
-    assert!(
-        epochs[1]["from_ts"].as_u64() > epochs[0]["from_ts"].as_u64(),
-        "the new epoch starts after the first: {epochs:?}"
+    assert_eq!(epochs[0].0, EPOCH);
+    assert_eq!(
+        epochs[0].1, None,
+        "the opening epoch covers from the first row"
     );
+    assert_eq!(epochs[1].0, RESTARTED_EPOCH);
+    assert!(epochs[1].1.is_some(), "the restart starts at its first row");
+}
+
+/// The producer epochs a recording's recorder layer records, in the order
+/// they were appended: each epoch's id, its `from_ts` (none for the one the
+/// recording opened with), and the `version` its entry carries.
+fn recorded_epochs(
+    metadata: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, Option<u64>, Option<String>)> {
+    let layers = metriken_storage::layers::Layers::read(metadata)
+        .expect("the layers parse")
+        .expect("the recording has identity layers");
+    layers
+        .recorder
+        .entries
+        .iter()
+        .filter_map(|e| {
+            let epoch = e.epoch.clone()?;
+            Some((epoch, e.from_ts, e.metadata.get("version").cloned()))
+        })
+        .collect()
 }
 
 /// The buffer is a dendro archive, and its dumps are dendro archives that the

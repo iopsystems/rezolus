@@ -1899,7 +1899,7 @@ for a port unreachable, `error` otherwise), not `timeout`.
 A `connect()` that fails before the socket enters `SYN_SENT`, such as one with
 no route, is not counted, nor is a simultaneous open, which leaves `SYN_SENT`
 for `SYN_RECV`. A later `connect()` on the same socket is timed from that call.
-Agents before 6.0.0-alpha.119 time it from the failed call, or, on a socket
+Agents before 6.0.0-alpha.120 time it from the failed call, or, on a socket
 disconnected after a simultaneous open, from the connect that began that open.
 The count of each histogram is the number of connects with that outcome while
 fewer than 10,240 sockets have a connect in progress, a failed connect or a
