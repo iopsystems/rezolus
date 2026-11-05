@@ -1898,16 +1898,16 @@ for a port unreachable, `error` otherwise), not `timeout`.
 
 A `connect()` that fails before the socket enters `SYN_SENT`, such as one with
 no route, is not counted, nor is a simultaneous open, which leaves `SYN_SENT`
-for `SYN_RECV`. A later `connect()` on the same socket is timed from that later
-call; agents before 6.0.0-alpha.119 time it from the failed call, or from the
-first connect of a simultaneous open on a socket since disconnected. The count
-of each histogram is the number of connects with that outcome while fewer than
-10,240 sockets have a connect in progress, a failed connect or a simultaneous
-open not yet closed; connects beyond that are not counted. A query over
-`tcp_connect_latency` without an `outcome` matcher merges every outcome,
-including timeouts of seconds. Agents before 6.0.0-alpha.103 record one
-unlabeled histogram, which also counts refused connects and ends the time at
-the first segment received in `SYN_SENT`.
+for `SYN_RECV`. A `connect()` retried on the same socket is timed from the
+retry. Agents before 6.0.0-alpha.119 time it from the failed call, or, on a
+socket disconnected after a simultaneous open, from the connect that began that
+open. The count of each histogram is the number of connects with that outcome
+while fewer than 10,240 sockets have a connect in progress, a failed connect or
+a simultaneous open not yet closed; connects beyond that are not counted. A
+query over `tcp_connect_latency` without an `outcome` matcher merges every
+outcome, including timeouts of seconds. Agents before 6.0.0-alpha.103 record
+one unlabeled histogram, which also counts refused connects and ends the time
+at the first segment received in `SYN_SENT`.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
