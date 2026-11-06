@@ -21,6 +21,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **The cgroups section in an A/B comparison.** The section was hidden in
+  compare mode; it is now listed, and its selector lists the cgroups of every
+  capture. Each aggregate chart overlays the captures, and each individual
+  chart becomes one overlay per selected cgroup or group. A cgroup only one
+  capture recorded draws that capture's line alone. An expanded chart still
+  draws the baseline only, as in every other section.
 - **hw_sensors on macOS.** The sampler publishes `sensor_temperature` from the
   IOHIDEventSystem temperature services (the power manager's die and device
   sensors, the battery gas gauge and the NAND), and `sensor_fan_speed`,

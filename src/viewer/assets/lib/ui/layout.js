@@ -379,7 +379,7 @@ const Sidebar = {
             metrics: metricSections,
             samplers: samplerSections,
             instances,
-        } = groupSections(attrs.sections, attrs.compareMode);
+        } = groupSections(attrs.sections);
 
         // A sampler section's link, its chart count once loaded.
         const samplerLink = (section) => {

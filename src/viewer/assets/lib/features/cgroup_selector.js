@@ -197,10 +197,12 @@ export const CgroupSelector = {
     },
 
     async fetchAvailableCgroups(vnode) {
-        const { executeQuery } = vnode.attrs;
+        // `discoverQuery` reads every capture of a comparison, so the list
+        // holds the cgroups of each; `executeQuery` reads the baseline.
+        const { executeQuery, discoverQuery } = vnode.attrs;
 
         try {
-            const cgroups = await discoverCgroups(executeQuery);
+            const cgroups = await discoverCgroups(discoverQuery || executeQuery);
 
             if (cgroups.size === 0) {
                 vnode.state.error = 'No cgroup data found';

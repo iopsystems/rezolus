@@ -19,6 +19,7 @@ import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { pairedSeriesNamer } from './charts/util/labels.js';
 import { baseRoute, groupCompares, pinCompareMeta } from './features/group_utils.js';
+import { mergeResults } from './features/cgroup_discovery.js';
 
 // Normalization helpers for compare-mode captures.
 
@@ -236,6 +237,9 @@ const fetchExperimentResult = (vnode) => {
     // buildEffectiveQuery instead of spec.promql_query so the same
     // histogram/counter rewrites and step substitutions apply.
     const baseQuery = spec.promql_query_experiment || spec.promql_query;
+    // The query this fetch is for, so the view can fetch again when it
+    // changes (a cgroup selection rewrites the query of the same plot).
+    vnode.state._fetchedQuery = baseQuery;
     if (buildEffectiveQuery({ ...spec, promql_query: baseQuery }, { sectionRoute, crossCapture: true }) == null) {
         vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
         return;
@@ -552,6 +556,31 @@ const fetchExtraCaptures = (vnode) => {
     })();
 };
 
+// `query` run on every capture of a comparison: on the baseline through
+// `baselineQuery` (which applies the section's scope and node), on each other
+// capture over its own range. The answer holds every capture's series, so
+// the cgroup selector lists a cgroup any capture recorded. The baseline's
+// failure rejects, as the baseline's query alone did; another capture whose
+// query fails, or that has no usable range, adds nothing.
+export const queryEveryCapture = async (query, baselineQuery) => {
+    const caps = await listCaptures().catch(() => []);
+    const others = (Array.isArray(caps) ? caps : []).filter((c) => c.id !== CAPTURE_BASELINE);
+    const results = await Promise.all([
+        Promise.resolve().then(() => baselineQuery(query)),
+        ...others.map(async (cap) => {
+            try {
+                const range = rangeFromMeta(await captureMetadata(cap.id));
+                return range
+                    ? await queryRangeForCapture(cap.id, query, range.start, range.end, range.step)
+                    : null;
+            } catch (_) {
+                return null;
+            }
+        }),
+    ]);
+    return mergeResults(results);
+};
+
 export const CompareChartWrapper = {
     oninit(vnode) {
         vnode.state.experimentResult = null;
@@ -574,7 +603,20 @@ export const CompareChartWrapper = {
         // last fetch. CompareChartWrapper's oninit only runs once per
         // component lifetime; without this check the cached result from
         // the previous step would render forever.
-        if (!vnode.state.error && !vnode.state._fetchInFlight) {
+        const { spec: currentSpec } = vnode.attrs;
+        if (!vnode.state._fetchInFlight && vnode.state._fetchedQuery !== undefined
+            && (currentSpec.promql_query_experiment || currentSpec.promql_query) !== vnode.state._fetchedQuery) {
+            // The plot's query changed under this component: what was
+            // fetched, or the error it gave, belongs to the old query.
+            vnode.state.error = null;
+            vnode.state.experimentResult = null;
+            vnode.state.extraCaptures = [];
+            vnode.state._capExtrasResult = null;
+            vnode.state._spectrumByKind = {};
+            vnode.state._spectrumPending = null;
+            fetchExperimentResult(vnode);
+            fetchExtraCaptures(vnode);
+        } else if (!vnode.state.error && !vnode.state._fetchInFlight) {
             const want = effectiveExperimentStep(vnode.attrs, { step: 0 });
             if (want > 0 && vnode.state._lastFetchedStep != null
                 && want !== vnode.state._lastFetchedStep) {

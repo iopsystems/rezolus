@@ -27,7 +27,7 @@ import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { MetricBrowserView } from './features/metric_browser.js';
 import { createSourceRoutes } from './features/source_routes.js';
-import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
+import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView, queryEveryCapture } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import { contentFor, CLIENT_SECTIONS } from './ui/client_views.js';
 import {
@@ -1171,6 +1171,15 @@ const SectionContent = {
             : `${sectionName} (${withData})`;
 
         if (baseRoute(attrs.section.route) === '/cgroups') {
+            const baselineQuery = (query) => {
+                const node = getSelectedNode();
+                if (node) query = injectLabel(query, 'node', node);
+                // The cgroup discovery's own queries read the section's
+                // recording's sources, as its charts do
+                // (`metadata.scope`).
+                return executePromQLRangeQuery(
+                    query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
+            };
             return renderCgroupSection({
                 attrs,
                 titleText,
@@ -1178,15 +1187,13 @@ const SectionContent = {
                 chartsState,
                 Chart: ChartView,
                 CgroupSelector,
-                executePromQLRangeQuery: (query) => {
-                    const node = getSelectedNode();
-                    if (node) query = injectLabel(query, 'node', node);
-                    // The cgroup discovery's own queries read the section's
-                    // recording's sources, as its charts do
-                    // (`metadata.scope`).
-                    return executePromQLRangeQuery(
-                        query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
-                },
+                executePromQLRangeQuery: baselineQuery,
+                // A comparison lists the cgroups of every capture.
+                discoverQuery: sectionCompare
+                    ? (query) => queryEveryCapture(query, baselineQuery)
+                    : baselineQuery,
+                compare: sectionCompare,
+                Group,
                 applyResultToPlot,
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },

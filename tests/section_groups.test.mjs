@@ -16,7 +16,7 @@ const sections = [
 ];
 
 test('built-in sections are found by route, whatever their names', () => {
-    const g = groupSections(sections, false);
+    const g = groupSections(sections);
     assert.equal(g.overview.name, 'Summary');
     assert.equal(g.exceptions.name, 'Problems');
     assert.equal(g.queryExplorer.route, '/query');
@@ -26,13 +26,8 @@ test('built-in sections are found by route, whatever their names', () => {
 });
 
 test('a section named like a built-in is a sampler section', () => {
-    const g = groupSections([{ name: 'Overview', route: '/cpu' }], false);
+    const g = groupSections([{ name: 'Overview', route: '/cpu' }]);
     assert.equal(g.overview, undefined);
-    assert.deepEqual(g.samplers.map((s) => s.route), ['/cpu']);
-});
-
-test('compare mode hides the cgroup section', () => {
-    const g = groupSections(sections, true);
     assert.deepEqual(g.samplers.map((s) => s.route), ['/cpu']);
 });
 
@@ -52,7 +47,7 @@ const twoHosts = [
 ];
 
 test('each recording of a combined archive gets its own group', () => {
-    const g = groupSections(twoHosts, false);
+    const g = groupSections(twoHosts);
     assert.equal(g.queryExplorer.route, '/query');
     assert.equal(g.overview, undefined);
     assert.deepEqual(g.samplers, []);
@@ -67,14 +62,6 @@ test('each recording of a combined archive gets its own group', () => {
     );
 });
 
-test('compare mode hides every instance of the cgroup section', () => {
-    const g = groupSections(twoHosts, true);
-    assert.deepEqual(
-        g.instances.map((i) => i.samplers.map((s) => s.route)),
-        [['/cpu'], ['/cpu@h2']],
-    );
-});
-
 test('one recording has no instance groups', () => {
-    assert.deepEqual(groupSections(sections, false).instances, []);
+    assert.deepEqual(groupSections(sections).instances, []);
 });
