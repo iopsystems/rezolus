@@ -375,6 +375,9 @@ last `.rez` writer produced, committed in `crates/rez/tests/fixtures/rez/`
 (`committed_rez`; `edited_rez`, `rez_with_identity`, `add_rez_metadata` and
 `append_rez_wal_tick` derive the catalog state a test needs from one with
 SQL, and `tar_rez` a multi-recording tar from `v2.rez`).
+`tests/released_archives.rs` reads a `.rez` and a `.dendro` that rezolus
+5.29.2 wrote (`tests/fixtures/released/`) and compares this build's
+answers with 5.29.2's.
 
 **A recording is a read group.** `RezReader::open_recordings` (and
 `open_recordings_from_bytes`) returns one reader per read group of the

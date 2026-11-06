@@ -6,7 +6,10 @@
 //! the `.rez` with `recording upgrade`, opens the `.dendro` as it is, and
 //! asks this build's `query` tool the same queries. Every point 5.29.2
 //! returned must come back at the same timestamp with the same value, for
-//! the same series.
+//! the same series, and each recording keeps its labels and metadata.
+//!
+//! The archives hold no histogram data (the macOS agent's histogram samplers
+//! recorded none), so histogram reads are not covered here.
 //!
 //! The queries are ones whose meaning did not change in 6.0. `rate(x[r])`
 //! with `r` longer than the interval is not among them: 5.x returned the
@@ -27,6 +30,23 @@ fn released() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/released")
 }
 
+/// The queries golden.json answers, as in golden.py's `QUERIES`.
+const QUERIES: &[&str] = &[
+    "cpu_cores",
+    "rezolus_memory_usage_resident_set_size",
+    "rate(cpu_usage[1s])",
+    "sum by (state) (irate(cpu_usage[5s]))",
+    "irate(blockio_operations[5s])",
+    "irate(blockio_bytes[5s])",
+    "irate(blockio_driver_errors[5s])",
+    "irate(rezolus_context_switch[5s])",
+    "rate(rezolus_cpu_usage[1s])",
+];
+
+/// The fewest points a golden series holds: 5.29.2 answered with 15 points
+/// for each gauge and 13 for each rate.
+const MIN_POINTS: usize = 13;
+
 type Points = BTreeMap<u64, f64>;
 type Labels = BTreeMap<String, String>;
 /// A series' labels other than `host` and `source`, as sorted pairs.
@@ -38,7 +58,7 @@ fn series(results: &Value) -> BTreeMap<Key, (Labels, Points)> {
     let mut out = BTreeMap::new();
     for s in results.as_array().unwrap() {
         let labels: BTreeMap<String, String> = serde_json::from_value(s["labels"].clone()).unwrap();
-        let key = labels
+        let key: Key = labels
             .iter()
             .filter(|(k, _)| *k != "host" && *k != "source")
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -47,11 +67,32 @@ fn series(results: &Value) -> BTreeMap<Key, (Labels, Points)> {
             .as_array()
             .unwrap()
             .iter()
-            .map(|p| (p[0].as_f64().unwrap() as u64, p[1].as_f64().unwrap()))
+            .map(|p| {
+                let t = p[0].as_f64().unwrap();
+                assert_eq!(t.fract(), 0.0, "a point between whole seconds: {t}");
+                (t as u64, p[1].as_f64().unwrap())
+            })
             .collect();
-        out.insert(key, (labels, points));
+        assert!(
+            out.insert(key.clone(), (labels, points)).is_none(),
+            "two series with the labels {key:?}"
+        );
     }
     out
+}
+
+/// The one recording in `archive` as `recording metadata --json` lists it.
+fn recording(archive: &Path) -> Value {
+    let out = Command::new(bin())
+        .args(["recording", "metadata", "--json", "-i"])
+        .arg(archive)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let listing: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let recordings = listing["recordings"].as_array().unwrap();
+    assert_eq!(recordings.len(), 1, "{listing}");
+    recordings[0].clone()
 }
 
 /// This build's answers to `queries` on `archive`, in golden.json's shape.
@@ -119,8 +160,9 @@ fn ask(archive: &Path, queries: &[String]) -> BTreeMap<String, Value> {
     answers
 }
 
-/// Every golden point is in `got` with the same value; `got` may add points
-/// only before the golden series' first or after its last.
+/// Every golden point is in `got` with the same value; `got` may add one
+/// point a second before the golden series' first and one a second after its
+/// last, and no others.
 fn assert_matches(archive: &str, query: &str, golden: &Value, got: &Value) {
     let (want, have) = (series(golden), series(got));
     assert_eq!(
@@ -130,15 +172,25 @@ fn assert_matches(archive: &str, query: &str, golden: &Value, got: &Value) {
     );
     for (key, (_, want)) in &want {
         let (labels, have) = &have[key];
-        // A 5.x recording keeps its `source` label in 6.0, on every series
-        // an aggregation has not reduced (those keep `sampler`).
+        // A 5.x recording keeps its `source` and `host` labels in 6.0, on
+        // every series an aggregation has not reduced (those keep `sampler`).
         if labels.contains_key("sampler") {
             assert_eq!(
                 labels.get("source").map(String::as_str),
                 Some("rezolus"),
                 "{archive}: {query}: {labels:?}"
             );
+            assert_eq!(
+                labels.get("host").map(String::as_str),
+                Some("macbook.localdomain"),
+                "{archive}: {query}: {labels:?}"
+            );
         }
+        assert!(
+            want.len() >= MIN_POINTS,
+            "{archive}: {query}: {key:?}: golden has {} points",
+            want.len()
+        );
         let first = *want.keys().next().unwrap();
         let last = *want.keys().next_back().unwrap();
         for (t, w) in want {
@@ -153,7 +205,7 @@ fn assert_matches(archive: &str, query: &str, golden: &Value, got: &Value) {
         }
         for t in have.keys().filter(|t| !want.contains_key(t)) {
             assert!(
-                *t < first || *t > last,
+                *t + 1 == first || *t == last + 1,
                 "{archive}: {query}: {key:?}: extra point at {t}"
             );
         }
@@ -186,9 +238,25 @@ fn a_released_recording_answers_as_its_release_did() {
         ("v5.29.2.rez", upgraded),
         ("v5.29.2.dendro", tmp.path().join("v5.29.2.dendro")),
     ] {
+        let r = recording(&path);
+        assert_eq!(r["complete"], true, "{archive}: {r}");
+        assert_eq!(r["labels"]["host"], "macbook.localdomain", "{archive}: {r}");
+        assert_eq!(r["labels"]["source"], "rezolus", "{archive}: {r}");
+        assert_eq!(r["metadata"]["version"], "5.29.2", "{archive}: {r}");
+        let systeminfo: Value =
+            serde_json::from_str(r["metadata"]["systeminfo"].as_str().unwrap()).unwrap();
+        assert_eq!(systeminfo["hostname"], "macbook.localdomain", "{archive}");
+        assert!(
+            r["metadata"]["descriptions"].as_str().unwrap().len() > 1000,
+            "{archive}: descriptions"
+        );
+
         let want = golden["archives"][archive].as_object().unwrap();
-        let queries: Vec<String> = want.keys().cloned().collect();
-        assert!(!queries.is_empty());
+        let mut queries: Vec<String> = want.keys().cloned().collect();
+        let mut expected: Vec<String> = QUERIES.iter().map(|q| q.to_string()).collect();
+        queries.sort();
+        expected.sort();
+        assert_eq!(queries, expected, "{archive}: golden.json's queries");
         let got = ask(&path, &queries);
         for q in &queries {
             assert!(

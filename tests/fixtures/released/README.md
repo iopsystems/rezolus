@@ -18,9 +18,12 @@ rezolus record --duration 15s --interval 1s http://127.0.0.1:14241 -o v5.29.2.de
 ```
 
 Each holds one recording (`host=macbook.localdomain`, `source=rezolus`) of 16
-rows per table, from the samplers the macOS agent runs: `cpu_usage`,
-`blockio_requests` and `rezolus_rusage`. The `.rez` is a v3 archive. The two
-runs scraped at different moments, so their values differ.
+rows per table. Data comes from `cpu_usage`, `blockio_requests` and
+`rezolus_rusage`. The archives also hold 20 `unattributed/*` histogram
+streams with no data, so they cannot test histogram reads; that needs a
+recording from a Linux agent. The `.rez` is a v3 archive. Both archives hold
+the same row timestamps, and their values differ at three of them, so a test
+that reads the wrong archive fails.
 
 ## `golden.json`
 
@@ -28,5 +31,6 @@ What 5.29.2's MCP `query` tool answered on each archive. Regenerate it, only
 with a 5.29.2 binary, by `python3 golden.py path/to/rezolus-5.29.2`.
 
 The queries are ones 6.0 answers the same way: gauges, `irate`, and `rate`
-over a range of one interval. 5.x answered `rate(x[r])` with the rate over
+over a range of one interval. `tests/released_archives.rs` lists them too and
+checks golden.json holds exactly those. 5.x answered `rate(x[r])` with the rate over
 one step for any `r`; 6.0 answers with the average rate over `[t - r, t]`.

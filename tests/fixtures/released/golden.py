@@ -25,6 +25,9 @@ QUERIES = [
     "rate(cpu_usage[1s])",
     "sum by (state) (irate(cpu_usage[5s]))",
     "irate(blockio_operations[5s])",
+    "irate(blockio_bytes[5s])",
+    "irate(blockio_driver_errors[5s])",
+    "irate(rezolus_context_switch[5s])",
     "rate(rezolus_cpu_usage[1s])",
 ]
 
