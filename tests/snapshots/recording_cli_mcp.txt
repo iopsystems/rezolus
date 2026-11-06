@@ -290,50 +290,6 @@
         "name": "run_checks"
       },
       {
-        "description": "Run a PromQL range query over the whole recording and write the result as a CSV or parquet file under the server's export directory (`rezolus mcp --export-dir`), for analysis outside PromQL. Long form: one row per series and timestamp with columns series, timestamp (Unix seconds), value, lo, hi (the rate() uncertainty band, else empty). Returns the path. Refused without an export directory, never overwrites, the filename must be bare, and a result over 1,000,000 rows is refused with a hint to raise step or aggregate.",
-        "inputSchema": {
-          "properties": {
-            "filename": {
-              "description": "A bare file name (no directories); the format's extension is added when missing. Derived from the query when omitted.",
-              "type": "string"
-            },
-            "format": {
-              "description": "Default csv.",
-              "enum": [
-                "csv",
-                "parquet"
-              ],
-              "type": "string"
-            },
-            "parquet_file": {
-              "description": "Path to the recording (.dendro)",
-              "type": "string"
-            },
-            "query": {
-              "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead.",
-              "type": "string"
-            },
-            "recording": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
-              "type": "object"
-            },
-            "step": {
-              "description": "Evaluation step in seconds. Default 1.",
-              "type": "number"
-            }
-          },
-          "required": [
-            "parquet_file",
-            "query"
-          ],
-          "type": "object"
-        },
-        "name": "export_query"
-      },
-      {
         "description": "Build a link that opens a running rezolus viewer at a section (or one chart) with the view state set: time range, time mode, node, GPU, cgroup, service instance, family baseline and compare anchors. Opens nothing and reads no recording. Returns the hash fragment and query string, and a full URL when viewer_url is given or the server was started with --viewer-url. Hand the URL to the person so they land on the chart you are describing.",
         "inputSchema": {
           "properties": {

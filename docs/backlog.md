@@ -763,8 +763,8 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   the event and check writers that share it). The entry's inventory lists
   each writer with its path. Needs a parquet-to-`.dendro` path, `.rez` to
   `.dendro` in the WASM viewer (or no report save there for those sources),
-  and raw to `.dendro` in `convert`. Also removes MCP `export_query` with
-  `--export-dir`.
+  and raw to `.dendro` in `convert`. Done (this PR): MCP `export_query`
+  removed with `--export-dir`.
 - **`snapshot` of a live 5.x `.rez`** — Open. Check whether
   `convert_v3_to_dendro` reads a consistent snapshot of a `.rez` that a 5.x
   writer is still appending to (a 5.x hindsight buffer). If it does not,
@@ -1657,9 +1657,9 @@ Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
   `remove_events` (`ServerOptions`, tiered `tools/list`, flag-off call
   refused naming the flag, tested). `set_kpis` — Open, no producer of KPI
   sets on the agent side yet; the annotate KPI path is ready for it.
-- **`export_query` and `viewer_link`** — DONE. `src/mcp/export.rs` writes
-  a range query as long-form CSV/parquet under `--export-dir` only;
-  `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
+- **`export_query` and `viewer_link`** — DONE. `export_query` (a range
+  query as long-form CSV/parquet under `--export-dir`) was later removed
+  by decision 5, 6.x writes `.dendro` only. `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
   wire form, pinned to the JS parser by `tests/viewer_link_parity.test.mjs`,
   with a full URL from `--viewer-url` or a `viewer_url` argument.
 - **`rezolus mcp install`** — DONE. `src/mcp/install.rs` registers through

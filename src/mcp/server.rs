@@ -47,7 +47,6 @@ enum McpTool {
     AddEvent,
     RemoveEvents,
     RunChecks,
-    ExportQuery,
     ViewerLink,
     Unknown(String),
 }
@@ -64,7 +63,6 @@ impl From<&str> for McpTool {
             "add_event" => McpTool::AddEvent,
             "remove_events" => McpTool::RemoveEvents,
             "run_checks" => McpTool::RunChecks,
-            "export_query" => McpTool::ExportQuery,
             "viewer_link" => McpTool::ViewerLink,
             other => McpTool::Unknown(other.to_string()),
         }
@@ -294,22 +292,6 @@ fn additive_tools() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "export_query",
-            "description": "Run a PromQL range query over the whole recording and write the result as a CSV or parquet file under the server's export directory (`rezolus mcp --export-dir`), for analysis outside PromQL. Long form: one row per series and timestamp with columns series, timestamp (Unix seconds), value, lo, hi (the rate() uncertainty band, else empty). Returns the path. Refused without an export directory, never overwrites, the filename must be bare, and a result over 1,000,000 rows is refused with a hint to raise step or aggregate.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro)"},
-                    "recording": recording_property(),
-                    "query": {"type": "string", "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead."},
-                    "format": {"type": "string", "enum": ["csv", "parquet"], "description": "Default csv."},
-                    "filename": {"type": "string", "description": "A bare file name (no directories); the format's extension is added when missing. Derived from the query when omitted."},
-                    "step": {"type": "number", "description": "Evaluation step in seconds. Default 1."}
-                },
-                "required": ["parquet_file", "query"]
-            }
-        }),
-        json!({
             "name": "viewer_link",
             "description": "Build a link that opens a running rezolus viewer at a section (or one chart) with the view state set: time range, time mode, node, GPU, cgroup, service instance, family baseline and compare anchors. Opens nothing and reads no recording. Returns the hash fragment and query string, and a full URL when viewer_url is given or the server was started with --viewer-url. Hand the URL to the person so they land on the chart you are describing.",
             "inputSchema": {
@@ -479,8 +461,6 @@ fn opt_str(arguments: &Value, key: &str) -> Result<Option<String>, String> {
 #[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
     pub allow_mutating: bool,
-    /// Where `export_query` may write; the tool refuses every call without it.
-    pub export_dir: Option<std::path::PathBuf>,
     /// A running viewer's address, so `viewer_link` can return a full URL.
     pub viewer_url: Option<String>,
 }
@@ -865,11 +845,6 @@ impl Server {
                 id,
                 "run_checks",
                 self.run_checks(arguments).await,
-            ))),
-            McpTool::ExportQuery => Ok(Some(tool_reply(
-                id,
-                "export_query",
-                self.export_query(arguments).await,
             ))),
             McpTool::ViewerLink => Ok(Some(tool_reply(
                 id,
@@ -1335,67 +1310,6 @@ impl Server {
             "exit_code": run.exit_code(),
             "annotated": annotated,
         }))?)
-    }
-
-    /// `export_query`: run a range query and write the rows under the
-    /// server's export directory.
-    async fn export_query(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
-        let Some(dir) = self.options.export_dir.as_deref() else {
-            return Err(
-                "export_query needs a directory to write into; start the server as \
-                        `rezolus mcp --export-dir <DIR>`"
-                    .into(),
-            );
-        };
-        let parquet_file = arguments
-            .get("parquet_file")
-            .and_then(|f| f.as_str())
-            .ok_or("Missing parquet_file")?;
-        let query = arguments
-            .get("query")
-            .and_then(|q| q.as_str())
-            .ok_or("Missing query")?;
-        let format = crate::mcp::export::Format::parse(opt_str(arguments, "format")?.as_deref())?;
-        let name = crate::mcp::export::file_name(
-            opt_str(arguments, "filename")?.as_deref(),
-            query,
-            format,
-        )?;
-        let selector = Self::selector_of(arguments)?;
-        let reader = self.get_reader_selected(parquet_file, &selector).await?;
-        let (start, end) = reader.time_range().unwrap_or((0.0, 0.0));
-        // The same step the `query` tool uses unless the caller says otherwise.
-        let step = match arguments.get("step") {
-            None | Some(Value::Null) => 1.0,
-            Some(Value::Number(n)) => {
-                let s = n.as_f64().unwrap_or(0.0);
-                if !(s.is_finite() && s > 0.0) {
-                    return Err("step must be a positive number of seconds".into());
-                }
-                s
-            }
-            Some(_) => return Err("step must be a number of seconds".into()),
-        };
-        let result = reader.query_range(query, start, end, step)?;
-        crate::mcp::export::check_row_cap(&result, step)?;
-        let rows = crate::mcp::export::rows_of(&result)?;
-        let exported = crate::mcp::export::write(dir, &name, format, &rows)?;
-        let mut response = json!({
-            "path": exported.path,
-            "format": exported.format,
-            "rows": exported.rows,
-            "series": exported.series,
-            "columns": exported.columns,
-            "query": query,
-            "range": {"start": start, "end": end, "step": step},
-            "file": parquet_file,
-        });
-        // The result's notices, as the `query` tool returns them; the
-        // exported file holds only the rows.
-        if !result.notices().is_empty() {
-            response["notices"] = serde_json::to_value(result.notices())?;
-        }
-        Ok(serde_json::to_string_pretty(&response)?)
     }
 
     /// `viewer_link`: pure formatting; no recording is opened.
@@ -1905,8 +1819,8 @@ mod tests {
         let tools = listing["result"]["tools"].as_array().unwrap().clone();
         assert_eq!(
             tools.len(),
-            11,
-            "six read tools, four additive, one mutating must be listed"
+            10,
+            "six read tools, three additive, one mutating must be listed"
         );
         for tool in tools {
             let name = tool["name"].as_str().unwrap();
@@ -2443,70 +2357,7 @@ mod tests {
             .unwrap();
     }
 
-    // ── export_query / viewer_link ───────────────────────────────────────
-
-    #[tokio::test]
-    async fn export_query_needs_the_export_dir_and_then_writes_under_it() {
-        // A recording with a gauge the full-range query resolves.
-        let src = tempfile::tempdir().unwrap();
-        let path = crate::parquet_tools::test_support::simple_dendro(src.path());
-        let file = path.to_str().unwrap();
-        let args = json!({"parquet_file": file, "query": "queue_depth", "filename": "cpu"});
-
-        let off = Server::new();
-        let err = off.export_query(&args).await.err().unwrap().to_string();
-        assert!(err.contains("--export-dir"), "{err}");
-
-        let out_dir = tempfile::tempdir().unwrap();
-        let on = Server::with_options(ServerOptions {
-            export_dir: Some(out_dir.path().to_path_buf()),
-            ..Default::default()
-        });
-        let out: Value = serde_json::from_str(&on.export_query(&args).await.unwrap()).unwrap();
-        assert_eq!(out["format"], "csv");
-        assert_eq!(
-            out["columns"],
-            json!(["series", "timestamp", "value", "lo", "hi"])
-        );
-        let written = std::path::PathBuf::from(out["path"].as_str().unwrap());
-        assert_eq!(written, out_dir.path().join("cpu.csv"));
-        let text = std::fs::read_to_string(&written).unwrap();
-        assert!(text.starts_with("series,timestamp,value,lo,hi\n"), "{text}");
-        assert!(
-            out["rows"].as_u64().unwrap() > 0,
-            "the fixture has queue_depth rows: {out}"
-        );
-
-        // Never over an existing file; never outside the directory.
-        let err = on.export_query(&args).await.err().unwrap().to_string();
-        assert!(err.contains("already exists"), "{err}");
-        let mut escape = args.clone();
-        escape["filename"] = json!("../escape");
-        let err = on.export_query(&escape).await.err().unwrap().to_string();
-        assert!(err.contains("bare file name"), "{err}");
-        assert!(!out_dir.path().parent().unwrap().join("escape.csv").exists());
-
-        // Parquet, and a derived name when none is given.
-        let mut pq = args.clone();
-        pq["format"] = json!("parquet");
-        pq.as_object_mut().unwrap().remove("filename");
-        let out: Value = serde_json::from_str(&on.export_query(&pq).await.unwrap()).unwrap();
-        let p = out["path"].as_str().unwrap();
-        assert!(p.ends_with(".parquet") && p.contains("query-"), "{p}");
-        assert!(std::path::Path::new(p).exists());
-
-        // A step that is not a positive number, and a query that is a heatmap.
-        let mut bad = args.clone();
-        bad["filename"] = json!("s");
-        bad["step"] = json!(-1);
-        assert!(on
-            .export_query(&bad)
-            .await
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("step"));
-    }
+    // ── viewer_link ──────────────────────────────────────────────────────
 
     #[test]
     fn viewer_link_formats_without_opening_anything_and_takes_a_base() {

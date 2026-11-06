@@ -13,7 +13,6 @@ pub(crate) use crate::parquet_tools::select::{
 pub mod anomaly_detection;
 pub mod correlation;
 mod describe_metrics;
-mod export;
 mod install;
 mod link;
 mod server;
@@ -1367,20 +1366,11 @@ impl TryFrom<ArgMatches> for Config {
             Some(("install", sub_args)) => {
                 let server = server::ServerOptions {
                     allow_mutating: sub_args.get_flag("INSTALL_ALLOW_MUTATING"),
-                    export_dir: sub_args.get_one::<PathBuf>("INSTALL_EXPORT_DIR").cloned(),
                     viewer_url: sub_args
                         .get_one::<String>("INSTALL_VIEWER_URL")
                         .map(|u| link::validate_base(u))
                         .transpose()?,
                 };
-                if let Some(dir) = &server.export_dir {
-                    if !dir.is_dir() {
-                        return Err(format!(
-                            "--export-dir {}: not a directory (create it first)",
-                            dir.display()
-                        ));
-                    }
-                }
                 Mode::Install(install::InstallOptions {
                     scope: install::Scope::parse(
                         sub_args
@@ -1402,13 +1392,11 @@ impl TryFrom<ArgMatches> for Config {
 
         let mut server = server::ServerOptions {
             allow_mutating: args.get_flag("ALLOW_MUTATING"),
-            export_dir: args.get_one::<PathBuf>("EXPORT_DIR").cloned(),
             viewer_url: args.get_one::<String>("VIEWER_URL").cloned(),
         };
         if !matches!(mode, Mode::Server) {
             let set = [
                 (server.allow_mutating, "--allow-mutating"),
-                (server.export_dir.is_some(), "--export-dir"),
                 (server.viewer_url.is_some(), "--viewer-url"),
             ];
             if let Some((_, flag)) = set.iter().find(|(on, _)| *on) {
@@ -1419,15 +1407,6 @@ impl TryFrom<ArgMatches> for Config {
         }
         if let Some(url) = &server.viewer_url {
             server.viewer_url = Some(link::validate_base(url)?);
-        }
-        if let Some(dir) = &server.export_dir {
-            if !dir.is_dir() {
-                return Err(format!(
-                    "--export-dir {}: not a directory (create it first; exports are refused \
-                     rather than written somewhere else)",
-                    dir.display()
-                ));
-            }
         }
 
         Ok(Config {
@@ -1492,8 +1471,7 @@ pub fn command() -> Command {
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
              The stdio server also has tools with no CLI form: add_event marks an instant\n\
              or range in the recording, run_checks evaluates its KPI checks (and writes the\n\
-             verdicts with annotate=true), export_query writes a range query as CSV or\n\
-             parquet under --export-dir, viewer_link builds a link that opens a running\n\
+             verdicts with annotate=true), viewer_link builds a link that opens a running\n\
              viewer at a section and time range (a full URL with --viewer-url), and, only\n\
              with --allow-mutating, remove_events takes events out again.\n\n\
              EXAMPLES:\n    \
@@ -1524,18 +1502,6 @@ pub fn command() -> Command {
                      unless the operator starting the server says otherwise. Server mode only.",
                 )
                 .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            clap::Arg::new("EXPORT_DIR")
-                .long("export-dir")
-                .value_name("DIR")
-                .value_parser(clap::value_parser!(PathBuf))
-                .help(
-                    "Directory the export_query tool may write files into (server mode only)\n\
-                     Without it the tool is listed but refuses every call, naming this flag.\n\
-                     Files land under a bare name the agent chooses (or one derived from the\n\
-                     query), never over an existing file, never outside this directory.",
-                ),
         )
         .arg(
             clap::Arg::new("VIEWER_URL")
@@ -1731,11 +1697,11 @@ pub fn command() -> Command {
                      Claude Code resolves a server name local > project > user. When another scope's\n\
                      rezolus entry would win over the one written, install says so and names the\n\
                      command that removes it.\n\n\
-                     The server flags given here (--allow-mutating, --export-dir, --viewer-url) are\n\
+                     The server flags given here (--allow-mutating, --viewer-url) are\n\
                      baked into the registered command, so the server the client starts has them.\n\n\
                      EXAMPLES:\n    \
                      rezolus mcp install\n    \
-                     rezolus mcp install --scope project --export-dir ./exports\n    \
+                     rezolus mcp install --scope project\n    \
                      rezolus mcp install --dry-run",
                 )
                 .arg(
@@ -1751,13 +1717,6 @@ pub fn command() -> Command {
                         .long("allow-mutating")
                         .help("Register the server with --allow-mutating (enables remove_events)")
                         .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("INSTALL_EXPORT_DIR")
-                        .long("export-dir")
-                        .value_name("DIR")
-                        .value_parser(clap::value_parser!(PathBuf))
-                        .help("Register the server with --export-dir DIR (enables export_query); must exist"),
                 )
                 .arg(
                     clap::Arg::new("INSTALL_VIEWER_URL")
@@ -2771,6 +2730,23 @@ pub(crate) mod tests {
         assert!(command()
             .try_get_matches_from(["mcp", "--recording", "source=redis"])
             .is_err());
+    }
+
+    /// `--export-dir` went with `export_query` (6.x writes `.dendro` only);
+    /// the server and `install` both refuse it as an unknown argument.
+    #[test]
+    fn the_export_dir_flag_is_refused() {
+        for argv in [
+            vec!["mcp", "--export-dir", "/tmp"],
+            vec!["mcp", "install", "--export-dir", "/tmp"],
+        ] {
+            let err = command().try_get_matches_from(&argv).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{argv:?}"
+            );
+        }
     }
 
     // ── recording attribution (issue #1195) ─────────────────────────────────

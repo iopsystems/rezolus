@@ -878,7 +878,7 @@ a stdio MCP server or as one-shot CLI commands.
 
 ```bash
 rezolus mcp install                                    # user scope: every project
-rezolus mcp install --scope project --export-dir ./exports   # this directory's .mcp.json
+rezolus mcp install --scope project                    # this directory's .mcp.json
 rezolus mcp install --dry-run                          # say what would be done
 ```
 
@@ -889,8 +889,8 @@ recording and its metrics before querying, extract features before forming
 hypotheses, the recording selector, and what to write back. In Claude Code,
 `/mcp` lists the server and `/rezolus-mcp` loads the skill; `claude mcp list`
 checks the connection from a shell. Re-running replaces the entry, which is
-how the server's flags (`--allow-mutating`, `--export-dir`, `--viewer-url`,
-all accepted by `install`) are changed. Without `claude` on `PATH`, project
+how the server's flags (`--allow-mutating` and `--viewer-url`, both accepted
+by `install`) are changed. Without `claude` on `PATH`, project
 scope writes `.mcp.json` directly and user scope prints the command to run.
 A skill file that is not this skill, or a symlink, is never overwritten.
 Claude Code resolves a server name local, then project, then user; when
@@ -944,21 +944,6 @@ an event.
   as `queries`, and returns every verdict with its violation windows and a
   summary. With `annotate: true` the windows are written into the recording
   as `kind=check` events, exactly as `rezolus recording check --annotate`.
-- `export_query` runs a PromQL range query over the whole recording and
-  writes the rows as CSV (default) or parquet, long form: one row per series
-  and timestamp with columns `series`, `timestamp` (Unix seconds), `value`,
-  `lo`, `hi` (the `rate()` uncertainty band, else empty). It is the way out
-  of PromQL: the agent gets rows it can load into whatever it has. Files
-  land only under the directory the server was started with, under a bare
-  `filename` (or one derived from the query), never over an existing file,
-  and never through a symlink planted there. A result over a million rows is
-  refused with the count and a hint to raise `step` or aggregate:
-
-  ```bash
-  rezolus mcp --export-dir /tmp/rezolus-exports
-  ```
-
-  Without the flag the tool refuses every call, naming it.
 - `viewer_link` builds a link that opens a running viewer at a `section` (or
   one `chart_id`) with the view state set: `from`/`to`, `time`, `node`,
   `gpu`, `cgroup`, `instance`, `family` and compare `anchors`, the same keys
