@@ -1887,12 +1887,12 @@ While the battery charges, `PPBR` reads about 0.4 W (up to 7.6 W for a few
 seconds at a load step), so charging is not visible in `battery`. `DC in`
 minus `system` is the power going into the battery: at the four gauge updates
 before a load step, the gauge read 36.4, 72.6, 66.6 and 65.3 W, and the
-previous second's `PDTR` minus `PSTR` read 36.3, 72.5, 66.3 and 65.4 W. At
-the seven updates during and after the step, the previous second's `PDTR`
-minus `PSTR` reached each gauge reading one to two seconds later. Because
-`PSTR` trails `PDTR` by a second, a single read of `DC in` minus `system` is
-off by the change in `PDTR` over that second, which reached 45 W at a load
-step; average it over a minute.
+previous second's `PDTR` minus the current `PSTR` read 36.3, 72.5, 66.3 and
+65.4 W. At the seven updates during and after the step, the previous second's
+`PDTR` minus the current `PSTR` reached each gauge reading one to two seconds
+later. Because `PSTR` trails `PDTR` by a second, a single read of `DC in`
+minus `system` is off by the change in `PDTR` over that second: 42 W at the
+load step, and 46 W when charging stopped. Average it over a minute.
 
 The SMC has many more temperature keys (281 reading between 10 and 120 °C on
 an M4 Max), but their names are undocumented and differ between chips, so
