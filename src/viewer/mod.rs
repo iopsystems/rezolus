@@ -54,14 +54,14 @@ use ::dashboard::source_templates::TemplatePreference;
 use capture_registry::CaptureId;
 use state::AppState;
 
-/// Shared entry point for loading the template registry. Both the
-/// viewer (`rezolus view`) and `rezolus recording annotate/check` call
-/// this. Precedence: explicit `--templates <path>` > env var /
-/// `crates/dashboard/templates/` default (developer-mode or explicit path only).
-/// Release builds fall back to the templates baked into the `dashboard`
-/// crate via `include_dir!`, so the binary and any other consumer of that
-/// crate render the same set; developer-mode reads from disk so template
-/// edits don't require a rebuild.
+/// Shared entry point for loading the template registry, used by the viewer
+/// (`rezolus view`), `rezolus recording annotate/check` and the MCP server.
+/// An explicit `--templates <path>` wins. Otherwise a release build uses the
+/// templates baked into the `dashboard` crate via `include_dir!`, so the
+/// binary and any other consumer of that crate render the same set. A
+/// developer-mode build reads from disk, so template edits don't require a
+/// rebuild: `REZOLUS_TEMPLATES` if set, else the source tree's
+/// `crates/dashboard/templates/` by an absolute path fixed at compile time.
 pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
     if cli_path.is_some() {
         return ::dashboard::resolve_templates(cli_path);
@@ -73,9 +73,15 @@ pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
             TemplateRegistry::empty()
         })
     }
+    // Without `REZOLUS_TEMPLATES`, load the source tree's templates by a path
+    // fixed at compile time, so the working directory does not matter.
     #[cfg(feature = "developer-mode")]
     {
-        ::dashboard::resolve_templates(None)
+        let source_tree = concat!(env!("CARGO_MANIFEST_DIR"), "/crates/dashboard/templates");
+        let dir = std::env::var(::dashboard::TEMPLATES_ENV_VAR)
+            .is_err()
+            .then(|| Path::new(source_tree));
+        ::dashboard::resolve_templates(dir)
     }
 }
 
@@ -1368,8 +1374,10 @@ fn init_live_mode(
 async fn serve(listener: std::net::TcpListener, state: AppState) {
     let livereload = LiveReloadLayer::new();
 
+    // The watcher stops when it is dropped, so it is held until the server
+    // returns.
     #[cfg(feature = "developer-mode")]
-    {
+    let _watcher = {
         let reloader = livereload.reloader();
         let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
             if let Ok(event) = res {
@@ -1379,13 +1387,16 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
             }
         })
         .expect("failed to initialize watcher");
+        for dir in [
+            Path::new(routes::DEV_ASSETS_DIR),
+            Path::new(metriken_charts::ASSETS_PATH),
+        ] {
+            watcher
+                .watch(dir, notify::RecursiveMode::Recursive)
+                .unwrap_or_else(|e| panic!("failed to watch {}: {e}", dir.display()));
+        }
         watcher
-            .watch(
-                Path::new("src/viewer/assets"),
-                notify::RecursiveMode::Recursive,
-            )
-            .expect("failed to watch assets folder");
-    }
+    };
 
     let app: Router = routes::app(livereload, state);
 
