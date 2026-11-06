@@ -1857,7 +1857,8 @@ A rail is one that a HID voltage or current service on usage page `0xff08`
 names. The service named `PMU vbuck0` at location `VP0b` is rail `PMU buck0`,
 and its voltage, current and power are the SMC keys `VP0b`, `IP0b` and
 `PP0b`. A voltage service's location must start with `V` and a current
-service's with `I`. The sampler does not read a key the SMC does not have or
+service's with `I`, and a location that is one of `VD0R`, `ID0R` or `PDTR` is
+not a rail. The sampler does not read a key the SMC does not have or
 that is not a 32-bit float; on an M4 Max, 14 of the candidate keys are not
 read. When several sensors of one metric have the same name, each has its
 `sensor` appended, as in `gas gauge battery (TG0B)`.
@@ -1879,8 +1880,8 @@ On an M4 Max, with only `hw_sensors` and `rezolus_rusage` enabled at a 5
 second interval and one scrape per second for 150 seconds, the sampler read 76
 sensors per sweep in 34.5 ms at the median, 38.0 ms at the 90th percentile and
 324 ms at most (60 sweeps; four took between 76 and 324 ms). The agent used 40
-to 60 ms more CPU per run than with the sampler off (about 0.03% of a core;
-two runs each). Each SMC read takes about 165 µs and each HID
+to 60 ms more CPU per run than with the sampler off (0.03 to 0.04% of a
+core; two runs each). Each SMC read takes about 165 µs and each HID
 temperature read about 1 ms, nearly all of it waiting rather than on CPU.
 
 ## Syscall
