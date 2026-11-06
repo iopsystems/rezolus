@@ -669,8 +669,10 @@ static EMBEDDED_TEMPLATES: include_dir::Dir<'_> =
 
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_TEMPLATES_DIR: &str = "crates/dashboard/templates";
+/// The environment variable that names a templates directory; see
+/// [`resolve_templates`].
 #[cfg(not(target_arch = "wasm32"))]
-const TEMPLATES_ENV_VAR: &str = "REZOLUS_TEMPLATES";
+pub const TEMPLATES_ENV_VAR: &str = "REZOLUS_TEMPLATES";
 
 /// The registry `--templates` names, from (in priority order):
 /// 1. Explicit CLI `--templates` path

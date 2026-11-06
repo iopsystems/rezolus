@@ -88,9 +88,8 @@ fn render(args: &[String], tmp: &Path) -> String {
         .args(args)
         .current_dir(tmp)
         .env("REZOLUS_NO_OPEN", "1")
-        // A developer-mode build reads its built-in templates from this
-        // directory, relative to the working directory unless set, and the
-        // invocations run in a scratch directory.
+        // Overrides any REZOLUS_TEMPLATES in the caller's environment, so a
+        // developer-mode build renders the repository's templates.
         .env(
             "REZOLUS_TEMPLATES",
             repo().join("crates/dashboard/templates"),

@@ -52,14 +52,14 @@ use ::dashboard::source_templates::TemplatePreference;
 use capture_registry::CaptureId;
 use state::AppState;
 
-/// Shared entry point for loading the template registry. Both the
-/// viewer (`rezolus view`) and `rezolus recording annotate/check` call
-/// this. Precedence: explicit `--templates <path>` > env var /
-/// `crates/dashboard/templates/` default (developer-mode or explicit path only).
-/// Release builds fall back to the templates baked into the `dashboard`
-/// crate via `include_dir!`, so the binary and any other consumer of that
-/// crate render the same set; developer-mode reads from disk so template
-/// edits don't require a rebuild.
+/// Shared entry point for loading the template registry, used by the viewer
+/// (`rezolus view`), `rezolus recording annotate/check` and the MCP server.
+/// An explicit `--templates <path>` wins. Otherwise a release build uses the
+/// templates baked into the `dashboard` crate via `include_dir!`, so the
+/// binary and any other consumer of that crate render the same set. A
+/// developer-mode build reads from disk, so template edits don't require a
+/// rebuild: `REZOLUS_TEMPLATES` if set, else the source tree's
+/// `crates/dashboard/templates/` by an absolute path fixed at compile time.
 pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
     if cli_path.is_some() {
         return ::dashboard::resolve_templates(cli_path);
@@ -71,9 +71,15 @@ pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
             TemplateRegistry::empty()
         })
     }
+    // Without `REZOLUS_TEMPLATES`, load the source tree's templates by a path
+    // fixed at compile time, so the working directory does not matter.
     #[cfg(feature = "developer-mode")]
     {
-        ::dashboard::resolve_templates(None)
+        let source_tree = concat!(env!("CARGO_MANIFEST_DIR"), "/crates/dashboard/templates");
+        let dir = std::env::var(::dashboard::TEMPLATES_ENV_VAR)
+            .is_err()
+            .then(|| Path::new(source_tree));
+        ::dashboard::resolve_templates(dir)
     }
 }
 
