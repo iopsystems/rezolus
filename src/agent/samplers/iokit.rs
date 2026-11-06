@@ -1,6 +1,6 @@
 //! Minimal IOKit and CoreFoundation bindings for the macOS samplers that read
 //! the I/O registry (`blockio`, `drivehealth`, `network_traffic`,
-//! `cpu_frequency`, `cpu_power`).
+//! `cpu_frequency`, `cpu_power`, `hw_sensors`).
 //!
 //! Only what those samplers call is bound. Every owned registry object,
 //! CoreFoundation object and plugin interface is wrapped so it is released on
@@ -67,6 +67,26 @@ extern "C" {
         plane: *const c_char,
         iterator: *mut IoObject,
     ) -> KernReturn;
+    fn IOServiceOpen(
+        service: IoObject,
+        owning_task: u32,
+        kind: u32,
+        connect: *mut IoObject,
+    ) -> KernReturn;
+    fn IOServiceClose(connect: IoObject) -> KernReturn;
+    fn IOConnectCallStructMethod(
+        connection: IoObject,
+        selector: u32,
+        input: *const c_void,
+        input_size: usize,
+        output: *mut c_void,
+        output_size: *mut usize,
+    ) -> KernReturn;
+}
+
+extern "C" {
+    /// The task's own port, which the `mach_task_self()` macro reads.
+    static mach_task_self_: u32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -115,7 +135,7 @@ extern "C" {
 /// # Safety
 ///
 /// `v` must be null or a live CoreFoundation object.
-unsafe fn string_value(v: CfTypeRef) -> Option<String> {
+pub(crate) unsafe fn string_value(v: CfTypeRef) -> Option<String> {
     if v.is_null() || CFGetTypeID(v) != CFStringGetTypeID() {
         return None;
     }
@@ -165,6 +185,11 @@ impl CfString {
             CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), CF_STRING_ENCODING_UTF8)
         };
         (!r.is_null()).then(|| CfString(Owned(r)))
+    }
+
+    /// The CFString, for a CoreFoundation call made while `self` is alive.
+    pub(crate) fn as_ptr(&self) -> *const c_void {
+        self.0 .0
     }
 }
 
@@ -388,6 +413,15 @@ impl Service {
         unsafe { (CFGetTypeID(v.0) == CFBooleanGetTypeID()).then(|| CFBooleanGetValue(v.0) != 0) }
     }
 
+    /// Open a connection to this service's user client of type `kind`.
+    pub(crate) fn open(&self, kind: u32) -> Option<UserClient> {
+        let mut connect: IoObject = 0;
+        // SAFETY: `self.0` is a live service and `connect` a valid
+        // out-pointer; on success it is a connection `UserClient` closes.
+        let kr = unsafe { IOServiceOpen(self.0, mach_task_self_, kind, &mut connect) };
+        (kr == KERN_SUCCESS && connect != 0).then_some(UserClient(connect))
+    }
+
     /// The first string property `key` found on this entry or its children
     /// in the service plane, searched depth first.
     pub(crate) fn search_string(&self, key: &CfString) -> Option<String> {
@@ -409,6 +443,51 @@ impl Service {
         let v = Owned(v);
         // SAFETY: `v.0` is a live CF object.
         unsafe { string_value(v.0) }
+    }
+}
+
+/// An open connection to a service's user client, closed on drop.
+pub(crate) struct UserClient(IoObject);
+
+// SAFETY: a connection is a Mach port name, which any thread of the task can
+// use.
+unsafe impl Send for UserClient {}
+
+impl UserClient {
+    /// Call struct method `selector` with `input`, writing the reply into
+    /// `output`. Returns false if the call fails or the reply is not
+    /// `size_of::<O>()` bytes.
+    ///
+    /// # Safety
+    ///
+    /// `I` and `O` must be `#[repr(C)]` types matching the layout the user
+    /// client expects for `selector`, and every byte pattern must be a valid
+    /// `O`.
+    pub(crate) unsafe fn call_struct<I, O>(
+        &self,
+        selector: u32,
+        input: &I,
+        output: &mut O,
+    ) -> bool {
+        let mut size = std::mem::size_of::<O>();
+        let kr = IOConnectCallStructMethod(
+            self.0,
+            selector,
+            input as *const I as *const c_void,
+            std::mem::size_of::<I>(),
+            output as *mut O as *mut c_void,
+            &mut size,
+        );
+        kr == KERN_SUCCESS && size == std::mem::size_of::<O>()
+    }
+}
+
+impl Drop for UserClient {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is a connection this wrapper opened, closed once.
+        unsafe {
+            IOServiceClose(self.0);
+        }
     }
 }
 
