@@ -227,6 +227,7 @@ const initComponents = () => {
         experimentQueryRange,
         baselineAlias,
         experimentAlias,
+        activeCgroupPattern,
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -1171,15 +1172,15 @@ const SectionContent = {
             : `${sectionName} (${withData})`;
 
         if (baseRoute(attrs.section.route) === '/cgroups') {
-            const baselineQuery = (query) => {
+            const withNode = (query) => {
                 const node = getSelectedNode();
-                if (node) query = injectLabel(query, 'node', node);
-                // The cgroup discovery's own queries read the section's
-                // recording's sources, as its charts do
-                // (`metadata.scope`).
-                return executePromQLRangeQuery(
-                    query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
+                return node ? injectLabel(query, 'node', node) : query;
             };
+            // The cgroup discovery's own queries read the section's
+            // recording's sources, as its charts do (`metadata.scope`).
+            const scopedQuery = (query) => executePromQLRangeQuery(
+                query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
+            const baselineQuery = (query) => scopedQuery(withNode(query));
             return renderCgroupSection({
                 attrs,
                 titleText,
@@ -1189,8 +1190,10 @@ const SectionContent = {
                 CgroupSelector,
                 executePromQLRangeQuery: baselineQuery,
                 // A comparison lists the cgroups of every capture.
+                // The selected node filters every capture, as it does the
+                // compare charts (`buildEffectiveQuery`).
                 discoverQuery: sectionCompare
-                    ? (query) => queryEveryCapture(query, baselineQuery)
+                    ? (query) => queryEveryCapture(withNode(query), scopedQuery)
                     : baselineQuery,
                 compare: sectionCompare,
                 Group,

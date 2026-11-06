@@ -1,6 +1,8 @@
 // Attrs:
 //   groups: array of group objects with plots
 //   executeQuery: (query) => Promise<result> — runs a PromQL range query
+//   discoverQuery: (query) => Promise<result> — runs the cgroup discovery
+//     queries; in compare mode on every capture, merged (default executeQuery)
 //   applyResultToPlot: (plot, result) => void — applies PromQL result to a plot
 //   substitutePattern: (query, selection) => string — substitutes cgroup placeholder
 //   setActiveCgroupPattern: (selection) => void — sets the global active cgroup
