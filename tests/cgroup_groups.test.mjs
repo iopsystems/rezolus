@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
     isCgroupGroupKey,
     cgroupTree,
@@ -192,8 +192,28 @@ test('a selection resolves to the individual, excluded and per-group patterns', 
     assert.equal(r.leaf, q('/system.slice/ssh.service'));
     assert.equal(r.groups.length, 1);
     assert.equal(r.groups[0].key, `${VM}/`);
-    assert.equal(r.groups[0].pattern, `(${NAMES.slice(0, 3).map(q).join('|')})`);
-    assert.equal(r.excluded, `(${[...NAMES.slice(0, 3), '/system.slice/ssh.service'].sort().map(q).join('|')})`);
+    assert.equal(r.groups[0].pattern, `${q(VM)}(?:/.*)?`);
+    assert.equal(r.excluded, `(${q('/system.slice/ssh.service')}|${q(VM)}(?:/.*)?)`);
+});
+
+// Whether a pattern as it appears in a PromQL string matches `name`, anchored
+// at both ends as the engine anchors it.
+const matches = (pattern, name) => new RegExp(`^(?:${pattern.replace(/\\(.)/g, '$1')})$`).test(name);
+
+test("a group's pattern matches its unit's cgroups under its key and a shortened key merged into it", () => {
+    // `.../vm.scope/` is merged into the longer key.
+    const names = ['/m.slice/vm.scope/a', '/m.slice/vm.scope/b', '.../vm.scope/libvirt/vcpu0', '/m.slice/vmXscope/a'];
+    const groups = deriveCgroupGroups(new Set(names));
+    assert.deepEqual([...groups.keys()], ['/m.slice/vm.scope/']);
+    const { pattern } = resolveCgroupSelection(['/m.slice/vm.scope/'], groups).groups[0];
+    for (const n of [...names.slice(0, 3), '/m.slice/vm.scope', '/m.slice/vm.scope/new/child',
+        '.../vm.scope/libvirt/vcpu1', '.../vm.scope']) {
+        assert.ok(matches(pattern, n), n);
+    }
+    assert.equal(pattern, `(${q('/m.slice/vm.scope')}(?:/.*)?|${q('.../vm.scope')}(?:/.*)?)`);
+    for (const n of ['/m.slice/vmXscope/a', '/m.slice/vm.scopex', '.../vmXscope/a', '.../other.scope/vm.scope/a']) {
+        assert.ok(!matches(pattern, n), n);
+    }
 });
 
 test('a group the recording lacks, or with a member that cannot be quoted, is left out', () => {
@@ -216,49 +236,66 @@ const queries = [];
 const individual = queries.filter((q) => q.includes('name=~"__SELECTED_CGROUPS__"'));
 const aggregate = queries.filter((q) => q.includes('name!~"__SELECTED_CGROUPS__"'));
 
-test('every individual query gives one summed query per group', () => {
+test('every individual query is one query that names each group member by its group', () => {
     const groups = deriveCgroupGroups(new Set(NAMES));
     const sel = resolveCgroupSelection([`${VM}/`, '/system.slice/ssh.service'], groups);
     assert.ok(individual.length > 5);
     for (const t of individual) {
         const variants = cgroupQueryVariants(t, sel);
-        assert.equal(variants.length, 2, t);
-        const [leaf, group] = variants.map((v) => substituteCgroupPattern(v.query, v.selection));
-        assert.ok(leaf.includes(`name=~"${q('/system.slice/ssh.service')}"`), leaf);
-        assert.match(leaf, /sum by \(name\)/);
-        assert.equal(variants[1].label, `${VM}/`);
-        assert.ok(group.includes(`name=~"${sel.groups[0].pattern}"`), group);
-        assert.doesNotMatch(group, /by \(name\)|__SELECTED_CGROUPS__/);
+        assert.deepEqual(variants.map((v) => v.label), [null], t);
+        const out = substituteCgroupPattern(variants[0].query, variants[0].selection);
+        assert.ok(out.includes(`name=~"${sel.excluded}"`), out);
+        assert.ok(out.includes(`"name", "${VM}/", "name", "${sel.groups[0].pattern}")`), out);
+        assert.equal(out.match(/sum by \(name\)/g).length, t.match(/sum by \(name\)/g).length, out);
+        assert.doesNotMatch(out, /__SELECTED_CGROUPS__/);
     }
 });
 
-test("the IPC chart's group query divides summed instructions by summed cycles", () => {
-    const ipc = individual.find((q) => q.includes('cgroup_cpu_instructions'));
-    const groups = deriveCgroupGroups(new Set(NAMES));
-    const sel = resolveCgroupSelection([`${VM}/`], groups);
-    const [v] = cgroupQueryVariants(ipc, sel);
-    const out = substituteCgroupPattern(v.query, v.selection);
-    const p = sel.groups[0].pattern;
-    assert.equal(out,
-        `sum (irate(cgroup_cpu_instructions{name=~"${p}"}[5m])) / sum (irate(cgroup_cpu_cycles{name=~"${p}"}[5m]))`);
+// tests/fixtures/cgroup_group_query.json holds the queries a selection of two
+// groups and a name gives; src/viewer/cgroup_group_query_test.rs runs them on
+// an archive and checks each group's line is its members' sum.
+test('the one-query form matches the fixture the engine test runs', () => {
+    const path = new URL('./fixtures/cgroup_group_query.json', import.meta.url);
+    const fixture = JSON.parse(readFileSync(path));
+    const sel = resolveCgroupSelection(fixture.selected, deriveCgroupGroups(new Set(fixture.names)));
+    const queries = fixture.queries.map(({ template }) => {
+        const [v] = cgroupQueryVariants(template, sel);
+        return { template, query: substituteCgroupPattern(v.query, v.selection) };
+    });
+    if (process.env.REZOLUS_BLESS) {
+        writeFileSync(path, JSON.stringify({ ...fixture, queries }, null, 2) + '\n');
+        return;
+    }
+    assert.deepEqual(queries, fixture.queries);
 });
 
-test('only groups selected: no query for individual names', () => {
+test('only groups selected: one query, still summed by name', () => {
     const groups = deriveCgroupGroups(new Set(NAMES));
     const sel = resolveCgroupSelection([`${VM}/`], groups);
     for (const t of individual) {
         const variants = cgroupQueryVariants(t, sel);
-        assert.deepEqual(variants.map((v) => v.label), [`${VM}/`]);
+        assert.deepEqual(variants.map((v) => v.label), [null]);
+        assert.match(variants[0].query, /sum by \(name\) \(label_replace\(/);
     }
 });
 
-test('the aggregate excludes every selected name and group member', () => {
+test('a template with no sum by (name) runs for the selected names only', () => {
+    const groups = deriveCgroupGroups(new Set(NAMES));
+    const t = 'irate(cgroup_cpu_usage{name=~"__SELECTED_CGROUPS__"}[5m])';
+    assert.deepEqual(cgroupQueryVariants(t, resolveCgroupSelection([`${VM}/`], groups)), []);
+    const both = resolveCgroupSelection([`${VM}/`, '/system.slice/ssh.service'], groups);
+    assert.deepEqual(cgroupQueryVariants(t, both), [{ query: t, label: null, selection: both }]);
+});
+
+test("the aggregate excludes every selected name and every cgroup under a selected group's unit", () => {
     const groups = deriveCgroupGroups(new Set(NAMES));
     const sel = resolveCgroupSelection([`${VM}/`, '/system.slice/ssh.service'], groups);
-    for (const n of [...NAMES.slice(0, 3), '/system.slice/ssh.service']) {
-        assert.ok(sel.excluded.split(/(?<!\\)[(|)]/).includes(q(n)), n);
+    for (const n of [...NAMES.slice(0, 3), '/system.slice/ssh.service', `${VM}/libvirt/vcpu9`]) {
+        assert.ok(matches(sel.excluded, n), n);
     }
-    assert.ok(!sel.excluded.includes('docker-abc'));
+    for (const n of NAMES.slice(3).filter((n) => n !== '/system.slice/ssh.service')) {
+        assert.ok(!matches(sel.excluded, n), n);
+    }
     for (const t of aggregate) {
         const variants = cgroupQueryVariants(t, sel);
         assert.equal(variants.length, 1);
@@ -292,13 +329,13 @@ test('a failed variant fails the merged result', async () => {
     await assert.rejects(runCgroupVariants([{ query: 'a', label: '/g/' }], async () => { throw new Error('x'); }));
 });
 
-test('buildEffectiveQueries runs a query per group through the usual transforms', () => {
+test('buildEffectiveQueries runs one query for names and groups through the usual transforms', () => {
     const api = createDataApi({ getMetadata: async () => ({ status: 'success', data: {} }) });
     const groups = deriveCgroupGroups(new Set(NAMES));
     const sel = resolveCgroupSelection([`${VM}/`, '/system.slice/ssh.service'], groups);
     const plot = { promql_query: individual[0], opts: { type: 'line' } };
     const out = api.buildEffectiveQueries(plot, { activeCgroupPattern: sel, sectionRoute: '/cgroups' });
-    assert.deepEqual(out.map((q) => q.label), [null, `${VM}/`]);
+    assert.deepEqual(out.map((q) => q.label), [null]);
     assert.ok(out.every(({ query }) => !query.includes('__SELECTED_CGROUPS__')));
     // Nothing selected: an individual chart has nothing to run.
     assert.equal(api.buildEffectiveQueries(plot, { activeCgroupPattern: null }), null);
@@ -356,7 +393,8 @@ test('of two groups with the same members only the longer key is kept', () => {
     assert.deepEqual([...groups.keys()], ['/a.service/b.scope/']);
 });
 
-test("a refetch (zoom) of a chart the selector updated runs the selector's queries", async (t) => {
+// A saved chart may carry a query per cgroup group in `cgroup_queries`.
+test('a refetch (zoom) of a chart with a query per group runs those queries', async (t) => {
     setDisplayMode(true);
     t.after(() => setDisplayMode(false));
     setStepOverride(null);
@@ -373,10 +411,10 @@ test("a refetch (zoom) of a chart the selector updated runs the selector's queri
     });
     const groups = deriveCgroupGroups(new Set(NAMES));
     const sel = resolveCgroupSelection([`${VM}/`, '/system.slice/ssh.service'], groups);
-    const template = individual[0];
-    const queries = cgroupQueryVariants(template, sel)
-        .map((v) => ({ query: substituteCgroupPattern(v.query, v.selection), label: v.label }));
-    // As cgroup_selector.js leaves the plot after a selection.
+    const queries = [
+        { query: `sum by (name) (irate(cgroup_cpu_usage{name=~"${sel.leaf}"}[5m]))`, label: null },
+        { query: `sum (irate(cgroup_cpu_usage{name=~"${sel.groups[0].pattern}"}[5m]))`, label: `${VM}/` },
+    ];
     const plot = { promql_query: queries[0].query, cgroup_queries: queries, opts: { type: 'delta_counter', style: 'multi' } };
     const data = { groups: [{ name: 'g', subgroups: [{ plots: [plot] }] }] };
     await api.processDashboardData(data, sel, '/cgroups');

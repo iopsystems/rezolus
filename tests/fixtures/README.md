@@ -120,3 +120,18 @@ fixtures when they run. Regenerate one, only when the converter changes, with
 
 after removing the old file. Two conversions of one input are not
 byte-identical, so no test pins these files' bytes.
+
+## `cgroup_group_query.json`
+
+The query an individual cgroup chart runs for a selection holding cgroup
+groups (`cgroupQueryVariants` in
+`src/viewer/assets/lib/features/cgroup_selection.js`). `names` (the cgroups
+the selection is made from), `unlisted` (cgroups the archive also holds, as
+another recording's would be), `selected` (the selection) and `series` (each
+line the chart draws and the cgroups it sums) are written by hand; each
+`queries[].query` is generated from its `template`. `tests/cgroup_groups.test.mjs` checks the JS
+still generates those queries, and `src/viewer/cgroup_group_query_test.rs`
+runs them on a dendro archive and checks each line against `series`.
+Regenerate the queries, only when the generated form is meant to change, with
+
+    REZOLUS_BLESS=1 node --import ./tests/support/charts.mjs --test tests/cgroup_groups.test.mjs

@@ -1024,12 +1024,12 @@ const createDataApi = ({
         return q;
     };
 
-    // The queries a plot runs, as `{ query, label }`: one per cgroup query
-    // variant (cgroupQueryVariants) when `activeCgroupPattern` is a selection
-    // with groups, otherwise buildEffectiveQuery's one query with a null
-    // label. A plot the cgroup selector has already substituted carries its
-    // queries in `cgroup_queries`, with the first as its `promql_query`; those
-    // are run while the query is unchanged. null when there is nothing to run.
+    // The queries a plot runs, as `{ query, label }`: the cgroup query
+    // (cgroupQueryVariants) when `activeCgroupPattern` is a selection with
+    // groups, otherwise buildEffectiveQuery's one query with a null label. A
+    // plot that carries `cgroup_queries` (a chart saved with a query per
+    // group) runs those while its `promql_query` is their first. null when
+    // there is nothing to run.
     const buildEffectiveQueries = (plot, opts = {}) => {
         if (!plot.promql_query) return null;
         const selection = opts.activeCgroupPattern ?? null;

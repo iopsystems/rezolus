@@ -471,6 +471,28 @@
 
 ### Changed
 
+- **An individual cgroup chart draws its selected names and groups from
+  one query, and a group is matched by its unit's path.** Each
+  `sum by (name) (...)` in the chart's query gets a `label_replace` per
+  selected group that sets `name` to the group's key for every cgroup the
+  group matches, so the sum draws one line per group, and a group's IPC is
+  still its summed instructions over its summed cycles. A group matches its
+  unit's cgroup and every cgroup below it (`<unit>(?:/.*)?`), by its key
+  and by each shortened `.../` key merged into it; the aggregate charts
+  exclude the same. In the other arm of a comparison, and in a live view
+  after the section opened, a group therefore sums every cgroup at or below
+  one of its keys, not only the members listed when it was selected; a
+  shortened key there also matches a unit of the same name elsewhere in
+  the tree. Before, the chart ran one query for the individually selected
+  names and one per group, each listing the group's members, and a group
+  of a few hundred cgroups made a request URL longer than the server
+  viewer accepts (64 KiB); a group's query now has the same length
+  whatever the number of cgroups under its unit. A chart in A/B mode runs
+  one query, so it drew only the first of those queries; it now draws
+  every selected name and group. A pinned chart that draws a group is
+  compared in A/B mode. A chart saved with a query per group still runs
+  those queries and is still not compared.
+
 - **`recording annotate --queries` (now also `--template`) and
   `--systeminfo` write a user-layer entry on a recording with identity
   layers.** The template is used over the one the producer sent, which
