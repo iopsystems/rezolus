@@ -881,7 +881,7 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   0.4). Every `.dendro` this release creates (`record`, hindsight buffers
   and dumps, the live viewer's save, `recording` combine, filter, snapshot
   and `upgrade --to dendro`, and the viewers' Save-as-Report) has dendro's
-  `documents` and `segment_indexes` tables. Rezolus 5.23.0 through 5.29.2,
+  `documents` and `segment_indexes` tables. Every 5.x release from 5.23.0,
   and 6.0 builds before this change, refuse such a file with `unsupported
   archive schema version 5`; releases before 5.23.0 do not open `.dendro`
   files. Schema 4 archives still open and read the same;
@@ -1275,7 +1275,7 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   - `record`, `hindsight` and the live viewer accept both sets of names, so
     agents from 5.21.0 through 6.0.0-alpha.44 are still streamed.
   - **Older consumers of the stream refuse this agent's stream**, naming the
-    content type they got: `record --stream` from 5.21.0 through 5.26.x, and
+    content type they got: every 5.x `record --stream`, and
     `record` to `.dendro`, `hindsight` and the live viewer from 6.0.0-alpha
     builds through alpha.44. Drop `--stream` (5.x), upgrade, or record to
     `.rez` or parquet with 5.x, which scrapes `/metrics/binary`; that path

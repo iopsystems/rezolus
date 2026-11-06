@@ -251,7 +251,8 @@ jobs:
 
           ## Loading recordings
 
-          The viewer opens `.dendro` recordings, which Rezolus 6.x writes, via:
+          The viewer opens `.dendro` recordings (written by Rezolus 6.x, and
+          by Rezolus 5.x from 5.23.0) via:
 
           - **Drag-and-drop / file picker** on the landing page.
           - **`?capture=label=path/to/file.dendro`** in the URL — relative
@@ -265,8 +266,9 @@ jobs:
 
           A `.rez` archive, a `.parquet` file or a `.parquet.ab.tar` written
           by Rezolus 5.x is refused. Convert it on your machine with
-          `rezolus recording upgrade FILE` (Rezolus 6.x), which writes
-          `FILE`'s name with a `.dendro` extension, and open that.
+          `rezolus recording upgrade FILE` (Rezolus 6.x), which writes the
+          file's name with a `.dendro` extension (`x.parquet.ab.tar` becomes
+          `x.dendro`), and open that.
 
           ## Loading from arbitrary URLs
 

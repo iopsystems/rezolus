@@ -121,7 +121,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <h1 class="text-4xl font-extrabold tracking-tight mb-4">Upgrading to 6.0</h1>
 <p class="text-xl text-slate-500 dark:text-slate-400 mb-6">What a Rezolus 5.x setup does differently under 6.0, and what to run instead.</p>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-6">6.0 is not released yet; the latest release is 5.29.2.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-6">6.0 is not released yet.</p>
 
 <ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-12 list-disc pl-6">
 <li>6.0 writes <code>.dendro</code> archives only. Asking for <code>.rez</code>, parquet or raw output is refused.</li>
@@ -154,6 +154,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --separate --endpoint A --endpoint B</code></td><td class="py-2"><code>record --endpoint A --endpoint B -o run.dendro</code>: one archive, with each endpoint as its own recording.</td></tr>
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --stream -o run.rez</code></td><td class="py-2"><code>record -o run.dendro</code>. Every agent is recorded over its stream; <code>--stream</code> is an unknown argument (exit 2).</td></tr>
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>--endpoint URL,source=NAME</code></td><td class="py-2"><code>--endpoint URL,alias=NAME</code>. <code>source=</code> is still accepted and read as <code>alias=</code>, with a note on stderr.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>--metadata producer_epoch=VALUE</code> (or <code>producer_epochs=</code>)</td><td class="py-2">Refused (exit 2). The recorder writes the producer epoch itself; use another key.</td></tr>
 <tr><td class="py-2 pr-4"><code>output</code>, <code>format</code>, <code>separate = true</code> in a <code>--config</code> file</td><td class="py-2">The same rules apply: <code>output</code> must end in <code>.dendro</code>, and <code>format</code> other than <code>dendro</code> and <code>separate = true</code> are refused (exit 2).</td></tr>
 </tbody>
 </table>
@@ -254,7 +255,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Older readers -->
 <section class="mb-16" id="older-readers">
 <h2 class="text-xl font-bold mb-4">You read 6.0 recordings with 5.x</h2>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">A <code>.dendro</code> written by 6.0 uses archive schema version 5.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">A <code>.dendro</code> written by 6.0 uses archive schema version 5. That includes <code>record</code> and hindsight output, Save as Report (<code>rezolus-report.dendro</code>) and the live viewer's Save (<code>rezolus-capture.dendro</code>).</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
 <div class="p-5 font-mono text-base leading-8">
 <div class="text-slate-500 text-sm"># 5.x, on a file written by 6.0</div>
@@ -262,7 +263,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="text-sm text-slate-400">Failed to load recording: unsupported archive schema version 5: this build writes v4 and reads v4</div>
 </div>
 </div>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">5.23.0 through 5.29.2 open <code>.dendro</code> schema version 4 only (dendro 0.3.3) and refuse the file with this message. Releases before 5.23.0 do not open <code>.dendro</code> files at all. No command converts a 6.0 archive to an older format, so upgrade every reader (people, scripts and pipelines) to 6.0 before relying on 6.0 recordings.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Every 5.x release from 5.23.0 opens <code>.dendro</code> schema version 4 only and refuses the file with this message. Releases before 5.23.0 do not open <code>.dendro</code> files at all. No command converts a 6.0 archive to an older format, so upgrade every reader (people, scripts and pipelines) to 6.0 before relying on 6.0 recordings.</p>
 </section>
 
 <!-- Scripts -->
@@ -272,17 +273,18 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <li>File names: change <code>*.rez</code> and <code>*.parquet</code> to <code>*.dendro</code> in output paths, globs and artifact collection.</li>
 <li>Parquet consumers: a <code>.dendro</code> is not a parquet file, and 6.0 has no parquet export. Read values with <code>rezolus mcp query FILE 'PROMQL'</code>, or keep a 5.x recorder for that pipeline.</li>
 <li>Exit codes: <code>record</code> refuses a removed output or flag with exit code 2 (a usage error). A command given a <code>.rez</code> or parquet input exits 1, except <code>recording check</code>, which exits 2.</li>
-<li><code>rate(x[range])</code> now returns the average rate over <code>[t - range, t]</code>. 5.x ignored the range and returned the per-step rate, the same as <code>irate</code>. A saved query, KPI template or <code>recording check</code> written for the per-step rate should use <code>irate(x[...])</code>, or <code>rate(x[s])</code> where <code>s</code> is the step. <code>irate</code> and gauges return the same values as 5.x.</li>
+<li><code>rate(x[range])</code> now returns the average rate over <code>[t - range, t]</code>. 5.x ignored the range and returned the per-step rate, the same as <code>irate</code>. A saved query, KPI template or <code>recording check</code> written for the per-step rate should use <code>irate(x[...])</code>, or <code>rate(x[s])</code> where <code>s</code> is the step. On a 16-row, 1-second recording written by 5.29.2, gauges returned the same points as 5.29.2. <code>irate</code> and <code>rate(x[1s])</code> returned the same values at the timestamps 5.29.2 returned, plus a point at the recording's last tick, and <code>rate(x[1s])</code> also one at its first tick.</li>
 <li><code>=~</code> and <code>!~</code> are anchored regular expressions, as in Prometheus. 5.x read them as lists of literal alternatives separated by <code>|</code>. Escape a <code>.</code>, <code>+</code>, <code>(</code>, <code>[</code> or <code>\</code> that is meant literally.</li>
 <li><code>rezolus mcp query</code>, <code>describe-metrics</code>, <code>detect-anomalies</code> and <code>analyze-correlation</code> on an archive with several recordings read them together and exit 0. 5.x exited 1 and listed the recordings. An A/B archive (recordings that carry <code>arm</code>) still exits 1 and needs <code>--recording arm=baseline</code> or <code>--recording arm=experiment</code>.</li>
 <li>A query written for one host can now match series from every host, or nothing. Over two hosts, <code>sum(irate(cpu_usage[5m])) / cpu_cores</code> answers "No series matched", because <code>cpu_cores</code> has one series per host. Use <code>sum by (host) (irate(cpu_usage[5m])) / on (host) cpu_cores</code>, a matcher such as <code>cpu_cores{host="web-01"}</code>, or <code>--recording host=web-01</code>.</li>
 <li><code>rezolus mcp query</code> on a metric the recording has, with a selector that matches no series, prints "No series matched." and exits 0. 5.x printed "Metric not found" and exited 1.</li>
-<li>Every series read from a <code>.dendro</code> carries its recording's labels (<code>host</code>, <code>source</code>, <code>endpoint</code> and any <code>record --label</code>). A series' own label under one of those keys is renamed <code>exported_&lt;key&gt;</code>, so a matcher on the series' own value needs the <code>exported_</code> name.</li>
+<li>Every series read from a <code>.dendro</code> carries its recording's labels: <code>host</code>, <code>source</code>, <code>endpoint</code>, <code>alias</code>, any <code>record --label</code>, and <code>__producer__</code> and <code>arm</code> where the recording has them. A series' own label under one of those keys is renamed <code>exported_&lt;key&gt;</code>, so a matcher on the series' own value needs the <code>exported_</code> name.</li>
 <li>An archive made by <code>recording combine</code> opens as an A/B comparison only when its recordings carry an <code>arm</code> label. Give <code>combine</code> the arms explicitly: <code>rezolus recording combine baseline.dendro experiment.dendro --ab baseline=baseline.dendro experiment=experiment.dendro -o ab.dendro</code>. To open an older combined archive as a comparison, use <code>rezolus view ab.dendro --baseline host=A --experiment host=B</code>. When its two recordings have identical labels (two runs combined on one host), no selector can name either one, and <code>view</code> exits 1 with "matched 2 recordings". Label them by position instead: <code>rezolus recording combine ab.dendro --ab baseline=0 experiment=1 -o ab2.dendro</code>.</li>
 <li><code>recording filter x.dendro -o y.dendro</code> refuses to replace an existing <code>y.dendro</code> (exit 1). 5.x overwrote it.</li>
 <li>The agent's <code>/status</code> no longer has <code>index_resyncs</code>.</li>
 <li><code>rezolus-capture</code> (the script and the Docker image) writes one <code>capture.dendro</code> in <code>--output-dir</code> in place of <code>capture.parquet</code> and the per-endpoint parquet files. <code>--source rezolus</code> is refused.</li>
-<li>Tools that read the agent's <code>/metrics/stream</code> directly see a new content type, <code>application/vnd.metriken.replication.v1+dendro</code>, and <code>x-metriken-*</code> headers in place of <code>x-rezolus-*</code>. A 5.x <code>record --stream</code> from 5.21.0 through 5.26.x refuses a 6.0 agent's stream; drop <code>--stream</code> or use 5.27.0 or later.</li>
+<li>Tools that read the agent's <code>/metrics/stream</code> directly see a new content type, <code>application/vnd.metriken.replication.v1+dendro</code>, and <code>x-metriken-*</code> headers in place of <code>x-rezolus-*</code>. Every 5.x <code>record --stream</code> refuses a 6.0 agent's stream; drop <code>--stream</code>, and the 5.x recorder scrapes the agent instead.</li>
+<li><code>rezolus view a.dendro b.dendro</code> opens <code>b.dendro</code> as the experiment of a comparison. 5.x ignored a second file after a <code>.rez</code> or <code>.dendro</code>, with a warning.</li>
 </ul>
 </section>
 
@@ -315,7 +317,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --stream</code></td><td class="py-2 pr-4">exit 2 (unknown argument)</td><td class="py-2">Leave it out; agents are always streamed.</td></tr>
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording upgrade --to v3</code></td><td class="py-2 pr-4">exit 1</td><td class="py-2"><code>recording upgrade FILE</code></td></tr>
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording combine -o x.parquet</code>, <code>-o x.rez</code>, <code>-o x.parquet.ab.tar</code></td><td class="py-2 pr-4">exit 1</td><td class="py-2"><code>-o x.dendro</code>; add <code>--ab baseline=A experiment=B</code> for a comparison.</td></tr>
-<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording combine --pinned</code>, <code>--category</code>, <code>--bypass-time-check</code></td><td class="py-2 pr-4">exit 1</td><td class="py-2">Leave them out.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording combine --pinned</code>, <code>--category</code>, <code>--bypass-time-check</code></td><td class="py-2 pr-4">exit 1 (<code>--category</code> without <code>--ab</code>: exit 2, a usage error in 5.x too)</td><td class="py-2">Leave them out.</td></tr>
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording annotate --source</code>, <code>--node</code>, <code>--filter</code></td><td class="py-2 pr-4">exit 1</td><td class="py-2">Name a recording when it is recorded (<code>--endpoint URL,alias=NAME</code> or <code>--label</code>); shrink one with <code>recording filter</code>.</td></tr>
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording filter --queries</code>, <code>--templates</code></td><td class="py-2 pr-4">exit 2 (unknown argument)</td><td class="py-2"><code>recording filter --samplers</code> or <code>--metrics</code>.</td></tr>
 <tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording metadata --schema</code>, <code>--file</code>, <code>--geometry</code>, <code>--field</code></td><td class="py-2 pr-4">exit 2 (unknown argument)</td><td class="py-2"><code>recording metadata -i FILE</code> (add <code>--json</code> for machine-readable output).</td></tr>
