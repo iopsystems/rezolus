@@ -877,9 +877,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   0.4). Every `.dendro` this release creates (`record`, hindsight buffers
   and dumps, the live viewer's save, `recording` combine, filter, snapshot
   and `upgrade --to dendro`, and the viewers' Save-as-Report) has dendro's
-  `documents` and `segment_indexes` tables. Rezolus 5.28.0 and earlier, and
-  6.0 builds before this change, refuse such a file with `unsupported
-  archive schema version 5`. Schema 4 archives still open and read the same;
+  `documents` and `segment_indexes` tables. Every 5.x release (5.29.2
+  included) and 6.0 builds before this change refuse such a file with
+  `unsupported archive schema version 5`. Schema 4 archives still open and read the same;
   `recording annotate` edits one in place and leaves it at schema 4.
 - **An endpoint's `role=` outranks `--metadata role=`.** `record
   --endpoint url,role=service --metadata role=x` now records `role=service`,
