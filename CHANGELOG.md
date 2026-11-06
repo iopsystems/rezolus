@@ -484,6 +484,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   an agent from 5.21.0 with `snapshot_format = "v3"` (the default). An older
   agent, a v2 agent, a `rezolus exporter`, or a proxy that does not route
   `/metrics/stream` is refused at startup.
+- **Hindsight's `GET /status` drops `failed_scrapes` and
+  `scrapes_failing_since`.** Hindsight subscribes to the agent's stream and
+  no longer scrapes, so there is no failed scrape to count; a dropped stream
+  is reconnected after one interval.
 - **Ubuntu 20.04 (focal) packages are no longer built.** Focal ships clang 10,
   and the `memory_writeback` sampler's CO-RE enum relocations
   (`bpf_core_enum_value`) need clang 12, so the focal package no longer
@@ -877,9 +881,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   0.4). Every `.dendro` this release creates (`record`, hindsight buffers
   and dumps, the live viewer's save, `recording` combine, filter, snapshot
   and `upgrade --to dendro`, and the viewers' Save-as-Report) has dendro's
-  `documents` and `segment_indexes` tables. Every 5.x release (5.29.2
-  included) and 6.0 builds before this change refuse such a file with
-  `unsupported archive schema version 5`. Schema 4 archives still open and read the same;
+  `documents` and `segment_indexes` tables. Rezolus 5.23.0 through 5.29.2,
+  and 6.0 builds before this change, refuse such a file with `unsupported
+  archive schema version 5`; releases before 5.23.0 do not open `.dendro`
+  files. Schema 4 archives still open and read the same;
   `recording annotate` edits one in place and leaves it at schema 4.
 - **An endpoint's `role=` outranks `--metadata role=`.** `record
   --endpoint url,role=service --metadata role=x` now records `role=service`,
@@ -1238,17 +1243,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   and `source=<NAME>` for each service. The command-line options are
   unchanged; `--source rezolus` is refused, since it names the agent's
   recording.
-- **`rezolus-capture` with `--endpoint` loses the merged dashboard.** The
-  viewer opens a capture made with `--endpoint` as an A/B comparison of the
-  agent's recording against the first service's, with further services as
-  extra overlays; no dashboard queries the service metrics. Service KPI
-  dashboards (vllm, valkey, sglang and the other templates) are not shown,
-  because the template queries select a `source` label that `.dendro`
-  series do not carry. `capture.parquet` and the per-endpoint
-  `agent-<port>.parquet` / `<source>-<port>.parquet` copies are no longer
-  written. For the merged dashboard with service KPIs, use the 5.x
-  `rezolus-capture` (the v5.27.0 script or Docker image), which writes a
-  merged `capture.parquet`.
+- **`rezolus-capture` with `--endpoint` writes no parquet.** The viewer
+  opens the capture as one combined view: the agent's sections, and a KPI
+  section for each service whose alias names a built-in template by its
+  `service_name` or one of its `aliases`. `capture.parquet` and the
+  per-endpoint `agent-<port>.parquet` / `<source>-<port>.parquet` copies are
+  no longer written.
 - **`record --endpoint url,role=...` is kept in the recording.** The role is
   the `role` key of that endpoint's recording metadata; `--metadata role=...`
   overrides it. Before, only parquet output carried it.

@@ -121,6 +121,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <h1 class="text-4xl font-extrabold tracking-tight mb-4">Upgrading to 6.0</h1>
 <p class="text-xl text-slate-500 dark:text-slate-400 mb-6">What a Rezolus 5.x setup does differently under 6.0, and what to run instead.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-6">6.0 is not released yet; the latest release is 5.29.2.</p>
 
 <ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-12 list-disc pl-6">
 <li>6.0 writes <code>.dendro</code> archives only. Asking for <code>.rez</code>, parquet or raw output is refused.</li>
@@ -175,7 +176,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <li>If you never edited the file, the package upgrade replaces it and hindsight writes to the new path.</li>
 <li>If you edited it, dpkg asks which version to keep (and keeps yours under <code>--force-confold</code>). rpm keeps yours and writes the new one beside it as <code>hindsight.toml.rpmnew</code>.</li>
 <li>A kept file whose <code>output</code> does not end in <code>.dendro</code> is refused at startup with exit code 1, and the service does not run until you change it.</li>
-<li>Anything that reads dumps from <code>/var/lib/rezolus/rezolus.rez</code> or globs <code>rezolus-*.rez</code> finds only the last 5.x dump. Point it at the <code>.dendro</code> names.</li>
+<li>The files 5.x wrote stay where they are. 6.0 writes <code>rezolus.dendro</code> and <code>rezolus-&lt;timestamp&gt;.dendro</code>, so anything that reads <code>/var/lib/rezolus/rezolus.rez</code> or globs <code>rezolus-*.rez</code> finds no dump written after the upgrade. Point it at the <code>.dendro</code> names.</li>
 </ul>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
 <div class="p-5 font-mono text-base leading-8">
@@ -186,7 +187,11 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl restart rezolus-hindsight</code></div>
 </div>
 </div>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Hindsight reads the agent's <code>/metrics/stream</code>, so the agent it points at must be 5.21.0 or later. An older agent is refused at startup with exit code 1. Existing <code>.rez</code> dumps are converted as described under <a class="text-blue-600 dark:text-blue-400" href="#convert">You have .rez or parquet files</a>.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Hindsight reads the agent's <code>/metrics/stream</code>, so the agent it points at must be 5.21.0 or later. An older agent, or a <code>rezolus exporter</code> endpoint, is refused at startup with exit code 1. Existing <code>.rez</code> dumps are converted as described under <a class="text-blue-600 dark:text-blue-400" href="#convert">You have .rez or parquet files</a>.</p>
+<ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4 list-disc pl-6">
+<li><code>GET /dump</code> on hindsight's HTTP endpoint returns a <code>.dendro</code> archive (<code>dump.dendro</code>), where 5.x returned a <code>.rez</code>.</li>
+<li>Hindsight's <code>GET /status</code> no longer has <code>failed_scrapes</code> or <code>scrapes_failing_since</code>. Hindsight no longer scrapes; a dropped stream is reconnected after one interval.</li>
+</ul>
 </section>
 
 <!-- Convert -->
@@ -208,14 +213,14 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="text-sm text-slate-400">converted old.rez (v3 .rez archive) to old.dendro: 2 source(s), 2 segment(s), 0 live WAL row(s), 4 clock offset(s)</div>
 <div class="flex gap-4 mt-3"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording upgrade capture.parquet -o capture.dendro</code></div>
 <div class="text-sm text-slate-400">converted capture.parquet (parquet recording) to capture.dendro: 1 source(s), 1 segment(s), 5 row(s)</div>
-<div class="mt-3 text-slate-500 text-sm"># Convert every .rez and parquet file in a directory</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">for f in *.rez *.parquet; do [ -e "$f" ] &amp;&amp; rezolus recording upgrade "$f"; done</code></div>
+<div class="mt-3 text-slate-500 text-sm"># Convert every .rez, parquet and A/B tarball in a directory</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">for f in *.rez *.parquet *.parquet.ab.tar; do [ -e "$f" ] || continue; rezolus recording upgrade "$f"; done</code></div>
 </div>
 </div>
 <ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4 list-disc pl-6">
-<li>A <code>.parquet.ab.tar</code> becomes one <code>.dendro</code> with two recordings labelled <code>arm=baseline</code> and <code>arm=experiment</code>, which the viewer opens as the comparison. Its output name drops both extensions. The tarball's aliases and category are not carried over.</li>
+<li>A <code>.parquet.ab.tar</code> becomes one <code>.dendro</code> with two recordings labelled <code>arm=baseline</code> and <code>arm=experiment</code>, which the viewer opens as the comparison. <code>x.parquet.ab.tar</code> becomes <code>x.dendro</code>. The tarball's aliases and category are not carried over.</li>
 <li>A combined parquet written by 5.x <code>recording combine</code>, or by a 5.x recorder given several endpoints, becomes one recording per input.</li>
-<li>In 5.x, <code>recording upgrade old.rez</code> rewrote the file in place as a v3 <code>.rez</code>. In 6.0 the same command writes <code>old.dendro</code> beside it. <code>--to v3</code> is refused (exit 1); <code>--to dendro</code> is accepted and gives the same result as leaving it out.</li>
+<li>In 5.x, <code>recording upgrade old.rez</code> rewrote a v1 or v2 <code>.rez</code> in place as v3, and refused a v3 file ("already a v3 (SQLite) archive", exit 1). In 6.0 the same command converts any <code>.rez</code> version and writes <code>old.dendro</code> beside it. <code>--to v3</code> is refused (exit 1); <code>--to dendro</code> is accepted and gives the same result as leaving it out.</li>
 <li>A <code>.dendro</code> written by 5.x opens in 6.0 as it is. <code>recording upgrade</code> on it exits 1 with "already a dendro archive; there is nothing to upgrade".</li>
 </ul>
 </section>
@@ -223,7 +228,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Old agents -->
 <section class="mb-16" id="old-agents">
 <h2 class="text-xl font-bold mb-4">You run agents older than 5.21.0</h2>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">6.0 records a Rezolus agent only from its <code>/metrics/stream</code> route, which agents serve from 5.21.0 with <code>snapshot_format = "v3"</code> (the default). <code>record</code>, hindsight and the live viewer (<code>rezolus view http://host:4241</code>) refuse an older agent, a <code>snapshot_format = "v2"</code> agent, and a proxy that does not route <code>/metrics/stream</code>.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">6.0 records a Rezolus agent only from its <code>/metrics/stream</code> route, which agents serve from 5.21.0 with <code>snapshot_format = "v3"</code> (the default). <code>record</code>, hindsight and the live viewer (<code>rezolus view http://host:4241</code>) refuse an older agent, a <code>snapshot_format = "v2"</code> agent, and a proxy that does not route <code>/metrics/stream</code>. Hindsight and the live viewer also refuse a <code>rezolus exporter</code> endpoint (exit 1).</p>
 <ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4 list-disc pl-6">
 <li>At startup, <code>record</code> exits 1 and writes nothing.</li>
 <li>An agent that comes up during the run, or that answers a reconnect with a refusal, is left out of the recording. The other endpoints are recorded, the archive is finalized, and the run exits 1.</li>
@@ -249,15 +254,15 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Older readers -->
 <section class="mb-16" id="older-readers">
 <h2 class="text-xl font-bold mb-4">You read 6.0 recordings with 5.x</h2>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">A <code>.dendro</code> written by 6.0 uses archive schema version 5. 5.x reads schema version 4 only, and refuses the file:</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">A <code>.dendro</code> written by 6.0 uses archive schema version 5.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
 <div class="p-5 font-mono text-base leading-8">
-<div class="text-slate-500 text-sm"># 5.28.0, on a file written by 6.0</div>
+<div class="text-slate-500 text-sm"># 5.x, on a file written by 6.0</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp describe-recording run.dendro</code></div>
 <div class="text-sm text-slate-400">Failed to load recording: unsupported archive schema version 5: this build writes v4 and reads v4</div>
 </div>
 </div>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">This was run with 5.28.0. Every 5.x release through 5.29.2 builds on the same archive library version (dendro 0.3.3), which reads schema version 4 only. No command converts a 6.0 archive to an older format, so upgrade every reader (people, scripts and pipelines) to 6.0 before relying on 6.0 recordings.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">5.23.0 through 5.29.2 open <code>.dendro</code> schema version 4 only (dendro 0.3.3) and refuse the file with this message. Releases before 5.23.0 do not open <code>.dendro</code> files at all. No command converts a 6.0 archive to an older format, so upgrade every reader (people, scripts and pipelines) to 6.0 before relying on 6.0 recordings.</p>
 </section>
 
 <!-- Scripts -->
@@ -267,10 +272,15 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <li>File names: change <code>*.rez</code> and <code>*.parquet</code> to <code>*.dendro</code> in output paths, globs and artifact collection.</li>
 <li>Parquet consumers: a <code>.dendro</code> is not a parquet file, and 6.0 has no parquet export. Read values with <code>rezolus mcp query FILE 'PROMQL'</code>, or keep a 5.x recorder for that pipeline.</li>
 <li>Exit codes: <code>record</code> refuses a removed output or flag with exit code 2 (a usage error). A command given a <code>.rez</code> or parquet input exits 1, except <code>recording check</code>, which exits 2.</li>
-<li><code>rate(x[range])</code> now returns the average rate over <code>[t - range, t]</code>. 5.x ignored the range and returned the per-step rate, the same as <code>irate</code>. A saved query, KPI template or <code>recording check</code> written for the per-step rate should use <code>irate(x[...])</code>, or <code>rate(x[s])</code> where <code>s</code> is the step. <code>irate</code> and gauges return the same values as 5.x. 6.0 can also return one or more extra points at the start of a range.</li>
+<li><code>rate(x[range])</code> now returns the average rate over <code>[t - range, t]</code>. 5.x ignored the range and returned the per-step rate, the same as <code>irate</code>. A saved query, KPI template or <code>recording check</code> written for the per-step rate should use <code>irate(x[...])</code>, or <code>rate(x[s])</code> where <code>s</code> is the step. <code>irate</code> and gauges return the same values as 5.x.</li>
 <li><code>=~</code> and <code>!~</code> are anchored regular expressions, as in Prometheus. 5.x read them as lists of literal alternatives separated by <code>|</code>. Escape a <code>.</code>, <code>+</code>, <code>(</code>, <code>[</code> or <code>\</code> that is meant literally.</li>
-<li><code>rezolus mcp query</code>, <code>describe-metrics</code>, <code>detect-anomalies</code> and <code>analyze-correlation</code> on an archive with several recordings read them together and exit 0. 5.x exited 1 and listed the recordings. A query written for one host can now match series from every host; add <code>--recording host=NAME</code>, or a <code>by (host)</code> clause.</li>
-<li>An archive made by <code>recording combine</code> opens as an A/B comparison only when its recordings carry an <code>arm</code> label. Give <code>combine</code> the arms explicitly: <code>rezolus recording combine baseline.dendro experiment.dendro --ab baseline=baseline.dendro experiment=experiment.dendro -o ab.dendro</code>. To open an older combined archive as a comparison, use <code>rezolus view ab.dendro --baseline host=A --experiment host=B</code>.</li>
+<li><code>rezolus mcp query</code>, <code>describe-metrics</code>, <code>detect-anomalies</code> and <code>analyze-correlation</code> on an archive with several recordings read them together and exit 0. 5.x exited 1 and listed the recordings. An A/B archive (recordings that carry <code>arm</code>) still exits 1 and needs <code>--recording arm=baseline</code> or <code>--recording arm=experiment</code>.</li>
+<li>A query written for one host can now match series from every host, or nothing. Over two hosts, <code>sum(irate(cpu_usage[5m])) / cpu_cores</code> answers "No series matched", because <code>cpu_cores</code> has one series per host. Use <code>sum by (host) (irate(cpu_usage[5m])) / on (host) cpu_cores</code>, a matcher such as <code>cpu_cores{host="web-01"}</code>, or <code>--recording host=web-01</code>.</li>
+<li><code>rezolus mcp query</code> on a metric the recording has, with a selector that matches no series, prints "No series matched." and exits 0. 5.x printed "Metric not found" and exited 1.</li>
+<li>Every series read from a <code>.dendro</code> carries its recording's labels (<code>host</code>, <code>source</code>, <code>endpoint</code> and any <code>record --label</code>). A series' own label under one of those keys is renamed <code>exported_&lt;key&gt;</code>, so a matcher on the series' own value needs the <code>exported_</code> name.</li>
+<li>An archive made by <code>recording combine</code> opens as an A/B comparison only when its recordings carry an <code>arm</code> label. Give <code>combine</code> the arms explicitly: <code>rezolus recording combine baseline.dendro experiment.dendro --ab baseline=baseline.dendro experiment=experiment.dendro -o ab.dendro</code>. To open an older combined archive as a comparison, use <code>rezolus view ab.dendro --baseline host=A --experiment host=B</code>. When its two recordings have identical labels (two runs combined on one host), no selector can name either one, and <code>view</code> exits 1 with "matched 2 recordings". Label them by position instead: <code>rezolus recording combine ab.dendro --ab baseline=0 experiment=1 -o ab2.dendro</code>.</li>
+<li><code>recording filter x.dendro -o y.dendro</code> refuses to replace an existing <code>y.dendro</code> (exit 1). 5.x overwrote it.</li>
+<li>The agent's <code>/status</code> no longer has <code>index_resyncs</code>.</li>
 <li><code>rezolus-capture</code> (the script and the Docker image) writes one <code>capture.dendro</code> in <code>--output-dir</code> in place of <code>capture.parquet</code> and the per-endpoint parquet files. <code>--source rezolus</code> is refused.</li>
 <li>Tools that read the agent's <code>/metrics/stream</code> directly see a new content type, <code>application/vnd.metriken.replication.v1+dendro</code>, and <code>x-metriken-*</code> headers in place of <code>x-rezolus-*</code>. A 5.x <code>record --stream</code> from 5.21.0 through 5.26.x refuses a 6.0 agent's stream; drop <code>--stream</code> or use 5.27.0 or later.</li>
 </ul>
@@ -281,7 +291,8 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <h2 class="text-xl font-bold mb-4">Agent configuration and metrics</h2>
 <ul class="space-y-3 text-lg text-slate-500 dark:text-slate-400 list-disc pl-6">
 <li>Three pairs of samplers are merged. <code>[samplers.scheduler_runqueue]</code> and <code>[samplers.cpu_migrations]</code> are now <code>[samplers.scheduler]</code>; <code>[samplers.blockio_requests]</code> and <code>[samplers.blockio_latency]</code> are <code>[samplers.blockio]</code>; <code>[samplers.syscall_counts]</code> and <code>[samplers.syscall_latency]</code> are <code>[samplers.syscall]</code>. An old section name is read as the new one with a warning. Metric names are unchanged, but the <code>sampler</code> label, <code>rezolus status</code> and <code>rezolus_bpf_run_time</code> use the new names.</li>
-<li><code>hw_sensors</code> is on by default. <code>[samplers.hw_sensors] enabled = false</code> turns it off. It no longer reads <code>nvme</code> or <code>drivetemp</code> hwmon chips; <code>drivehealth</code> reports drive temperature.</li>
+<li><code>hw_sensors</code> is on by default. <code>[samplers.hw_sensors] enabled = false</code> turns it off. It no longer reads <code>nvme</code> or <code>drivetemp</code> hwmon chips; <code>drivehealth</code> reports drive temperature. It no longer publishes the ACPI <code>Processor</code> cooling devices (one per logical CPU). Each channel gains <code>device</code> and <code>name</code> labels.</li>
+<li><code>tcp_connect_latency</code> has an <code>outcome</code> label (<code>established</code>, <code>refused</code>, <code>timeout</code>, <code>error</code>, <code>aborted</code>). A query without an <code>outcome</code> matcher merges every outcome, timeouts included; add <code>{outcome="established"}</code> for the 5.x meaning. The exporter's percentiles are per outcome.</li>
 <li><code>task_cpu_usage</code> leaves out threads younger than <code>task_min_lifetime</code> (default <code>"1s"</code>). Set <code>"0s"</code> for the 5.x behaviour.</li>
 <li>Setting <code>task_attribution = true</code> also turns on <code>process_attribution</code> unless it is set. Set <code>process_attribution = false</code> in <code>[samplers.cpu_usage]</code> for the 5.x behaviour.</li>
 <li><code>memory_slabinfo</code> publishes <code>memory_slab_cache_bytes</code> for every slab cache (up to 1024). <code>caches = "fixed"</code> in <code>[samplers.memory_slabinfo]</code> keeps the 5.x set of eight. Both <code>memory_slab_cache_*</code> metrics gain an <code>id</code> label, so a Prometheus server sees new series for every cache.</li>
