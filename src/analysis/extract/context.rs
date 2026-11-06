@@ -91,6 +91,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+    "thermal_pressure",
     "xfs_log",
     "xfs_stats",
 ];

@@ -383,7 +383,8 @@ fn legacy(bench: &Catalog) -> Catalog {
 /// tcp_retransmit and tcp_bytes counters but no tcp_packet_latency.
 /// Filesystem has the space, inode and read-only gauges, and the macOS-only
 /// per-volume use. Hardware sensors has temperature, power, voltage, current
-/// and fan speed, but no fan PWM or cooling state.
+/// and fan speed, but no fan PWM or cooling state, and the macOS-only thermal
+/// pressure level.
 fn macos() -> Catalog {
     let mut out = Catalog::default();
     for name in [
@@ -400,6 +401,7 @@ fn macos() -> Catalog {
         "memory_compressed_stored",
         "memory_wired",
         "cpu_cores",
+        "thermal_pressure",
     ] {
         out.gauges.insert(name.into(), vec![labels(&[])]);
     }

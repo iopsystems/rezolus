@@ -501,6 +501,7 @@ mod tests {
         "tcp_packet_latency",
         "tcp_receive",
         "tcp_retransmit",
+        "thermal_pressure",
         "xfs_log",
         "xfs_stats"
       ]
