@@ -1657,11 +1657,12 @@ Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
   `remove_events` (`ServerOptions`, tiered `tools/list`, flag-off call
   refused naming the flag, tested). `set_kpis` — Open, no producer of KPI
   sets on the agent side yet; the annotate KPI path is ready for it.
-- **`export_query` and `viewer_link`** — DONE. `export_query` (a range
-  query as long-form CSV/parquet under `--export-dir`) was later removed
-  by decision 5, 6.x writes `.dendro` only. `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
+- **`viewer_link`** — DONE. `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
   wire form, pinned to the JS parser by `tests/viewer_link_parity.test.mjs`,
   with a full URL from `--viewer-url` or a `viewer_url` argument.
+  `export_query`, built with it, was removed for 6.0
+  ([release readiness](journal/2026-10-08-6-0-release-readiness.md),
+  decision 5).
 - **`rezolus mcp install`** — DONE. `src/mcp/install.rs` registers through
   `claude mcp add` (project `.mcp.json` merged when the CLI is absent) and
   installs the embedded `rezolus-mcp` skill (`src/mcp/skill/SKILL.md`).

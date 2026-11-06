@@ -427,10 +427,11 @@
 - **The MCP `export_query` tool is removed, with its `--export-dir` flag on
   `rezolus mcp` and `rezolus mcp install`.** It wrote a range query as a CSV
   or parquet file, and 6.x writes `.dendro` files only. Neither was in a 5.x
-  release. The `query` tool runs the same range query over the whole
-  recording at a 1-second step and returns the series as Prometheus-format
-  JSON, with the uncertainty band on `rate()` and `irate()` values.
-  `--export-dir` is now refused as an unknown argument.
+  release. The `query` tool returns a range query over the whole recording,
+  at a fixed 1-second step, as Prometheus-format JSON, with the uncertainty
+  band on `rate()` and `irate()` values. `--export-dir` is now refused as an
+  unknown argument, so a client config that still passes it stops the server
+  at startup; run `rezolus mcp install` again to rewrite it.
 - **Save as Report writes a `.dendro`**, in the server viewer and the static
   site. A two-file comparison is saved with `arm=baseline`/`arm=experiment`,
   so it reopens as the comparison.
