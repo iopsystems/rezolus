@@ -730,76 +730,59 @@ agent's stream, and slot groups travel in the long layout
 
 ## 6.0.0 release readiness
 
-Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readiness.md).
+Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readiness.md),
+decisions 8 to 14 (2026-11-05 and 2026-11-06) for what 6.0.0 waits for.
 
-- **Compatibility fixtures from released versions** — Open. Check in archives
-  written by released versions (a tar `.rez` from a 5.17.1 prerelease, a v3
-  `.rez` from 5.18.0, a v5.25 `.dendro`, an older parquet, a 6.0 recording)
-  with golden query results; open, query and upgrade each in a test. 5.x's
-  preview `--stream` `.rez` is not included.
-- **Cross-version CI job** — Open. v5.25.1 and v5.27.0 binaries against the
-  current agent, the current recorder against v5.25.1 and v5.27.0 agents, the
-  v5.25.1 and v5.27.0 readers on 6.0 output (5.25.1 measured and systemslab's
-  next pin; 5.27.0 the latest 5.x). (The v5.22.1 reader on a 6.0 `.rez` was
-  dropped 2026-10-12: 6.0 writes no `.rez`.)
-- **Smaller test gaps** — Open. V3 raw `recording convert`; a WASM `.dendro`
-  test; `tests/viewer_smoke.sh` in CI; read `site/viewer/data/mr2-report.dendro`
-  in a test; upgrade a v1 tar archive.
-- **Refuse an agent older than 5.21.0** — Open. At startup (exit 1, nothing
-  written) and mid-run (that endpoint refused, the rest recorded), with a
-  pointer to a 5.x recorder, and a test of each. Replaces the withdrawn
-  "record a non-streaming agent to `.rez`" (decision 1, withdrawn
-  2026-10-12).
-- **Endpoint detection** — Open. Stream any source whose `/metrics/stream`
-  handshake opens; refuse a Rezolus agent that cannot stream; scrape
-  `/metrics` from any other source (cachecannon is refused today). Done in
-  rezolus's own recorder first (metriken-recorder entry, step 2).
-- **Remove the `.rez`, parquet and raw writers from `record` and hindsight**
-  — DONE (this PR): both write `.dendro` only and refuse any other output,
-  pointing at a 5.x recorder or hindsight (metriken-recorder entry, step 2).
-- **Remove the `.rez`, parquet and raw writers** — Open. Decision 5: 6.x
-  writes `.dendro` only. Save as Report in both viewers, and the `recording` subcommands
-  `combine`, `convert`, `filter`, `snapshot`, `upgrade` and `annotate` (with
-  the event and check writers that share it). The entry's inventory lists
-  each writer with its path. Needs a parquet-to-`.dendro` path, `.rez` to
-  `.dendro` in the WASM viewer (or no report save there for those sources),
-  and raw to `.dendro` in `convert`. Done (this PR): MCP `export_query`
-  removed with `--export-dir`.
-- **`snapshot` of a live 5.x `.rez`** — Open. Check whether
-  `convert_v3_to_dendro` reads a consistent snapshot of a `.rez` that a 5.x
-  writer is still appending to (a 5.x hindsight buffer). If it does not,
-  `recording snapshot` refuses a `.rez` input (6.0 readiness, per-subcommand
-  behaviour).
-- **Owner decisions on in-place and per-subcommand behaviour** — DONE
-  (2026-10-12): `annotate` on `.rez`/parquet refused with a pointer to
-  `recording upgrade --to dendro`; `filter` to a required `-o x.dendro`;
-  `combine` `.dendro` only, `--ab` removed; `snapshot` of a `.rez` to
-  `.dendro`; `upgrade --to dendro` the default; MCP `export_query` removed.
-- **Move callers off parquet and `.rez` output** — Open. Done (this PR):
-  `docker/rezolus-capture` and `scripts/rezolus-capture` (one `record` per
-  capture into `capture.dendro`), `data/test_fixtures/compare-demo.sh`, and
-  the CI smoke steps in `.github/workflows/cargo.yml`. Open: llm-perf's
-  non-`.dendro` server metrics, systemslab's runner (`-o metrics.rez`). `labels/specs/*.toml` pin a 5.17.1-alpha.8 recorder and do
-  not block 6.0.0; moving that pin to 6.x needs `-o .dendro`.
-- **metriken path steps 4 to 7 and their follow-ups** — Open. Decision 7:
-  6.0.0 ships after `metriken-recorder`, templates in the archive,
-  `metriken-py`, and `metriken-dashboard`/`metriken-viewer`, with rezolus on
-  them, and after the follow-ups in the metriken plan's step 7 are landed or
-  measured and dropped.
-- **Measurement harness and the two missing measurements** — Open. Harness in
-  the repository; `.dendro` sizes from 6.0 against `.rez` and parquet from a
-  5.x recorder, for one agent; a 24-hour `hindsight` and `record` run on
-  Linux.
-- **Upgrade page and stale docs** — Open. `site/docs/usage.html`,
-  `architecture.html`, the viewer bundle README in `release.yml`, the
-  `recording` about text, `src/mcp/skill/SKILL.md`, the hindsight `output`
-  path change, and `CLAUDE.md`, `docs/usage.md` and `record`'s help once the
-  writers go. The upgrade page covers `.dendro`-only writing and the refusal
-  of agents older than 5.21.0.
-- **Homebrew tap at 5.19.0** — Open. Sixteen bump PRs open in
-  `iopsystems/homebrew-iop` (#134–#151).
-- **Release candidate soak** — Open. A day on a Linux host and a fleet host,
-  read with both readers.
+Blocking 6.0.0:
+
+- **Prometheus scalars as floats** — Open (iopsystems/metriken#378,
+  decision 13). A float gauge and float counter kind in metriken-model,
+  -exposition, -storage and -query, written by metriken-recorder for every
+  Prometheus scalar; the viewer reads them.
+- **Units in Prometheus names** — Open (iopsystems/metriken#379,
+  decision 13). Detect and normalize the unit, rename with
+  `__prometheus_name__` kept, metriken-query falling back to
+  `__prometheus_name__`; `docs/labels.md` updated.
+- **Prometheus `+Inf` bucket** — Open (iopsystems/metriken#377,
+  decision 13). An overflow counter, and `histogram_quantile` returning
+  `+Inf` for a quantile in it.
+- **systemslab reads and records `.dendro`** — Open (decision 14).
+  iopsystems/systemslab#6371, and the runner asking `rezolus record` for
+  `.dendro` (`crates/runner/src/metrics.rs:411`, `:466`).
+- **hindsight refuses an old agent with no message** — Open.
+  `src/hindsight/mod.rs` logs the refusal with `error!` and calls
+  `process::exit(1)` before the log is flushed, after creating the output
+  file and a buffer directory.
+- **CLI help and docs at the tag** — Open. `usage.html`'s config example
+  uses `source =`, which 5.29.2 reads; it moves to `alias =` in the release
+  PR, since the site deploys from main.
+
+Open, not blocking: a pair of archives written by 5.29.2 from a Linux
+agent, so that histogram reads of a released archive are tested; the 5.29.2
+fixtures in `tests/fixtures/released/` (#1659) were recorded on macOS and
+hold no histogram data.
+
+Deferred past 6.0.0 (decision 11): the cross-version CI job (and its 5.x
+versions move to 5.29.2); the smaller test gaps (V3 raw `recording convert`,
+a WASM `.dendro` test, `tests/viewer_smoke.sh` in CI, reading
+`site/viewer/data/mr2-report.dendro` in a test, upgrading a v1 tar archive);
+a tar `.rez` fixture from a 5.17.1 prerelease; the measurement harness and
+the size comparison. Waived (decision 10): the 24-hour run and the release
+candidate soak.
+
+`recording snapshot` refuses a `.rez` (it names `recording upgrade`), so the
+question of a consistent snapshot of a `.rez` a 5.x writer is appending to
+moves to `recording upgrade`; it does not block 6.0.0.
+
+Done: refusing an agent older than 5.21.0 at startup and mid-run
+(`src/recorder/agent_probe.rs`, `tests/record_lifecycle.rs`); endpoint
+detection (`src/recorder/detect.rs`, 6.0.0-alpha.50); removing the `.rez`,
+parquet and raw writers, MCP `export_query` and `--export-dir` (#1657)
+included; the in-repository callers (`rezolus-capture`, `compare-demo.sh`,
+the CI smoke steps); llm-perf records in-process and no longer runs
+`rezolus record`; the Homebrew formula (at 5.29.2, with no bump PRs open);
+compatibility fixtures from 5.29.2 (#1659); the upgrade page,
+`site/docs/upgrade.html` (#1660).
 
 ## Agent — histogram groups with slots (after 6.0)
 
