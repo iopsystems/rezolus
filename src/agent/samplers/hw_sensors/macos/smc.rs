@@ -83,6 +83,21 @@ pub(crate) struct FloatKey {
     info: KeyInfo,
 }
 
+#[cfg(test)]
+impl FloatKey {
+    /// A key for tests that do not read it.
+    pub(crate) fn unread(key: &str) -> Self {
+        FloatKey {
+            key: fourcc(key.as_bytes().try_into().unwrap()),
+            info: KeyInfo {
+                size: 4,
+                kind: TYPE_FLT,
+                attributes: 0,
+            },
+        }
+    }
+}
+
 /// The `f32` in a `flt ` key's reply bytes.
 fn decode_flt(bytes: &[u8; 32]) -> f32 {
     f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])

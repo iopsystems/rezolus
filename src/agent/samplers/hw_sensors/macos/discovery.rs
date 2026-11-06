@@ -57,9 +57,9 @@ pub(crate) struct Candidate {
 /// System-wide SMC keys, by family and name. Apple does not document these
 /// keys; the meanings are the ones open-source SMC tools use. On an M4 Max on
 /// AC power, `VD0R` × `ID0R` matched `PDTR` within 0.5% in each of seven
-/// reads from 31 to 50 W.
-const TOTALS: [(&str, Family, &str); 4] = [
-    ("PSTR", Family::Power, "system total"),
+/// reads from 31 to 50 W. `PSTR`, which those tools call system power, is not
+/// read: on AC power each of its values was the previous `PDTR` value.
+const TOTALS: [(&str, Family, &str); 3] = [
     ("PDTR", Family::Power, "DC in"),
     ("VD0R", Family::Voltage, "DC in"),
     ("ID0R", Family::Current, "DC in"),
@@ -68,10 +68,11 @@ const TOTALS: [(&str, Family, &str); 4] = [
 /// One candidate per temperature service location, named by its `Product`.
 /// The SMC publishes some sensors as two services with the same location and
 /// product; the first is kept. Services with no product or a location that
-/// is not a four-character code are skipped.
+/// is not a four-character code are skipped. Names are not yet unique; see
+/// `disambiguate`.
 pub(crate) fn temperatures(services: &[HidService]) -> Vec<Candidate> {
     let mut seen = HashSet::new();
-    let out = services
+    services
         .iter()
         .filter(|s| !s.product.is_empty())
         .filter_map(|s| Some((s, fourcc_str(s.location)?)))
@@ -82,8 +83,7 @@ pub(crate) fn temperatures(services: &[HidService]) -> Vec<Candidate> {
             name: s.product.clone(),
             origin: Origin::Hid(s.index),
         })
-        .collect();
-    disambiguate(out)
+        .collect()
 }
 
 /// The rail a PMU voltage or current service measures: `PMU vbuck0` and
@@ -102,22 +102,27 @@ fn rail_name(product: &str, letter: char) -> String {
 /// Voltage, current and power candidates for each PMU rail the HID services
 /// name, read from the SMC. A rail's voltage and current keys are the
 /// services' locations (`VP0b`, `IP0b`); its power key replaces the first
-/// letter with `P` (`PP0b`). Each rail is named once, from its voltage
-/// service if it has one, so the three families agree.
+/// letter with `P` (`PP0b`). A location that does not start with `V` (for a
+/// voltage service) or `I` (for a current service), or that is a `TOTALS`
+/// key, is skipped. Each rail is named once, from its voltage service if it
+/// has one, so the three families agree.
 pub(crate) fn rails(voltage: &[HidService], current: &[HidService]) -> Vec<Candidate> {
     let mut names: Vec<(String, String)> = Vec::new();
     let mut by_rail: HashMap<String, usize> = HashMap::new();
     let mut out = Vec::new();
-    for (family, letter, services) in [
-        (Family::Voltage, 'v', voltage),
-        (Family::Current, 'i', current),
+    for (family, prefix, letter, services) in [
+        (Family::Voltage, 'V', 'v', voltage),
+        (Family::Current, 'I', 'i', current),
     ] {
         let mut seen = HashSet::new();
         for s in services.iter().filter(|s| !s.product.is_empty()) {
             let Some(key) = fourcc_str(s.location) else {
                 continue;
             };
-            if !seen.insert(s.location) {
+            if !key.starts_with(prefix)
+                || TOTALS.iter().any(|(k, _, _)| *k == key)
+                || !seen.insert(s.location)
+            {
                 continue;
             }
             let rail = key[1..].to_string();
@@ -245,7 +250,7 @@ mod tests {
 
     #[test]
     fn repeated_names_get_their_sensor() {
-        let temps = temperatures(&captured(super::super::hid::TEMPERATURE));
+        let temps = disambiguate(temperatures(&captured(super::super::hid::TEMPERATURE)));
         let batteries: Vec<_> = temps
             .iter()
             .filter(|c| c.name.starts_with("gas gauge battery"))
@@ -278,6 +283,49 @@ mod tests {
         assert!(voltage.contains(&("VP0u", "PMU VP0u")));
         // One power candidate per rail named by either family.
         assert_eq!(power.len(), 20);
+    }
+
+    #[test]
+    fn rails_skip_locations_of_the_wrong_kind_and_the_totals() {
+        let service = |index, product: &str, code: &[u8; 4]| HidService {
+            index,
+            product: product.to_string(),
+            location: u32::from_be_bytes(*code),
+        };
+        let voltage = [
+            service(0, "PMU vbuck0", b"VP0b"),
+            service(1, "PMU vtemp", b"TP1b"),
+            service(2, "PMU vin", b"VD0R"),
+        ];
+        let current = [service(0, "PMU ibuck0", b"VP0b")];
+        let rails = rails(&voltage, &current);
+        assert_eq!(names(&rails, Family::Voltage), vec![("VP0b", "PMU buck0")]);
+        assert!(names(&rails, Family::Current).is_empty());
+        assert_eq!(names(&rails, Family::Power), vec![("PP0b", "PMU buck0")]);
+    }
+
+    #[test]
+    fn a_name_two_rails_share_gets_each_rails_key() {
+        let service = |index, code: &[u8; 4]| HidService {
+            index,
+            product: "PMU vbuck0".to_string(),
+            location: u32::from_be_bytes(*code),
+        };
+        let candidates = disambiguate(rails(&[service(0, b"VP0b"), service(1, b"VR0b")], &[]));
+        assert_eq!(
+            names(&candidates, Family::Voltage),
+            vec![("VP0b", "PMU buck0 (VP0b)"), ("VR0b", "PMU buck0 (VR0b)")]
+        );
+        // A name used once in a family is unchanged, even if another family
+        // uses it too.
+        let mut candidates = rails(&[service(0, b"VP0b")], &[]);
+        candidates.extend(totals());
+        let candidates = disambiguate(candidates);
+        assert_eq!(
+            names(&candidates, Family::Voltage)[0],
+            ("VP0b", "PMU buck0")
+        );
+        assert_eq!(names(&candidates, Family::Power)[0], ("PP0b", "PMU buck0"));
     }
 
     #[test]

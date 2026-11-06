@@ -1,13 +1,13 @@
 //! Hardware sensors on macOS: temperatures from the IOHIDEventSystem, and
-//! fan speeds, PMU rail voltage, current and power, and system power from the
-//! System Management Controller (SMC). Neither needs root.
+//! fan speeds, PMU rail voltage, current and power, and charger input from
+//! the System Management Controller (SMC). Neither needs root.
 //!
-//! Each read is a request to the SMC coprocessor: about 165 µs per SMC key
-//! and 1 ms per HID temperature on an M4 Max, nearly all of it waiting. So,
-//! as on Linux, this departs from principle 10 under principle 17: values are
-//! read on the sampler's own interval (5 seconds by default) in one
-//! nonoverlapping `spawn_blocking` worker, and `refresh()` only checks the
-//! throttle and dispatches it.
+//! A read takes about 165 µs per SMC key and 1 ms per HID temperature on an
+//! M4 Max, nearly all of it waiting rather than on CPU. So, as on Linux, this
+//! departs from principle 10 under principle 17: a consumer's refresh
+//! dispatches a read at most once per the sampler's interval (5 seconds by
+//! default), in one nonoverlapping `spawn_blocking` worker, and `refresh()`
+//! only checks the throttle and dispatches it.
 //!
 //! The sensors are found once, at startup: the HID temperature, voltage and
 //! current services, the SMC fan count, and a probe of each candidate SMC key
@@ -87,6 +87,70 @@ fn family_index(family: Family) -> usize {
     Family::ALL.iter().position(|f| *f == family).unwrap()
 }
 
+struct Assigned {
+    sensors: [Vec<Sensor>; 5],
+    /// SMC candidates `probe` did not find.
+    missing: usize,
+    /// Sensors past a family's `cap`.
+    overflow: usize,
+}
+
+/// Give each candidate a slot in its family: probe each SMC candidate with
+/// `probe` and drop those it does not find, make names unique among the
+/// sensors that remain, and keep at most `cap` per family.
+fn assign(
+    candidates: Vec<Candidate>,
+    cap: usize,
+    probe: impl Fn(&str) -> Option<FloatKey>,
+) -> Assigned {
+    let mut missing = 0;
+    let mut found = Vec::new();
+    let mut sources = Vec::new();
+    for candidate in candidates {
+        let source = match candidate.origin {
+            Origin::Hid(index) => Source::Hid(index),
+            Origin::Smc => match probe(&candidate.sensor) {
+                Some(key) => Source::Smc(key),
+                None => {
+                    missing += 1;
+                    continue;
+                }
+            },
+        };
+        found.push(candidate);
+        sources.push(source);
+    }
+
+    let mut sensors: [Vec<Sensor>; 5] = std::array::from_fn(|_| Vec::new());
+    let mut overflow = 0;
+    for (
+        Candidate {
+            family,
+            sensor,
+            name,
+            ..
+        },
+        source,
+    ) in discovery::disambiguate(found).into_iter().zip(sources)
+    {
+        let slots = &mut sensors[family_index(family)];
+        if slots.len() == cap {
+            overflow += 1;
+            continue;
+        }
+        slots.push(Sensor {
+            sensor,
+            name,
+            source,
+        });
+    }
+    Assigned {
+        sensors,
+        missing,
+        overflow,
+    }
+}
+
 fn discover() -> Readers {
     let smc = Smc::open();
     if smc.is_none() {
@@ -109,40 +173,21 @@ fn discover() -> Readers {
         ));
     }
 
-    let mut sensors: [Vec<Sensor>; 5] = std::array::from_fn(|_| Vec::new());
-    let mut missing = 0;
-    for Candidate {
-        family,
-        sensor,
-        name,
-        origin,
-    } in candidates
-    {
-        let source = match origin {
-            Origin::Hid(index) => Source::Hid(index),
-            Origin::Smc => match smc.as_ref().and_then(|smc| smc.float_key(&sensor)) {
-                Some(key) => Source::Smc(key),
-                None => {
-                    missing += 1;
-                    continue;
-                }
-            },
-        };
-        let slots = &mut sensors[family_index(family)];
-        if slots.len() == MAX_SENSORS {
-            continue;
-        }
-        slots.push(Sensor {
-            sensor,
-            name,
-            source,
-        });
-    }
+    let Assigned {
+        sensors,
+        missing,
+        overflow,
+    } = assign(candidates, MAX_SENSORS, |sensor| {
+        smc.as_ref()?.float_key(sensor)
+    });
     info!(
         "{NAME}: found {} sensors ({} candidate SMC keys absent or not a float)",
         sensors.iter().map(Vec::len).sum::<usize>(),
         missing
     );
+    if overflow > 0 {
+        warn!("{NAME}: {overflow} sensors exceed the {MAX_SENSORS}-sensor family cap and are not read");
+    }
     Readers {
         smc,
         temperatures: temperatures.map(|(services, _)| services),
@@ -184,6 +229,35 @@ fn scaled(family: Family, value: f64) -> Option<i64> {
     (v.is_finite() && v > i64::MIN as f64 && v < i64::MAX as f64).then_some(v as i64)
 }
 
+/// Write `readings`, in slot order, to `family`'s gauges and return how many
+/// failed. A failed reading is absent. The family's window opens before the
+/// first reading is taken (the iterator reads lazily) and is stamped only if
+/// at least one reading succeeded.
+fn publish(family: Family, readings: impl Iterator<Item = Option<f64>>) -> usize {
+    let metric = metric(family);
+    let guard = acquisition(family).acquire();
+    let mut succeeded = 0;
+    let mut failed = 0;
+    for (slot, reading) in readings.enumerate() {
+        match reading.and_then(|v| scaled(family, v)) {
+            Some(v) => {
+                let _ = metric.set(slot, v);
+                succeeded += 1;
+            }
+            None => {
+                let _ = metric.set(slot, i64::MIN);
+                failed += 1;
+            }
+        }
+    }
+    if succeeded > 0 {
+        guard.finish();
+    } else {
+        guard.discard();
+    }
+    failed
+}
+
 impl Readers {
     fn read(&self, source: Source) -> Option<f64> {
         match source {
@@ -195,29 +269,8 @@ impl Readers {
     fn sweep(&mut self) {
         let started = Instant::now();
         for family in Family::ALL {
-            let i = family_index(family);
-            let metric = metric(family);
-            let acquisition = acquisition(family);
-            let guard = acquisition.acquire();
-            let mut succeeded = 0;
-            let mut failed = 0;
-            for (slot, sensor) in self.sensors[i].iter().enumerate() {
-                match self.read(sensor.source).and_then(|v| scaled(family, v)) {
-                    Some(v) => {
-                        let _ = metric.set(slot, v);
-                        succeeded += 1;
-                    }
-                    None => {
-                        let _ = metric.set(slot, i64::MIN);
-                        failed += 1;
-                    }
-                }
-            }
-            if succeeded > 0 {
-                guard.finish();
-            } else {
-                guard.discard();
-            }
+            let sensors = &self.sensors[family_index(family)];
+            let failed = publish(family, sensors.iter().map(|s| self.read(s.source)));
             self.report(family, failed);
         }
         debug!(
@@ -358,6 +411,107 @@ impl Sampler for HwSensors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The only test that writes the sensor gauges and groups, which are
+    /// process-global.
+    #[tokio::test]
+    async fn new_bounds_the_groups_and_refresh_publishes_in_the_background() {
+        // A partly failed family stamps its window; a wholly failed family
+        // keeps the last window and leaves every slot absent.
+        let acq = acquisition(Family::FanSpeed);
+        let fans = metric(Family::FanSpeed);
+        assert_eq!(
+            publish(Family::FanSpeed, [Some(1361.94), None].into_iter()),
+            1
+        );
+        assert_eq!(fans.value(0), Some(1362));
+        assert_eq!(fans.value(1), None);
+        let stamped = acq.window().expect("a partly read family is stamped");
+        assert_eq!(publish(Family::FanSpeed, [None, None].into_iter()), 2);
+        assert_eq!(fans.value(0), None);
+        assert_eq!(acq.window(), Some(stamped));
+
+        // A sensor whose source cannot be read: no SMC, no HID client.
+        let readers = Readers {
+            smc: None,
+            temperatures: None,
+            sensors: [
+                vec![Sensor {
+                    sensor: "TP1b".to_string(),
+                    name: "PMU tdie1".to_string(),
+                    source: Source::Hid(0),
+                }],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
+            failed: [0; 5],
+        };
+        let _ = metric(Family::Temperature).set(0, 42_000);
+        let sampler = HwSensors::new(Duration::from_secs(60), readers);
+        assert_eq!(SENSOR_TEMPERATURE_ACQ.member_bound(), Some(1));
+        assert_eq!(SENSOR_FAN_SPEED_ACQ.member_bound(), Some(0));
+        assert_eq!(SENSOR_FAN_PWM_ACQ.member_bound(), Some(0));
+        assert_eq!(SENSOR_COOLING_STATE_ACQ.member_bound(), Some(0));
+        let before = SENSOR_TEMPERATURE_ACQ.window();
+
+        sampler.refresh().await;
+        for _ in 0..100 {
+            if !sampler.reading.load(Ordering::Acquire) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!sampler.reading.load(Ordering::Acquire));
+        assert_eq!(metric(Family::Temperature).value(0), None);
+        assert_eq!(SENSOR_TEMPERATURE_ACQ.window(), before);
+        assert_eq!(sampler.readers.lock().unwrap().failed[0], 1);
+        // Inside the interval, a second refresh does not dispatch.
+        let dispatched = *sampler.last_read.lock().unwrap();
+        sampler.refresh().await;
+        assert_eq!(*sampler.last_read.lock().unwrap(), dispatched);
+    }
+
+    #[test]
+    fn assign_drops_missing_keys_then_names_and_caps_what_remains() {
+        let candidate = |family, sensor: &str, name: &str, origin| Candidate {
+            family,
+            sensor: sensor.to_string(),
+            name: name.to_string(),
+            origin,
+        };
+        let candidates = vec![
+            candidate(Family::Voltage, "VP0b", "PMU buck0", Origin::Smc),
+            // Absent from the SMC, so `VP0b` keeps its name unchanged.
+            candidate(Family::Voltage, "VR0b", "PMU buck0", Origin::Smc),
+            candidate(Family::Temperature, "TG0B", "battery", Origin::Hid(0)),
+            candidate(Family::Temperature, "TG1B", "battery", Origin::Hid(1)),
+            candidate(Family::Temperature, "TN0n", "NAND", Origin::Hid(2)),
+        ];
+        let assigned = assign(candidates, 2, |sensor| {
+            (sensor == "VP0b").then(|| FloatKey::unread(sensor))
+        });
+        let names = |family| -> Vec<(String, String)> {
+            assigned.sensors[family_index(family)]
+                .iter()
+                .map(|s| (s.sensor.clone(), s.name.clone()))
+                .collect()
+        };
+        assert_eq!(assigned.missing, 1);
+        assert_eq!(
+            names(Family::Voltage),
+            vec![("VP0b".to_string(), "PMU buck0".to_string())]
+        );
+        assert_eq!(
+            names(Family::Temperature),
+            vec![
+                ("TG0B".to_string(), "battery (TG0B)".to_string()),
+                ("TG1B".to_string(), "battery (TG1B)".to_string()),
+            ]
+        );
+        assert_eq!(assigned.overflow, 1);
+    }
 
     #[test]
     fn readings_are_scaled_to_the_metric_units() {

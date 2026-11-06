@@ -499,10 +499,7 @@ fn macos() -> Catalog {
         ),
         (
             "sensor_power",
-            &[
-                ("PSTR", "system total", "smc"),
-                ("PP0b", "PMU buck0", "smc"),
-            ],
+            &[("PDTR", "DC in", "smc"), ("PP0b", "PMU buck0", "smc")],
         ),
         (
             "sensor_voltage",

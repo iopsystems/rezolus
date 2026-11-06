@@ -6,8 +6,8 @@
 //! the ones open-source tools such as `macmon` and `Stats` declare. A service
 //! is matched by its primary usage page and usage. Its `Product` is a name
 //! such as `PMU tdie1`, and its `LocationID` is a four-character code such as
-//! `TP1b`, which for the voltage and current services is the SMC key of the
-//! same rail.
+//! `TP1b`. For a voltage or current service the code is the name of the SMC
+//! key for the same rail, when the SMC has that key.
 
 use crate::agent::samplers::iokit::{string_value, CfString};
 use std::ffi::c_void;
@@ -111,9 +111,10 @@ pub(crate) struct Services {
 }
 
 // SAFETY: the client and its services are CoreFoundation objects with
-// thread-safe reference counts. `Services` has no `&self` method that can run
-// concurrently with another (the sampler holds it behind a mutex), so the
-// client is used by one thread at a time.
+// thread-safe reference counts. The client is created without a run loop or
+// dispatch queue, and `IOHIDServiceClientCopyEvent` is a synchronous call
+// that may be made from any thread; the live test reads from a second
+// thread. `Services` is not `Sync`.
 unsafe impl Send for Services {}
 
 impl Services {

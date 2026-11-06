@@ -414,10 +414,12 @@ enabled = false
 # Read-only hardware sensor telemetry: temperatures, power, bus voltage/current,
 # fan RPM/PWM and cooling state. On Linux it reads thermal, hwmon and
 # cooling-device sysfs; on macOS, HID temperature services and the SMC (no
-# PWM or cooling state). Reads run on the blocking pool at `interval` (default
-# 5s); Linux rediscovers sysfs capabilities every 60s, macOS finds its sensors
-# once at startup. No hardware controls are written. Missing permissions or
-# unavailable channels appear as absent values. On Linux, drive temperatures
+# PWM or cooling state). Reads run on the blocking pool at most once per
+# `interval` (default 5s); Linux rediscovers sysfs capabilities every 60s,
+# macOS finds its sensors once at startup. No hardware controls are written.
+# On Linux, missing permissions or unavailable channels appear as absent
+# values; on macOS, a sensor not found at startup has no series, and a later
+# failed read is absent. On Linux, drive temperatures
 # come from drivehealth (which needs root), so `nvme` and `drivetemp` hwmon
 # chips are not read here.
 [samplers.hw_sensors]
