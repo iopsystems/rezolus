@@ -3,7 +3,8 @@
 **Status: OPEN.** Plan opened 2026-10-08, updated 2026-11-06. `Cargo.toml` is
 at `6.0.0-alpha.128`; no `v6.*` tag exists and the latest release is v5.29.2.
 This entry lists what has to be true before 6.0.0 is tagged and in what order,
-and records the decisions taken on 2026-10-08 and 2026-10-12. On 2026-10-12
+and records the decisions taken on 2026-10-08, 2026-10-12, 2026-11-05 and
+2026-11-06. On 2026-10-12
 6.x became `.dendro`-only for writing, decision 1 was withdrawn (an agent
 older than 5.21.0 is refused), and 6.0.0 now waits for metriken path steps 4
 to 7, the viewer move included. On 2026-11-05 and 2026-11-06 (decisions 8
@@ -33,7 +34,9 @@ Save as Report from a dendro source. `view` (server and WASM), `mcp` and every
 `recording` subcommand that reads an archive read `.dendro` and `.rez` through
 `RezReader`, which wraps metriken-storage's `ArchiveReader` (metriken-archive
 until metriken path step 2). Parquet is read through
-`metriken_query::ParquetReader`.
+`metriken_query::ParquetReader`. Changed 2026-10-26 by #1554: 6.x opens
+`.dendro` only, and refuses `.rez`, parquet and `.parquet.ab.tar` with the
+`recording upgrade` command that converts them.
 
 Measured on 2026-10-08:
 
@@ -111,7 +114,9 @@ Taken with the metriken-recorder design (metriken
    (already `.dendro` only), Save as Report in the server and the WASM viewer,
    and every `recording` subcommand that writes a new file produce `.dendro`.
    `.rez`, parquet and raw output are removed from 6.x. Reading `.rez` and
-   parquet stays, in `view`, `mcp` and the `recording` subcommands. The
+   parquet stays, in `view`, `mcp` and the `recording` subcommands (changed
+   2026-10-26 by #1554: 6.x opens `.dendro` only, and `recording upgrade`
+   converts `.rez` and parquet). The
    inventory of writers to remove is under "Removing the `.rez`, parquet and
    raw writers" below. `metriken-recorder` writes `.dendro` only and has no
    sink trait as a consequence.
@@ -161,9 +166,11 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
    PromQL from a source's flat labels, which `layers::append` sets to the
    merged labels only when it writes the source, so hiding a legacy
    `source` needs a read-path change. rezolus reads `source` directly in
-   about 25 places (the dashboard's kind lookup, `src/recorder/mod.rs:886`,
-   MCP, the viewer), more through `.source` fields, which would first have
-   to read the kind through D2. A 6.x recording carries `alias` and
+   about 25 places outside tests (`git grep` for `get("source")`,
+   `== "source"` and `"source" =>` in `src` and `crates`; among them the
+   dashboard's kind lookup, `src/recorder/mod.rs:886`, MCP and the viewer),
+   and more through `.source` fields, which would first have to read the
+   kind through D2. A 6.x recording carries `alias` and
    `__producer__`, and `source` only where its producer's handshake
    declares one (the 6.x agent declares `source=rezolus`,
    `src/agent/exposition/http/mod.rs:247`); a user's `source=` is recorded
@@ -213,12 +220,13 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
     histograms follow 6.0.0 (iopsystems/metriken#380, #1661,
     iopsystems/metriken#381 and iopsystems/metriken#382, in that order).
 14. **6.0.0 waits for systemslab to read and record `.dendro`**, merged before
-    the tag: its reader opening dendro schema 5, and the runner asking
+    the tag: its reader opening dendro schema 5 and decision 13's float
+    kinds (the metriken-storage release that carries
+    iopsystems/metriken#378), and the runner asking
     `rezolus record` for `.dendro`. iopsystems/systemslab#6371 does not do
     that as it stands: it pins rezolus `ab24b072` and metriken-storage 0.2,
     whose dendro 0.4 reads schema 4 only, and it says not to merge until 6.0.0
-    is tagged. It has to move to a schema 5 reader (metriken-storage 0.4 or
-    later) on a pre-release pin first. systemslab's runner asks any rezolus
+    is tagged. It has to move to that reader on a pre-release pin first. systemslab's runner asks any rezolus
     from 5.19 for `-o metrics.rez` (`crates/runner/src/metrics.rs:411`,
     `:466`), which 6.x refuses, and lab images install the `rezolus` package
     unpinned (`dockerfiles/scripts/install-rezolus.sh`), so a 6.0.0 package
@@ -260,7 +268,7 @@ on request (`record -o x.dendro`, a hindsight `output` ending in `.dendro`,
   v5.25.1 and v5.27.0 binaries against the current agent, the current recorder
   against a v5.25.1 and a v5.27.0 agent, and the v5.25.1 and v5.27.0 readers
   on 6.0 output. v5.25.1 is the version measured above and the reader
-  systemslab pins after its phase 0 bump. v5.27.0 is the latest 5.x release,
+  systemslab pins after its phase 0 bump. v5.27.0 was the latest 5.x release,
   the one a host upgrading to 6.0 runs. Both build with dendro 0.3.3,
   metriken-archive 0.2.7 and metriken-query 0.33.1 (each tag's `Cargo.lock`).
   The v5.22.1 reader on a 6.0 `.rez` (systemslab's current pin) is dropped:
@@ -292,7 +300,8 @@ on request (`record -o x.dendro`, a hindsight `output` ending in `.dendro`,
   route. This is the metriken-recorder entry's step 2, in rezolus's own
   recorder, before the library is extracted.
 
-  Done 2026-10-12 (6.0.0-alpha.50): `src/recorder/detect.rs` asks a `/` or
+  Done 2026-10-12 (6.0.0-alpha.50; in metriken-recorder `src/detect.rs`
+  since #1448): `src/recorder/detect.rs` asked a `/` or
   `/metrics/stream` URL for its stream first and hands any other answer to
   the `Probe` hook (`src/recorder/agent_probe.rs`), which recognises an
   agent by `/status` or the `/` banner; `/metrics/binary` is no longer read.
@@ -504,8 +513,10 @@ repository. Before 6.0.0:
 ### Distribution
 
 - The Homebrew tap (`iopsystems/homebrew-iop`, `Formula/rezolus.rb`) was at
-  5.19.0 with sixteen bump PRs open (#134–#151). On 2026-11-06 it is at
-  5.29.2, and 5.29.2 produced one bump PR (#172), which was merged.
+  5.19.0 with sixteen bump PRs open (iopsystems/homebrew-iop#134–#151). On
+  2026-11-06 it is at 5.29.2, and 5.29.2 produced one bump PR
+  (iopsystems/homebrew-iop#172), landed through `pr-pull` (GitHub shows it
+  closed).
   `install.sh` sends macOS users to the tap.
 - Hosts whose agents are older than 5.21 must be upgraded before a 6.0
   recorder can record them; until then a 5.x recorder records them
@@ -542,8 +553,8 @@ reader.
 - metriken path step 4 is released and rezolus is on it (decision 8).
 - The three Prometheus ingestion fixes of decision 13 are released in
   metriken and rezolus is on them.
-- systemslab reads dendro schema 5 and its runner records `.dendro`,
-  merged (decision 14).
+- systemslab reads dendro schema 5 with decision 13's float kinds, and its
+  runner records `.dendro`, merged (decision 14).
 - hindsight says why it refuses an agent at startup and creates nothing
   first (found 2026-11-06, while writing the upgrade page).
 - `site/docs/usage.html`'s config example uses `alias =`, in the release PR
