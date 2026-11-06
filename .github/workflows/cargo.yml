@@ -120,6 +120,33 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
         shell: bash
 
+  # With `developer-mode`, `rezolus view` serves and watches its assets from
+  # the source tree, and every command that loads templates (`view`,
+  # `recording`, `mcp`) reads them from the source tree. The `build` matrix
+  # tests without it. The feature-gated code has no OS-specific branches.
+  # notify uses inotify on Linux and FSEvents on macOS, and this job runs only
+  # on Linux, so the macOS watcher is not tested.
+  test-developer-mode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-developer-mode
+      - name: Install dependencies
+        shell: bash
+        run: |
+          # Drop the unused Chrome apt source; see the note in `check`.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get update
+          sudo apt-get -y install libelf-dev
+          rustup component add rustfmt
+      - name: test
+        shell: bash
+        run: cargo test -p rezolus --features developer-mode --tests --bins --locked
+
   clippy-upload:
     runs-on: ubuntu-latest
     needs: [ clippy ]
@@ -433,6 +460,7 @@ jobs:
       - clippy-deny
       - clippy-upload
       - wasm-viewer
+      - test-developer-mode
 
     steps:
       - name: verify
