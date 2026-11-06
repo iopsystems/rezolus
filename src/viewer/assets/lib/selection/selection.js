@@ -149,7 +149,8 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     promql_query: e.promql_query,
     // Optional on pre-fix payloads; null degrades to single-query compare.
     promql_query_experiment: e.promql_query_experiment || null,
-    // An individual cgroup chart's queries when it draws cgroup groups.
+    // The queries of an individual cgroup chart saved with a query per
+    // cgroup group.
     cgroup_queries: e.cgroup_queries || null,
     // The uuids of the sources the queries read; absent from entries saved
     // before plots carried a scope, which carry the recording's matchers in
@@ -959,8 +960,8 @@ const chartLoaderMixin = (store, component) => ({
                 // Histogram metrics need histogram_quantiles / heatmap
                 // wrapping; the dashboard pipeline does this via
                 // buildEffectiveQuery, but the stored entry only has
-                // the raw metric name. An individual cgroup chart that
-                // drew cgroup groups runs one query per group as well.
+                // the raw metric name. An individual cgroup chart saved
+                // with a query per cgroup group runs each of them.
                 const queries = entry.cgroup_queries
                     || [{ query: entry.promql_query, label: null }];
                 const result = await runCgroupVariants(queries, (q) => executePromQLRangeQuery(

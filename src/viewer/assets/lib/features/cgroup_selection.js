@@ -26,11 +26,47 @@ const quoteForPromql = (pattern) => pattern.replace(/\\/g, '\\\\').replace(/"/g,
 // The pattern substituted for `__SELECTED_CGROUPS__`: the selectable names,
 // each escaped as a regex and quoted, joined by `|` and parenthesised when
 // there are several. null when none can be selected.
-export const cgroupPattern = (names) => {
-    const usable = names
-        .filter((n) => !cgroupUnselectableReason(n))
-        .map((n) => quoteForPromql(regexEscape(n)));
-    return usable.length > 1 ? '(' + usable.join('|') + ')' : usable[0] || null;
+export const cgroupPattern = (names) => alternatives(names
+    .filter((n) => !cgroupUnselectableReason(n))
+    .map((n) => quoteForPromql(regexEscape(n))));
+
+// Patterns joined by `|` and parenthesised when there are several; null for
+// none.
+const alternatives = (patterns) => (patterns.length > 1 ? '(' + patterns.join('|') + ')' : patterns[0] || null);
+
+// A unit's cgroup and every cgroup below it, `<unit>(?:/.*)?`, for a key.
+const prefixPattern = (key) => quoteForPromql(regexEscape(key.slice(0, -1))) + '(?:/.*)?';
+
+// The `.../` key a member recorded under a shortened path was grouped by in
+// deriveCgroupGroups, given the longer key it was merged into: the
+// member's longest `.../` prefix ending in `/` that `key` ends with. null if
+// it has none.
+const shortenedKey = (member, key) => {
+    if (!member.startsWith('.../')) return null;
+    for (let end = member.lastIndexOf('/'); end > 3; end = member.lastIndexOf('/', end - 1)) {
+        const prefix = member.slice(0, end + 1);
+        if (key.endsWith(prefix.slice(3))) return prefix;
+    }
+    return null;
+};
+
+// The pattern of a selected group: its unit's cgroup and every cgroup below
+// it, by its key and by each shortened `.../` key merged into it. In the
+// recording the group came from, these match exactly its members
+// (deriveCgroupGroups); in another recording, such as the other arm of a
+// comparison, they match that recording's cgroups under the unit. A member
+// under neither, which deriveCgroupGroups does not produce, is matched by
+// name.
+const groupPattern = (key, members) => {
+    const keys = new Set([key]);
+    const named = [];
+    for (const n of members) {
+        if (n === key.slice(0, -1) || n.startsWith(key)) continue;
+        const shortened = shortenedKey(n, key);
+        if (shortened) keys.add(shortened);
+        else named.push(quoteForPromql(regexEscape(n)));
+    }
+    return alternatives([...[...keys].map(prefixPattern), ...named]);
 };
 
 // A group is keyed by its unit's path with a trailing `/`, the subtree below
@@ -241,64 +277,102 @@ export const normalizeCgroupSelection = (keys, groups) => {
 /**
  * A selection of keys as the patterns its queries take:
  * - `leaf`: the individually selected names, for `name=~` (null if none);
- * - `excluded`: every selected name and group member, for `name!~`;
+ * - `excluded`: every selected name and group (groupPattern), for `name!~`;
  * - `groups`: `{ key, pattern }` per selected group, in key order.
  * A group key not in `groups` (a link from another recording) is left out.
  */
 export const resolveCgroupSelection = (keys, groups) => {
     const leaves = [];
     const selectedGroups = [];
-    const excluded = new Set();
     for (const key of [...keys].sort()) {
         if (isCgroupGroupKey(key)) {
             const members = groups.get(key);
             if (!members || cgroupGroupUnselectableReason(members)) continue;
-            selectedGroups.push({ key, pattern: cgroupPattern(members) });
-            for (const n of members) excluded.add(n);
+            selectedGroups.push({ key, pattern: groupPattern(key, members) });
         } else if (!cgroupUnselectableReason(key)) {
             leaves.push(key);
-            excluded.add(key);
         }
     }
+    const leaf = cgroupPattern(leaves);
     return {
-        leaf: cgroupPattern(leaves),
-        excluded: cgroupPattern([...excluded].sort()),
+        leaf,
+        excluded: alternatives([...(leaf ? [leaf] : []), ...selectedGroups.map((g) => g.pattern)]),
         groups: selectedGroups,
     };
 };
 
-const SUM_BY_NAME = /sum\s+by\s*\(\s*name\s*\)\s*/g;
+const SUM_BY_NAME = /sum\s+by\s*\(\s*name\s*\)\s*\(/g;
+
+// The label a member's own name is copied to before `name` is set to its
+// group's key, so two members of a group stay two series until summed.
+const MEMBER_LABEL = 'cgroup_member';
+
+// The index just past the `)` closing the `(` before `open`, skipping
+// strings; -1 if it is not closed.
+const closingParen = (query, open) => {
+    let depth = 1;
+    for (let i = open; i < query.length; i++) {
+        const c = query[i];
+        if (c === '"' || c === "'" || c === '`') {
+            for (i++; i < query.length && query[i] !== c; i++) {
+                if (query[i] === '\\' && c !== '`') i++;
+            }
+        } else if (c === '(') {
+            depth++;
+        } else if (c === ')' && --depth === 0) {
+            return i + 1;
+        }
+    }
+    return -1;
+};
+
+// `expr` with each member of each group renamed to its group's key:
+// `name` is copied to MEMBER_LABEL, then set to the key where it matches
+// the group's pattern.
+const renameGroupMembers = (expr, groups) => groups.reduce(
+    (inner, g) => `label_replace(${inner}, "name", "${quoteForPromql(g.key)}", "name", "${g.pattern}")`,
+    `label_replace(${expr}, "${MEMBER_LABEL}", "$1", "name", "(.*)")`,
+);
 
 /**
- * The queries an individual cgroup chart runs for a selection: the template
- * itself for the individually selected names, and per selected group the
- * template with `sum by (name)` made `sum`, labelled with the group's key.
- * Each comes with the selection to substitute into it. A template without a
- * `name=~` placeholder, or a selection with no groups, gives the template
- * alone.
- *
- * A group's IPC is sum(instructions) / sum(cycles) over its members, which
- * is why a group is its own query rather than a sum of member lines.
+ * The queries an individual cgroup chart runs for a selection, each with the
+ * selection to substitute into it. With groups selected, the template's
+ * selector takes every selected name and group (`excluded`), and the
+ * argument of each `sum by (name) (...)` has the `name` of each cgroup a
+ * group's pattern matches replaced by the group's key (`label_replace`), so
+ * the chart's one query draws a line per
+ * individually selected name and one per group. A group's IPC is then
+ * sum(instructions) / sum(cycles) over its members. A template with groups
+ * but no `sum by (name)` cannot sum a group: it runs for the individually
+ * selected names, or not at all. A template without a `name=~` placeholder,
+ * or a selection with no groups, gives the template alone.
  */
 export const cgroupQueryVariants = (template, selection) => {
     if (!selection || typeof selection === 'string' || selection.groups.length === 0
         || !template.includes('name=~"__SELECTED_CGROUPS__"')) {
         return [{ query: template, label: null, selection }];
     }
-    const out = [];
-    if (selection.leaf) out.push({ query: template, label: null, selection });
-    if (template.match(SUM_BY_NAME)) {
-        const summed = template.replace(SUM_BY_NAME, 'sum ');
-        for (const g of selection.groups) {
-            out.push({
-                query: summed,
-                label: g.key,
-                selection: { leaf: g.pattern, excluded: selection.excluded, groups: [] },
-            });
-        }
+    if (!template.match(SUM_BY_NAME)) {
+        return selection.leaf ? [{ query: template, label: null, selection }] : [];
     }
-    return out;
+    let query = '';
+    let rest = 0;
+    for (const m of template.matchAll(SUM_BY_NAME)) {
+        const open = m.index + m[0].length;
+        if (open < rest) continue;
+        const close = closingParen(template, open);
+        if (close < 0) return [];
+        query += template.slice(rest, open)
+            + renameGroupMembers(template.slice(open, close - 1), selection.groups) + ')';
+        rest = close;
+    }
+    query += template.slice(rest);
+    const all = { leaf: selection.excluded, excluded: selection.excluded, groups: [] };
+    return [{ query, label: null, selection: all }];
 };
+
+// The rest of this file runs the `{ query, label }` lists in a chart's
+// `cgroup_queries`, which a chart saved with a query per cgroup group carries.
 
 // One query's result relabelled for a cgroup group: each series is named by
 // the group's key. A group's query sums its members, so it has one series.

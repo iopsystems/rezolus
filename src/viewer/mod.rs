@@ -37,6 +37,8 @@ mod proxy_allow;
 
 mod actions;
 #[cfg(test)]
+mod cgroup_group_query_test;
+#[cfg(test)]
 pub(crate) mod combined_test;
 #[cfg(test)]
 mod dashboard_queries_test;
