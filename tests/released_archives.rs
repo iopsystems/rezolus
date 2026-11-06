@@ -8,8 +8,8 @@
 //! returned must come back at the same timestamp with the same value, for
 //! the same series, and each recording keeps its labels and metadata.
 //!
-//! The archives hold no histogram data (the macOS agent's histogram samplers
-//! recorded none), so histogram reads are not covered here.
+//! The archives hold no histogram data (every histogram column is null), so
+//! histogram reads are not covered here.
 //!
 //! The queries are ones whose meaning did not change in 6.0. `rate(x[r])`
 //! with `r` longer than the interval is not among them: 5.x returned the
@@ -40,6 +40,8 @@ const QUERIES: &[&str] = &[
     "irate(blockio_bytes[5s])",
     "irate(blockio_driver_errors[5s])",
     "irate(rezolus_context_switch[5s])",
+    "irate(blockio_service_time[5s])",
+    "irate(rezolus_memory_page_faults[5s])",
     "rate(rezolus_cpu_usage[1s])",
 ];
 

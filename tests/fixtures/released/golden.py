@@ -28,6 +28,8 @@ QUERIES = [
     "irate(blockio_bytes[5s])",
     "irate(blockio_driver_errors[5s])",
     "irate(rezolus_context_switch[5s])",
+    "irate(blockio_service_time[5s])",
+    "irate(rezolus_memory_page_faults[5s])",
     "rate(rezolus_cpu_usage[1s])",
 ]
 

@@ -19,11 +19,13 @@ rezolus record --duration 15s --interval 1s http://127.0.0.1:14241 -o v5.29.2.de
 
 Each holds one recording (`host=macbook.localdomain`, `source=rezolus`) of 16
 rows per table. Data comes from `cpu_usage`, `blockio_requests` and
-`rezolus_rusage`. The archives also hold 20 `unattributed/*` histogram
-streams with no data, so they cannot test histogram reads; that needs a
-recording from a Linux agent. The `.rez` is a v3 archive. Both archives hold
-the same row timestamps, and their values differ at three of them, so a test
-that reads the wrong archive fails.
+`rezolus_rusage`. The archives also hold 20 histogram streams with no data
+(19 `unattributed/*` and `blockio_requests/blockio_requests_sizes`), so they
+cannot test histogram reads; that needs a recording from a Linux agent. The
+`.rez` is a v3 archive. Both archives hold 16 rows at the same timestamps
+except one near second 109 (1.75 ms past it in the `.rez`, 12.0 ms in the
+`.dendro`), whose values also differ. 5.29.2's answers on the two differ at
+109, 110 and 111, so a test that reads the wrong archive fails.
 
 ## `golden.json`
 
