@@ -116,6 +116,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **hindsight says why it refuses an agent at startup, and leaves nothing
+  behind.** An agent older than 5.21.0, or one whose stream it cannot
+  subscribe to, ended hindsight with exit code 1 and often no message: the
+  log is written by a background thread, and the exit came before it was
+  flushed. hindsight also created an empty output file and a buffer
+  directory before it asked the agent for its stream. It now flushes the log
+  before it exits with status 1, and asks the agent first, so a refused agent
+  leaves the output path and `buffer_dir` as they were. An output file that
+  cannot be created is therefore reported after the agent is reached.
+
 - **A developer-mode viewer reloads the page when an asset changes.** The
   file watcher was dropped as soon as it was set up, so no change reloaded the
   page. It now watches `src/viewer/assets/` and the metriken-charts assets
