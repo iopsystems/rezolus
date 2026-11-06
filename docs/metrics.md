@@ -1732,6 +1732,8 @@ interval = "5s"
 # enabled = false
 ```
 
+On macOS, see [hw_sensors on macOS](#hw_sensors-on-macos).
+
 Reads run in a nonoverlapping blocking task, dispatched by consumer activity
 at most once per interval (5 seconds by default). Discovery runs every 60
 seconds during sampling; descriptive metadata is cached between passes.
@@ -1821,6 +1823,56 @@ This first sampler does not record configurable limits, trip points, fan modes,
 or overcurrent event histories. A zero cooling state does not establish the
 absence of every form of hardware throttling. See [hardware validation and
 inventory commands](sensors-validation.md) for the remaining validation work.
+
+#### hw_sensors on macOS
+
+On macOS the sampler reads two sources, and neither needs root:
+
+- Temperatures, from the IOHIDEventSystem services on vendor usage page
+  `0xff00`, usage 5. On Apple silicon these are the power manager's die and
+  device sensors (`PMU tdie1`, `PMU tdev1`, ...), the battery gas gauge and
+  the NAND. `IOHIDEventSystemClient` is private API: IOKit exports it, but
+  the SDK has no header for it.
+- Fan speeds, power-manager rail voltage, current and power, and system
+  power, from the System Management Controller (SMC) through the `AppleSMC`
+  user client.
+
+The sampler finds its sensors once, at startup, and reads them at its
+`interval` (5 seconds by default) in a blocking task, as on Linux. Each
+sensor has `sensor` (the SMC key, or the HID service's four-character
+location code), `name`, and `source` (`hid` or `smc`). A failed read is
+absent.
+
+| Metric | Read from | `name` |
+| --- | --- | --- |
+| `sensor_temperature` | Each HID temperature service, one per location code (the SMC publishes some sensors as two services) | The service's `Product`; when several services share it, followed by the location code, as in `gas gauge battery (TG0B)` |
+| `sensor_fan_speed` | `F<n>Ac` for each of the `FNum` fans, at most ten | `fan <n>` |
+| `sensor_voltage` | `VD0R`, and each rail's `V` key | `DC in`, and the rail |
+| `sensor_current` | `ID0R`, and each rail's `I` key | `DC in`, and the rail |
+| `sensor_power` | `PSTR` and `PDTR`, and each rail's `P` key | `system total` and `DC in`, and the rail |
+
+A rail is one that a HID voltage or current service on usage page `0xff08`
+names. The service named `PMU vbuck0` at location `VP0b` is rail `PMU buck0`,
+and its voltage, current and power are the SMC keys `VP0b`, `IP0b` and
+`PP0b`. The sampler does not read a key the SMC does not have or that is not
+a 32-bit float; on an M4 Max, 14 of the candidate keys are not read.
+
+Apple does not document the SMC keys. `PSTR` (system total), `PDTR` (power
+from the charger), `VD0R` and `ID0R` (its voltage and current) carry the
+meanings open-source SMC tools give them. On an M4 Max on AC power, `VD0R` ×
+`ID0R` matched `PDTR` within 0.5% in seven reads from 31 to 50 W, and each
+rail's power key equalled its voltage times its current. The SMC has many more
+temperature keys (281 reading between 10 and 120 °C on an M4 Max), but their
+names are undocumented and differ between chips, so they are not read.
+`sensor_fan_pwm` and `sensor_cooling_state` have no macOS source. The sampler
+has not been run on an Intel Mac.
+
+On an M4 Max, with only `hw_sensors` and `rezolus_rusage` enabled at a 5
+second interval and one scrape per second for 150 seconds, the sampler read 77
+sensors per sweep in 34.7 ms at the median and 76.9 ms at most (60 sweeps).
+The agent used 50 to 60 ms more CPU per run than with the sampler off (0.04%
+of a core; two runs each). Each SMC read takes about 165 µs and each HID
+temperature read about 1 ms, nearly all of it waiting for the SMC.
 
 ## Syscall
 

@@ -5,7 +5,134 @@
   "filename": "",
   "start_time": 1700000000000.0,
   "end_time": 1700000060000.0,
-  "groups": [],
+  "groups": [
+    {
+      "name": "Hardware Sensors",
+      "id": "hw_sensors",
+      "subgroups": [
+        {
+          "name": "Temperature",
+          "description": "Temperatures, one series per channel. Missing or unreadable sensors are absent.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Temperature",
+                "id": "sensor-temperature",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "°C",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (name) (sensor_temperature) / 1000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Power",
+          "description": "Power per native channel, including direct readings and marked derived readings. Derived power can pair sequential voltage and current reads; channels are not summed across rails because rails can overlap.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Power",
+                "id": "sensor-power",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Watts",
+                  "unit_system": "power",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (name) (sensor_power) / 1000000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Voltage",
+          "description": "Bus voltage, one series per channel.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Voltage",
+                "id": "sensor-voltage",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Volts",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (name) (sensor_voltage) / 1000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Current",
+          "description": "Current, one series per channel.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Current",
+                "id": "sensor-current",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Amps",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (name) (sensor_current) / 1000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Fan Speed",
+          "description": "Measured fan speed in revolutions per minute, separate from PWM demand.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Fan Speed",
+                "id": "sensor-fan-speed",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "RPM",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (name) (sensor_fan_speed)",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    }
+  ],
   "sections": [
     {
       "name": "Overview",
