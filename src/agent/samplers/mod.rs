@@ -167,8 +167,8 @@ fn is_module_prefix(prefix: &str, module: &str) -> bool {
 /// of `linux_name`.
 ///
 /// `blockio`, `cpu_frequency`, `cpu_power`, `drivehealth`, `filesystem`,
-/// `memory_meminfo`, `memory_vmstat`, `network_traffic`, `tcp_mib`,
-/// `tcp_retransmit` and `tcp_traffic` also
+/// `hw_sensors`, `memory_meminfo`, `memory_vmstat`, `network_traffic`,
+/// `tcp_mib`, `tcp_retransmit` and `tcp_traffic` also
 /// have macOS samplers, which compile the shared `stats.rs` inside their own
 /// module, so on macOS their metrics attribute to the real sampler. Their
 /// `stats.rs` names the groups' sampler with a `GROUP_SAMPLER` constant: the

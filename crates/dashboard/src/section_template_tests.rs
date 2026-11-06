@@ -382,7 +382,8 @@ fn legacy(bench: &Catalog) -> Catalog {
 /// Network has bytes and packets but no network_drop. TCP has the tcp_mib,
 /// tcp_retransmit and tcp_bytes counters but no tcp_packet_latency.
 /// Filesystem has the space, inode and read-only gauges, and the macOS-only
-/// per-volume use.
+/// per-volume use. Hardware sensors has temperature, power, voltage, current
+/// and fan speed, but no fan PWM or cooling state.
 fn macos() -> Catalog {
     let mut out = Catalog::default();
     for name in [
@@ -486,6 +487,41 @@ fn macos() -> Catalog {
                 labels(&[("direction", "receive")]),
                 labels(&[("direction", "transmit")]),
             ],
+        );
+    }
+    for (name, sensors) in [
+        (
+            "sensor_temperature",
+            &[
+                ("TP1b", "PMU tdie1", "hid"),
+                ("TN0n", "NAND CH0 temp", "hid"),
+            ][..],
+        ),
+        (
+            "sensor_power",
+            &[("PDTR", "DC in", "smc"), ("PP0b", "PMU buck0", "smc")],
+        ),
+        (
+            "sensor_voltage",
+            &[("VD0R", "DC in", "smc"), ("VP0b", "PMU buck0", "smc")],
+        ),
+        (
+            "sensor_current",
+            &[("ID0R", "DC in", "smc"), ("IP0b", "PMU buck0", "smc")],
+        ),
+        (
+            "sensor_fan_speed",
+            &[("F0Ac", "fan 0", "smc"), ("F1Ac", "fan 1", "smc")],
+        ),
+    ] {
+        out.gauges.insert(
+            name.into(),
+            sensors
+                .iter()
+                .map(|(sensor, n, source)| {
+                    labels(&[("sensor", sensor), ("name", n), ("source", source)])
+                })
+                .collect(),
         );
     }
     out

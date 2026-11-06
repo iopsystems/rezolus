@@ -1,0 +1,135 @@
+# IOHIDEventSystem services on usage pages 0xff00 and 0xff08 of an M4 Max
+# MacBook Pro, macOS 26.6.2, captured unprivileged on 2026-11-05.
+# One line per service in the client's order; typeN is the float value of
+# event type N (15 temperature, 25 power) when the service returned one.
+page=0xff00 usage=5 location=1414542178 product="PMU tdie3" type15=56.9252
+page=0xff00 usage=5 location=1414553954 product="PMU tdie10" type15=57.8908
+page=0xff00 usage=5 location=1414541668 product="PMU tdev1" type15=48.7933
+page=0xff00 usage=5 location=1414543460 product="PMU tdev8" type15=47.5867
+page=0xff00 usage=5 location=0 product=""
+page=0xff00 usage=5 location=1413951560 product="gas gauge battery" type15=33.0000
+page=0xff00 usage=5 location=1414541924 product="PMU tdev2" type15=51.5887
+page=0xff00 usage=5 location=1414541402 product="PMU tcal" type15=51.8500
+page=0xff00 usage=5 location=1414542436 product="PMU tdev4" type15=39.1216
+page=0xff00 usage=5 location=1414543458 product="PMU tdie8" type15=58.3199
+page=0xff00 usage=5 location=1414542434 product="PMU tdie4" type15=57.3544
+page=0xff00 usage=5 location=1413952066 product="gas gauge battery" type15=33.8000
+page=0xff00 usage=5 location=1414542948 product="PMU tdev6" type15=52.0565
+page=0xff00 usage=4 location=5 product=""
+page=0xff00 usage=5 location=1413951554 product="gas gauge battery" type15=33.8000
+page=0xff00 usage=11 location=0 product=""
+page=0xff00 usage=5 location=1414541924 product="PMU tdev2" type15=51.4677
+page=0xff00 usage=5 location=1414543458 product="PMU tdie8" type15=57.6762
+page=0xff00 usage=5 location=1414541402 product="PMU tcal" type15=51.8500
+page=0xff00 usage=5 location=1413951574 product="gas gauge battery" type15=33.8000
+page=0xff00 usage=5 location=1414543204 product="PMU tdev7" type15=57.7885
+page=0xff00 usage=5 location=1414541666 product="PMU tdie1" type15=56.8179
+page=0xff00 usage=5 location=1414543202 product="PMU tdie7" type15=57.4616
+page=0xff00 usage=5 location=1414542948 product="PMU tdev6" type15=52.1129
+page=0xff00 usage=5 location=1414541666 product="PMU tdie1" type15=57.5689
+page=0xff00 usage=5 location=1414543714 product="PMU tdie9" type15=57.4616
+page=0xff00 usage=9 location=0 product=""
+page=0xff00 usage=5 location=1414542946 product="PMU tdie6" type15=58.3199
+page=0xff00 usage=5 location=1413951555 product="gas gauge battery" type15=33.0000
+page=0xff00 usage=255 location=0 product=""
+page=0xff00 usage=5 location=1414542690 product="PMU tdie5" type15=57.0325
+page=0xff00 usage=3 location=0 product=""
+page=0xff00 usage=5 location=1414541922 product="PMU tdie2" type15=57.2471
+page=0xff00 usage=5 location=1414542436 product="PMU tdev4" type15=39.1577
+page=0xff00 usage=5 location=1414542946 product="PMU tdie6" type15=58.7491
+page=0xff00 usage=5 location=1414553954 product="PMU tdie10" type15=57.5689
+page=0xff00 usage=5 location=1414543202 product="PMU tdie7" type15=57.6762
+page=0xff00 usage=5 location=1414542690 product="PMU tdie5" type15=56.3888
+page=0xff00 usage=5 location=1414541922 product="PMU tdie2" type15=57.3544
+page=0xff00 usage=5 location=1414410350 product="NAND CH0 temp" type15=37.0000
+page=0xff00 usage=5 location=1414542692 product="PMU tdev5" type15=44.8207
+page=0xff00 usage=5 location=1414542692 product="PMU tdev5" type15=44.8207
+page=0xff00 usage=11 location=110 product="Apple Internal Keyboard / Trackpad"
+page=0xff00 usage=5 location=1414543460 product="PMU tdev8" type15=47.5933
+page=0xff00 usage=23 location= product=""
+page=0xff00 usage=5 location=1414543714 product="PMU tdie9" type15=56.4961
+page=0xff00 usage=5 location=1414542434 product="PMU tdie4" type15=57.4616
+page=0xff00 usage=5 location=1414542180 product="PMU tdev3" type15=38.2523
+page=0xff00 usage=5 location=1414543204 product="PMU tdev7" type15=57.9808
+page=0xff00 usage=5 location=1413951810 product="gas gauge battery" type15=33.5000
+page=0xff00 usage=5 location=1414542180 product="PMU tdev3" type15=38.3063
+page=0xff00 usage=5 location=1414542178 product="PMU tdie3" type15=57.1398
+page=0xff00 usage=5 location=1414541668 product="PMU tdev1" type15=48.9400
+page=0xff08 usage=2 location=1229992034 product="PMU ibuck0" type25=16289.5410
+page=0xff08 usage=2 location=1230004588 product="PMU ildo10" type25=0.0000
+page=0xff08 usage=3 location=1448096364 product="PMU vldo2" type25=16358.2832
+page=0xff08 usage=2 location=1229992300 product="PMU ildo1" type25=15622.8125
+page=0xff08 usage=3 location=1448096354 product="PMU vbuck2" type25=16257.6543
+page=0xff08 usage=2 location=1229993058 product="PMU ibuck4" type25=15432.7500
+page=0xff08 usage=3 location=1448108396 product="PMU vldo10" type25=1.2032
+page=0xff08 usage=3 location=1448096098 product="PMU vbuck1" type25=16207.8633
+page=0xff08 usage=3 location=1448097122 product="PMU vbuck5" type25=16228.4219
+page=0xff08 usage=3 location=1448098156 product="PMU vldo9" type25=1.8076
+page=0xff08 usage=2 location=1229992300 product="PMU ildo1" type25=15622.8125
+page=0xff08 usage=3 location=1448096866 product="PMU vbuck4" type25=16260.1895
+page=0xff08 usage=3 location=1448098146 product="PMU vbuck9" type25=16241.7422
+page=0xff08 usage=3 location=1448097634 product="PMU vbuck7" type25=16272.1602
+page=0xff08 usage=3 location=1448098156 product="PMU vldo9" type25=1.8076
+page=0xff08 usage=2 location=1229994082 product="PMU ibuck8" type25=16073.9922
+page=0xff08 usage=3 location=1448096876 product="PMU vldo4" type25=16467.2686
+page=0xff08 usage=2 location=1229993324 product="PMU ildo5" type25=15750.3438
+page=0xff08 usage=3 location=1448095861 product="PMU VP0u" type25=3.7663
+page=0xff08 usage=2 location=1229992290 product="PMU ibuck1" type25=15172.0000
+page=0xff08 usage=2 location=1229992812 product="PMU ildo3" type25=14336.0000
+page=0xff08 usage=3 location=1448095842 product="PMU vbuck0" type25=16250.2031
+page=0xff08 usage=2 location=1229993058 product="PMU ibuck4" type25=15432.7500
+page=0xff08 usage=2 location=1230006636 product="PMU ildo18" type25=0.0060
+page=0xff08 usage=3 location=1448096620 product="PMU vldo3" type25=16358.4395
+page=0xff08 usage=3 location=1448096108 product="PMU vldo1" type25=16467.1123
+page=0xff08 usage=2 location=1229992556 product="PMU ildo2" type25=15460.0000
+page=0xff08 usage=3 location=1448096610 product="PMU vbuck3" type25=16358.7520
+page=0xff08 usage=3 location=1448110444 product="PMU vldo18" type25=1.4963
+page=0xff08 usage=3 location=1448095852 product="PMU vldo0" type25=0.0001
+page=0xff08 usage=2 location=1229993314 product="PMU ibuck5" type25=16168.4180
+page=0xff08 usage=3 location=1448096620 product="PMU vldo3" type25=16358.4395
+page=0xff08 usage=2 location=1229993068 product="PMU ildo4" type25=14720.0000
+page=0xff08 usage=2 location=1229993314 product="PMU ibuck5" type25=16168.4180
+page=0xff08 usage=3 location=1448108396 product="PMU vldo10" type25=1.2032
+page=0xff08 usage=2 location=1229992556 product="PMU ildo2" type25=15460.0000
+page=0xff08 usage=2 location=1229992802 product="PMU ibuck3" type25=16113.0469
+page=0xff08 usage=3 location=1448096866 product="PMU vbuck4" type25=16260.1895
+page=0xff08 usage=2 location=1229994082 product="PMU ibuck8" type25=16073.9922
+page=0xff08 usage=3 location=1448095852 product="PMU vldo0" type25=0.0004
+page=0xff08 usage=2 location=1229994338 product="PMU ibuck9" type25=0.0000
+page=0xff08 usage=3 location=1448096610 product="PMU vbuck3" type25=16358.7520
+page=0xff08 usage=2 location=1229993826 product="PMU ibuck7" type25=0.0000
+page=0xff08 usage=2 location=1229992044 product="PMU ildo0" type25=0.0005
+page=0xff08 usage=2 location=1229992546 product="PMU ibuck2" type25=16213.7578
+page=0xff08 usage=3 location=1448096364 product="PMU vldo2" type25=16358.2832
+page=0xff08 usage=3 location=1448097122 product="PMU vbuck5" type25=16228.4219
+page=0xff08 usage=2 location=1229994338 product="PMU ibuck9" type25=0.0000
+page=0xff08 usage=3 location=1448096876 product="PMU vldo4" type25=16467.2686
+page=0xff08 usage=2 location=1229992812 product="PMU ildo3" type25=14336.0000
+page=0xff08 usage=2 location=1229994348 product="PMU ildo9" type25=0.0000
+page=0xff08 usage=3 location=1448097634 product="PMU vbuck7" type25=16272.1602
+page=0xff08 usage=2 location=1229993570 product="PMU ibuck6" type25=15398.7500
+page=0xff08 usage=2 location=1230006636 product="PMU ildo18" type25=0.0073
+page=0xff08 usage=3 location=1448096354 product="PMU vbuck2" type25=16257.6543
+page=0xff08 usage=3 location=1448097890 product="PMU vbuck8" type25=16284.6660
+page=0xff08 usage=2 location=1229993570 product="PMU ibuck6" type25=15398.7500
+page=0xff08 usage=3 location=1448097378 product="PMU vbuck6" type25=16140.8359
+page=0xff08 usage=2 location=1229993324 product="PMU ildo5" type25=15750.3438
+page=0xff08 usage=3 location=1448110444 product="PMU vldo18" type25=1.4975
+page=0xff08 usage=3 location=1448095842 product="PMU vbuck0" type25=16250.2031
+page=0xff08 usage=2 location=1230004588 product="PMU ildo10" type25=0.0000
+page=0xff08 usage=3 location=1448096108 product="PMU vldo1" type25=16467.1123
+page=0xff08 usage=2 location=1229994348 product="PMU ildo9" type25=0.0000
+page=0xff08 usage=2 location=1229992044 product="PMU ildo0" type25=0.0005
+page=0xff08 usage=3 location=1448098146 product="PMU vbuck9" type25=16241.7422
+page=0xff08 usage=3 location=1448097132 product="PMU vldo5" type25=16204.9531
+page=0xff08 usage=3 location=1448097378 product="PMU vbuck6" type25=16140.8359
+page=0xff08 usage=2 location=1229992802 product="PMU ibuck3" type25=16113.0469
+page=0xff08 usage=3 location=1448096098 product="PMU vbuck1" type25=16207.8633
+page=0xff08 usage=2 location=1229992034 product="PMU ibuck0" type25=16289.5410
+page=0xff08 usage=3 location=1448097132 product="PMU vldo5" type25=16204.9531
+page=0xff08 usage=2 location=1229993068 product="PMU ildo4" type25=14720.0000
+page=0xff08 usage=2 location=1229992546 product="PMU ibuck2" type25=16213.7578
+page=0xff08 usage=3 location=1448097890 product="PMU vbuck8" type25=16284.6660
+page=0xff08 usage=2 location=1229992290 product="PMU ibuck1" type25=15172.0000
+page=0xff08 usage=2 location=1229993826 product="PMU ibuck7" type25=0.0000
+page=0xff08 usage=3 location=1448095861 product="PMU VP0u" type25=3.7724
