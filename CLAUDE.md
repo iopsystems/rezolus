@@ -256,9 +256,7 @@ target/release/rezolus mcp query multi.dendro "sum(irate(cpu_cycles[1m]))" --rec
 #   writer, whose report line the reply carries. A .dendro is edited in place, or copied to
 #   "output" first; a legacy input is refused with the upgrade command. Each write first drops the server's cached readers of its input and output, since
 #   dendro will not open for writing an archive a reader holds.
-#   export_query (src/mcp/export.rs) writes a range query as long-form CSV/parquet (series,
-#   timestamp, value, lo, hi) under `rezolus mcp --export-dir DIR` only, bare filename, never
-#   overwrites; viewer_link (src/mcp/link.rs) formats the url_state.js wire form (fragment + query;
+#   viewer_link (src/mcp/link.rs) formats the url_state.js wire form (fragment + query;
 #   full URL with `--viewer-url` or a viewer_url argument), pinned to the JS parser by
 #   tests/viewer_link_parity.test.mjs.
 ```

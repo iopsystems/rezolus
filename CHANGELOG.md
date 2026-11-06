@@ -423,7 +423,15 @@
   - `convert` turns a raw msgpack recording into a `.dendro`.
   - The MCP server's `add_event`, `remove_events` and `run_checks`
     (`annotate=true`) take an `output` path, to write the edited copy there
-    as `-o` does. `export_query` is unchanged.
+    as `-o` does.
+- **The MCP `export_query` tool is removed, with its `--export-dir` flag on
+  `rezolus mcp` and `rezolus mcp install`.** It wrote a range query as a CSV
+  or parquet file, and 6.x writes `.dendro` files only. Neither was in a 5.x
+  release. The `query` tool returns a range query over the whole recording,
+  at a fixed 1-second step, as Prometheus-format JSON, with the uncertainty
+  band on `rate()` and `irate()` values. `--export-dir` is now refused as an
+  unknown argument, so a client config that still passes it stops the server
+  at startup; run `rezolus mcp install` again to rewrite it.
 - **Save as Report writes a `.dendro`**, in the server viewer and the static
   site. A two-file comparison is saved with `arm=baseline`/`arm=experiment`,
   so it reopens as the comparison.
@@ -741,8 +749,8 @@
   - Where two such sources sample at the same spacing, the one whose
     first row is earlier answers; it was the one with the lowest uuid.
   - A query whose sources hold different values for one series at one
-    time returns a `conflict` notice. The MCP `query` and `export_query` tools
-    return it in `notices`, `rezolus mcp query` prints it after the table,
+    time returns a `conflict` notice. The MCP `query` tool returns it in
+    `notices`, `rezolus mcp query` prints it after the table,
     and a chart's binary display response carries it in its header, which
     the viewer does not show yet.
   - Two recordings whose labels differ only in an internal label other

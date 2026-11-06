@@ -76,10 +76,6 @@ pub(crate) fn server_args(server: &super::server::ServerOptions) -> Vec<String> 
     if server.allow_mutating {
         args.push("--allow-mutating".to_string());
     }
-    if let Some(dir) = &server.export_dir {
-        args.push("--export-dir".to_string());
-        args.push(dir.display().to_string());
-    }
     if let Some(url) = &server.viewer_url {
         args.push("--viewer-url".to_string());
         args.push(url.clone());
@@ -480,23 +476,15 @@ mod tests {
     }
 
     #[test]
-    fn server_args_carry_the_tiers_and_directories_in_a_fixed_order() {
+    fn server_args_carry_the_server_flags_in_a_fixed_order() {
         assert_eq!(server_args(&Default::default()), vec!["mcp"]);
         let s = super::super::server::ServerOptions {
             allow_mutating: true,
-            export_dir: Some(PathBuf::from("/tmp/x")),
             viewer_url: Some("http://h:1".into()),
         };
         assert_eq!(
             server_args(&s),
-            vec![
-                "mcp",
-                "--allow-mutating",
-                "--export-dir",
-                "/tmp/x",
-                "--viewer-url",
-                "http://h:1"
-            ]
+            vec!["mcp", "--allow-mutating", "--viewer-url", "http://h:1"]
         );
     }
 
@@ -679,7 +667,6 @@ mod tests {
             "analyze_correlation",
             "add_event",
             "run_checks",
-            "export_query",
             "viewer_link",
             "remove_events",
         ] {
