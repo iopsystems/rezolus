@@ -626,7 +626,8 @@ bar is then rewritten to include them (a remembered compare anchor, for
 one), so a copied link carries the effective view. Granularity, pinned
 percentiles and the heatmap toggle are not carried. A value the recording
 cannot satisfy (a node it does not have, a range outside it, `from`/`to` in
-live mode, a cgroup it does not have on the cgroups section) is dropped
+live mode, a cgroup it does not have on the cgroups section, or in compare
+mode a cgroup no capture has) is dropped
 with a warning in the browser console and the link is rewritten without
 it. An expanded cgroup chart does not check its `cgroup` keys: a cgroup the
 recording lacks draws nothing. A granularity change

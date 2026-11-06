@@ -44,6 +44,19 @@ export const extractCgroupNames = (result) => {
 };
 
 /**
+ * One PromQL result holding the series of every result in `results` that
+ * succeeded, for discovery across the captures of a comparison. A capture
+ * whose query failed (null, or not `success`) adds nothing.
+ */
+export const mergeResults = (results) => ({
+    status: 'success',
+    data: {
+        resultType: 'matrix',
+        result: results.flatMap((r) => (r?.status === 'success' ? r.data?.result || [] : [])),
+    },
+});
+
+/**
  * The cgroup names in a recording. `executeQuery(query)` resolves to a
  * PromQL result; a query that throws is skipped, as a metric the recording
  * lacks may.

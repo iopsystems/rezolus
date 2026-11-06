@@ -27,7 +27,7 @@ import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { MetricBrowserView } from './features/metric_browser.js';
 import { createSourceRoutes } from './features/source_routes.js';
-import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
+import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView, queryEveryCapture } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import { contentFor, CLIENT_SECTIONS } from './ui/client_views.js';
 import {
@@ -227,6 +227,7 @@ const initComponents = () => {
         experimentQueryRange,
         baselineAlias,
         experimentAlias,
+        activeCgroupPattern,
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -1171,6 +1172,15 @@ const SectionContent = {
             : `${sectionName} (${withData})`;
 
         if (baseRoute(attrs.section.route) === '/cgroups') {
+            const withNode = (query) => {
+                const node = getSelectedNode();
+                return node ? injectLabel(query, 'node', node) : query;
+            };
+            // The cgroup discovery's own queries read the section's
+            // recording's sources, as its charts do (`metadata.scope`).
+            const scopedQuery = (query) => executePromQLRangeQuery(
+                query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
+            const baselineQuery = (query) => scopedQuery(withNode(query));
             return renderCgroupSection({
                 attrs,
                 titleText,
@@ -1178,15 +1188,15 @@ const SectionContent = {
                 chartsState,
                 Chart: ChartView,
                 CgroupSelector,
-                executePromQLRangeQuery: (query) => {
-                    const node = getSelectedNode();
-                    if (node) query = injectLabel(query, 'node', node);
-                    // The cgroup discovery's own queries read the section's
-                    // recording's sources, as its charts do
-                    // (`metadata.scope`).
-                    return executePromQLRangeQuery(
-                        query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
-                },
+                executePromQLRangeQuery: baselineQuery,
+                // A comparison lists the cgroups of every capture.
+                // The selected node filters every capture, as it does the
+                // compare charts (`buildEffectiveQuery`).
+                discoverQuery: sectionCompare
+                    ? (query) => queryEveryCapture(withNode(query), scopedQuery)
+                    : baselineQuery,
+                compare: sectionCompare,
+                Group,
                 applyResultToPlot,
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },

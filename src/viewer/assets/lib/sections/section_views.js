@@ -308,10 +308,13 @@ const renderCgroupSection = ({
     Chart,
     CgroupSelector,
     executePromQLRangeQuery,
+    discoverQuery = executePromQLRangeQuery,
     applyResultToPlot,
     substituteCgroupPattern,
     setActiveCgroupPattern,
     globalColorMapper,
+    compare = false,
+    Group = null,
 }) => {
     // `/cgroups`, or `/cgroups@<key>` for another recording of a combined
     // archive: the expand link and the selection name this section's route.
@@ -357,12 +360,26 @@ const renderCgroupSection = ({
         m(CgroupSelector, {
             groups: attrs.groups,
             executeQuery: executePromQLRangeQuery,
+            discoverQuery,
             applyResultToPlot: applyResultToPlot,
             substitutePattern: substituteCgroupPattern,
             setActiveCgroupPattern: (p) => { setActiveCgroupPattern(p); },
             sectionRoute,
         }),
-        m('div.cgroup-pairs',
+        // In compare mode each pair is a Group: its charts draw every
+        // capture, and the individual chart one overlay per selected
+        // cgroup or group.
+        compare ? pairs.map((pair) => m(Group, {
+            key: pair.left?.opts?.title || pair.right?.opts?.title || '',
+            name: pair.left?.opts?.title || pair.right?.opts?.title || '',
+            subgroups: [
+                { name: 'Aggregate', plots: pair.left ? [pair.left] : [] },
+                { name: 'Individual', plots: pair.right ? [pair.right] : [] },
+            ],
+            sectionRoute,
+            sectionName,
+            interval,
+        })) : m('div.cgroup-pairs',
             pairs.map((pair) => {
                 const title = pair.left?.opts?.title || pair.right?.opts?.title || '';
                 const description = pair.left?.opts?.description || pair.right?.opts?.description;
