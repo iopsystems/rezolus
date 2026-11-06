@@ -222,16 +222,26 @@ const captureInterval = async (captureId, range) => {
 // baseline's transforms, and the section's cgroup selection resolved as the
 // baseline's is (`buildEffectiveQueries`), whether or not the cgroup selector
 // has written the selection into the plot. Null when the plot needs a cgroup
-// selection and none is active.
-export const experimentQuery = (spec, { sectionRoute = null, activeCgroupPattern = null, intervalSec = null } = {}) => {
+// selection and none is active. `intervalSec` and `stepOverride` are
+// buildEffectiveQuery's.
+export const experimentQuery = (spec, {
+    sectionRoute = null, activeCgroupPattern = null, intervalSec = null, stepOverride,
+} = {}) => {
     const promql = spec.promql_query_experiment || spec.promql_query;
     if (!promql) return null;
     const queries = buildEffectiveQueries(
         { ...spec, promql_query: promql },
-        { sectionRoute, crossCapture: true, activeCgroupPattern, intervalSec },
+        { sectionRoute, crossCapture: true, activeCgroupPattern, intervalSec, stepOverride },
     );
     return queries?.[0]?.query ?? null;
 };
+
+// What a compare chart's experiment fetch is for: its query with no step
+// override, so the key does not depend on the step (the view checks the step
+// on its own) or on the baseline's metadata, which a refresh of a followed
+// archive clears while it fetches it again.
+const experimentQueryKey = ({ spec, sectionRoute = null, activeCgroupPattern = null }) =>
+    experimentQuery(spec, { sectionRoute, activeCgroupPattern, stepOverride: null });
 
 // Why an individual cgroup chart has no experiment query: nothing is selected.
 const NO_CGROUPS_SELECTED = 'no cgroups selected';
@@ -247,7 +257,7 @@ const fetchExperimentResult = (vnode) => {
     }
     // The query this fetch is for, so the view can fetch again when it
     // changes (a cgroup selection changes it without remounting the chart).
-    vnode.state._fetchedQuery = experimentQuery(spec, { sectionRoute, activeCgroupPattern });
+    vnode.state._fetchedQuery = experimentQueryKey(vnode.attrs);
     if (vnode.state._fetchedQuery == null) {
         vnode.state.error = NO_CGROUPS_SELECTED;
         return;
@@ -603,12 +613,14 @@ export const CompareChartWrapper = {
     },
 
     view(vnode) {
-        // Re-fetch if the user changed the granularity selector since the
-        // last fetch. CompareChartWrapper's oninit only runs once per
-        // component lifetime; without this check the cached result from
-        // the previous step would render forever.
+        // Fetch again when what was fetched no longer matches the view: the
+        // experiment's query (a cgroup, node or GPU selection, or a refresh
+        // that replaced the plot), the step (the granularity selector), or
+        // the experiment's range (a followed archive grew). oninit runs once
+        // per component, so without these checks the first result would
+        // stay on screen.
         if (!vnode.state._fetchInFlight && vnode.state._fetchedQuery !== undefined
-            && experimentQuery(vnode.attrs.spec, vnode.attrs) !== vnode.state._fetchedQuery) {
+            && experimentQueryKey(vnode.attrs) !== vnode.state._fetchedQuery) {
             // The query changed under this component (a cgroup selection,
             // or a refresh that replaced the plot): what was fetched, or the
             // error it gave, belongs to the old query.
