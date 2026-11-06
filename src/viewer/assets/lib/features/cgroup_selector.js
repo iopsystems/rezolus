@@ -287,9 +287,9 @@ export const CgroupSelector = {
         vnode.state.updateGeneration = generation;
 
         // Collect plots whose original query contains the cgroup placeholder.
-        // An individual plot runs a query per selected group as well as one
-        // for the individually selected names (cgroupQueryVariants); a query
-        // left with its placeholder has nothing selected and is not run.
+        // An individual plot runs one query for the selected names and
+        // groups (cgroupQueryVariants); a query left with its placeholder has
+        // nothing selected and is not run.
         const plotsToUpdate = [];
         for (const [gi, group] of (vnode.attrs.groups || []).entries()) {
             for (const [pi, plot] of collectGroupPlots(group).entries()) {
@@ -323,9 +323,9 @@ export const CgroupSelector = {
             const batch = plotsToUpdate.slice(i, i + BATCH_SIZE);
             await Promise.all(batch.map(async ({ plot, query, queries }) => {
                 plot.promql_query = query;
-                // Every query the plot draws, for a pinned or expanded copy
-                // of it; null when its one query is promql_query.
-                plot.cgroup_queries = queries.length > 1 || queries[0]?.label ? queries : null;
+                // The plot's one query is promql_query. `cgroup_queries` is
+                // read from charts saved with a query per cgroup group.
+                plot.cgroup_queries = null;
                 try {
                     if (queries.length === 0) {
                         plot.data = [];

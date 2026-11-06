@@ -1,0 +1,48 @@
+{
+  "names": [
+    "/system.slice/a.service/x",
+    "/system.slice/a.service/y",
+    "/system.slice/aXservice/x",
+    "/machine.slice/vm\\x2d1.scope/vcpu0",
+    "/machine.slice/vm\\x2d1.scope/vcpu1",
+    ".../vm\\x2d1.scope/libvirt/vcpu2",
+    "/machine.slice/vm-1.scope/vcpu0",
+    "/system.slice/ssh.service",
+    "/system.slice/other.service"
+  ],
+  "unlisted": [
+    "/system.slice/a.service/z",
+    ".../vm\\x2d1.scope/libvirt/vcpu3"
+  ],
+  "selected": [
+    "/system.slice/ssh.service",
+    "/system.slice/a.service/",
+    "/machine.slice/vm\\x2d1.scope/"
+  ],
+  "series": {
+    "/system.slice/ssh.service": [
+      "/system.slice/ssh.service"
+    ],
+    "/system.slice/a.service/": [
+      "/system.slice/a.service/x",
+      "/system.slice/a.service/y",
+      "/system.slice/a.service/z"
+    ],
+    "/machine.slice/vm\\x2d1.scope/": [
+      "/machine.slice/vm\\x2d1.scope/vcpu0",
+      "/machine.slice/vm\\x2d1.scope/vcpu1",
+      ".../vm\\x2d1.scope/libvirt/vcpu2",
+      ".../vm\\x2d1.scope/libvirt/vcpu3"
+    ]
+  },
+  "queries": [
+    {
+      "template": "sum by (name) (irate(cgroup_cpu_usage{name=~\"__SELECTED_CGROUPS__\"}[5m]))",
+      "query": "sum by (name) (label_replace(label_replace(label_replace(irate(cgroup_cpu_usage{name=~\"(/system\\\\.slice/ssh\\\\.service|(/machine\\\\.slice/vm\\\\\\\\x2d1\\\\.scope(?:/.*)?|\\\\.\\\\.\\\\./vm\\\\\\\\x2d1\\\\.scope(?:/.*)?)|/system\\\\.slice/a\\\\.service(?:/.*)?)\"}[5m]), \"cgroup_member\", \"$1\", \"name\", \"(.*)\"), \"name\", \"/machine.slice/vm\\\\x2d1.scope/\", \"name\", \"(/machine\\\\.slice/vm\\\\\\\\x2d1\\\\.scope(?:/.*)?|\\\\.\\\\.\\\\./vm\\\\\\\\x2d1\\\\.scope(?:/.*)?)\"), \"name\", \"/system.slice/a.service/\", \"name\", \"/system\\\\.slice/a\\\\.service(?:/.*)?\"))"
+    },
+    {
+      "template": "sum by (name) (irate(cgroup_cpu_instructions{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{name=~\"__SELECTED_CGROUPS__\"}[5m]))",
+      "query": "sum by (name) (label_replace(label_replace(label_replace(irate(cgroup_cpu_instructions{name=~\"(/system\\\\.slice/ssh\\\\.service|(/machine\\\\.slice/vm\\\\\\\\x2d1\\\\.scope(?:/.*)?|\\\\.\\\\.\\\\./vm\\\\\\\\x2d1\\\\.scope(?:/.*)?)|/system\\\\.slice/a\\\\.service(?:/.*)?)\"}[5m]), \"cgroup_member\", \"$1\", \"name\", \"(.*)\"), \"name\", \"/machine.slice/vm\\\\x2d1.scope/\", \"name\", \"(/machine\\\\.slice/vm\\\\\\\\x2d1\\\\.scope(?:/.*)?|\\\\.\\\\.\\\\./vm\\\\\\\\x2d1\\\\.scope(?:/.*)?)\"), \"name\", \"/system.slice/a.service/\", \"name\", \"/system\\\\.slice/a\\\\.service(?:/.*)?\")) / sum by (name) (label_replace(label_replace(label_replace(irate(cgroup_cpu_cycles{name=~\"(/system\\\\.slice/ssh\\\\.service|(/machine\\\\.slice/vm\\\\\\\\x2d1\\\\.scope(?:/.*)?|\\\\.\\\\.\\\\./vm\\\\\\\\x2d1\\\\.scope(?:/.*)?)|/system\\\\.slice/a\\\\.service(?:/.*)?)\"}[5m]), \"cgroup_member\", \"$1\", \"name\", \"(.*)\"), \"name\", \"/machine.slice/vm\\\\x2d1.scope/\", \"name\", \"(/machine\\\\.slice/vm\\\\\\\\x2d1\\\\.scope(?:/.*)?|\\\\.\\\\.\\\\./vm\\\\\\\\x2d1\\\\.scope(?:/.*)?)\"), \"name\", \"/system.slice/a.service/\", \"name\", \"/system\\\\.slice/a\\\\.service(?:/.*)?\"))"
+    }
+  ]
+}

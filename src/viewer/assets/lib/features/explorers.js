@@ -395,8 +395,8 @@ export const SingleChartView = {
         };
 
         // The queries run with the section's cgroup, node, GPU and instance
-        // selections applied, as the section's charts do: one per selected
-        // cgroup group as well, until the query is edited. A histogram chart's
+        // selections applied, as the section's charts do, cgroup groups
+        // included, until the query is edited. A histogram chart's
         // query runs as typed, with the node selection. `{ query, label }`
         // each, or null when the chart needs a cgroup selection.
         const effectiveQueries = () => {
