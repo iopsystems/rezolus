@@ -125,6 +125,7 @@ per-process counterparts, for `cpu_usage` only, off by default
 - [Scheduler](#scheduler)
   - [scheduler](#scheduler-1)
 - [Hardware Sensors](#hardware-sensors)
+  - [thermal_pressure](#thermal_pressure)
 - [Syscall](#syscall)
   - [syscall](#syscall-1)
 - [TCP](#tcp)
@@ -1910,6 +1911,50 @@ back-to-back sweeps of the 78 sensors, `system` and `battery` included, took
 33.0 ms at the median and 35.8 ms at most. Each SMC read takes about 165 µs
 and each HID temperature read about 1 ms, nearly all of it waiting rather
 than on CPU.
+
+### thermal_pressure
+
+macOS only. `thermal_pressure` is the thermal pressure level the operating
+system reports to applications, from the `notify(3)` state of
+`com.apple.system.thermalpressurelevel`. It needs no root. Each refresh calls
+`notify_check`, a shared-memory check (16 to 50 ns on an M4 Max, varying with
+the machine's load), and calls `notify_get_state` (10 to 34 µs) only when
+`notify_check` reports a post, at startup, or after a failed check or read.
+Over 1,200 one-second reads on an M4 Max, `notify_check` reported each of the
+level's two rises and two falls. The levels are those of
+`OSThermalPressureLevel` in `<libkern/OSThermalNotification.h>`:
+
+| Value | Level |
+| --- | --- |
+| 0 | nominal |
+| 1 | moderate |
+| 2 | heavy |
+| 3 | trapping |
+| 4 | sleeping |
+
+The level is the operating system's classification, not a measure of
+throttling. Use `cpu_frequency` to see whether the CPU ran slower. On an
+M4 Max with every CPU busy and a compute kernel on the GPU, read once a
+second:
+
+- Starting from cold, the level rose from 0 to 1 after 115 seconds of load
+  in one run and 132 seconds in another, and to 2 two seconds later. In two
+  later runs, started while the Mac was still warm, it reached 1 after 38 and
+  51 seconds and 2 about 35 seconds after that. In the second run the fans
+  averaged about 5,550 RPM when the level reached 2.
+- In the second run, at level 0 under load, the performance cores'
+  10-second medians were 4.47 to 4.51 GHz, except from 40 to 70 seconds into
+  the load, when they were 3.50, 3.67 and 4.27 GHz. For the first minute at
+  level 2 they were between 3.85 and 4.51 GHz, and after that between 2.75
+  and 3.2 GHz. The efficiency cores ran at 2.59 GHz throughout.
+- The level went back to 1 while the load continued (after 249 seconds of
+  load in the first run, 242 in the second), and in the second run to 0 after
+  301 seconds. In the last 20 seconds of that run's load, at level 0, the
+  performance cores' 10-second medians were 2.64 and 3.26 GHz.
+
+`NSProcessInfo.thermalState` read 1 (fair) at both level 1 and level 2. The
+sampler has not been run on an Intel Mac or on Apple silicon other than the
+M4 Max, and levels 3 and 4 have not been seen.
 
 ## Syscall
 

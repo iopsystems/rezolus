@@ -460,7 +460,7 @@ When working on code under `src/agent/samplers/` or `src/agent/bpf/`, read `docs
 ## Platform Support
 
 - **Linux**: Full support including eBPF (kernel 5.8+)
-- **macOS**: Limited (CPU usage, CPU frequency and energy on Apple silicon, memory, network traffic, TCP counters, GPU, block IO counters, filesystem space, NVMe drive health, and hardware sensors (temperatures, fans, power rails); no eBPF)
+- **macOS**: Limited (CPU usage, CPU frequency and energy on Apple silicon, memory, network traffic, TCP counters, GPU, block IO counters, filesystem space, NVMe drive health, hardware sensors (temperatures, fans, power rails), and thermal pressure; no eBPF)
 - **Architectures**: x86_64 and ARM64
 
 ## Git Conventions

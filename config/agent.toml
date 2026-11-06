@@ -426,6 +426,13 @@ enabled = false
 # enabled = false
 # interval = "5s"
 
+# macOS only: the thermal pressure level the operating system reports to
+# applications (0 nominal to 4 sleeping). Each refresh checks shared memory
+# for a posted change and reads the level only after one, at startup, or
+# after a failed check or read.
+[samplers.thermal_pressure]
+# enabled = false
+
 # BPF sampler that instruments syscall enter and exit to gather syscall counts
 # and syscall latency distributions, one program on each. Replaces
 # `syscall_counts` and `syscall_latency`; a config that still names them is

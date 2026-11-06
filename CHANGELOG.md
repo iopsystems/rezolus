@@ -30,6 +30,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   `battery`). Neither source needs root. On an M4 Max a sweep of its 78
   sensors takes about 33 ms, at most once every 5 seconds by default.
 
+- **Thermal pressure on macOS.** The `thermal_pressure` sampler publishes the
+  thermal pressure level macOS reports to applications, 0 (nominal) to 4
+  (sleeping), and the Hardware Sensors section draws it. It needs no root.
+  The level is not a measure of throttling: on an M4 Max under load, the
+  performance cores slowed at level 0 before the level first rose, slowed
+  again a minute after it reached 2, and stayed slow after it returned to 0.
+
 - **The Memory section draws page faults on Linux.** The Reclaim group has a
   Page Faults chart, the rate of `memory_page_faults` (pgfault, every fault),
   beside Major Faults.
