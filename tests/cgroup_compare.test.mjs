@@ -117,6 +117,7 @@ test('discovery lists the cgroups of every capture', async () => {
 
 test('a compare chart fetches again when the selection changes, and only then', async () => {
     // Every request the viewer API makes, by either transport.
+    const saved = { fetch: globalThis.fetch, request: globalThis.m.request };
     let fetches = 0;
     globalThis.fetch = async () => {
         fetches++;
@@ -127,32 +128,89 @@ test('a compare chart fetches again when the selection changes, and only then', 
         return { status: 'success', data: { resultType: 'matrix', result: [] } };
     };
     const settle = () => new Promise((r) => setTimeout(r, 20));
-    const vnode = {
-        attrs: {
-            spec: plot(INDIVIDUAL),
-            activeCgroupPattern: null,
-            experimentQueryRange: { start: 0, end: 60, step: 1, interval: 1 },
-        },
-        state: {},
+    try {
+        const vnode = {
+            attrs: {
+                spec: plot(INDIVIDUAL),
+                activeCgroupPattern: null,
+                experimentQueryRange: { start: 0, end: 60, step: 1, interval: 1 },
+            },
+            state: {},
+        };
+        CompareChartWrapper.oninit(vnode);
+        CompareChartWrapper.view(vnode);
+        await settle();
+        assert.equal(fetches, 0, 'nothing selected, nothing fetched');
+
+        // A selection: the same plot, still the template.
+        vnode.attrs = { ...vnode.attrs, activeCgroupPattern: selection };
+        CompareChartWrapper.view(vnode);
+        assert.equal(vnode.state._fetchInFlight, true, 'the selection starts a fetch');
+        await settle();
+        const after = fetches;
+        assert.ok(after > 0);
+
+        // Redraws, and the selector writing the same selection into the plot,
+        // fetch nothing more.
+        for (let i = 0; i < 5; i++) CompareChartWrapper.view(vnode);
+        vnode.attrs = { ...vnode.attrs, spec: plot(selectorQuery(INDIVIDUAL)) };
+        CompareChartWrapper.view(vnode);
+        await settle();
+        assert.equal(fetches, after);
+    } finally {
+        globalThis.fetch = saved.fetch;
+        globalThis.m.request = saved.request;
+    }
+});
+
+test('a histogram chart does not fetch again while a refresh fetches the metadata again', async () => {
+    const { setStepOverride, processDashboardData } = await import('../src/viewer/assets/lib/data.js');
+    const savedRequest = globalThis.m.request;
+    let fetches = 0;
+    let release = null;
+    globalThis.m.request = async (o) => {
+        if (String(o?.url).startsWith('/api/v1/metadata')) {
+            const meta = { status: 'success', data: { interval: 0.1, minTime: 0, maxTime: 600 } };
+            if (release === 'hold') return new Promise((r) => { release = () => r(meta); });
+            return meta;
+        }
+        fetches++;
+        return { status: 'success', data: { resultType: 'matrix', result: [] } };
     };
-    CompareChartWrapper.oninit(vnode);
-    CompareChartWrapper.view(vnode);
-    await settle();
-    assert.equal(fetches, 0, 'nothing selected, nothing fetched');
-
-    // A selection: the same plot, still the template.
-    vnode.attrs = { ...vnode.attrs, activeCgroupPattern: selection };
-    CompareChartWrapper.view(vnode);
-    assert.equal(vnode.state._fetchInFlight, true, 'the selection starts a fetch');
-    await settle();
-    const after = fetches;
-    assert.ok(after > 0);
-
-    // Redraws, and the selector writing the same selection into the plot,
-    // fetch nothing more.
-    for (let i = 0; i < 5; i++) CompareChartWrapper.view(vnode);
-    vnode.attrs = { ...vnode.attrs, spec: plot(selectorQuery(INDIVIDUAL)) };
-    CompareChartWrapper.view(vnode);
-    await settle();
-    assert.equal(fetches, after);
+    const settle = () => new Promise((r) => setTimeout(r, 20));
+    // A 100ms baseline with a 0.5s override: a histogram query is strided
+    // while the metadata is cached, and not while a refresh of a followed
+    // archive (`freshMetadata`) fetches it again (nativeInterval's 1s).
+    await processDashboardData({ groups: [] }, null, '/', {});
+    setStepOverride(0.5);
+    try {
+        const spec = {
+            promql_query: 'syscall_latency',
+            opts: { id: 'h', title: 'h', type: 'histogram', subtype: 'percentiles', style: 'scatter' },
+            data: [],
+        };
+        const vnode = {
+            attrs: { spec, step: 0.5, experimentQueryRange: { start: 0, end: 600, step: 1, interval: 0.1 } },
+            state: {},
+        };
+        CompareChartWrapper.oninit(vnode);
+        CompareChartWrapper.view(vnode);
+        await settle();
+        const before = fetches;
+        const result = vnode.state.experimentResult;
+        assert.ok(result, 'the first fetch landed');
+        release = 'hold';
+        const refresh = processDashboardData({ groups: [] }, null, '/', { freshMetadata: true });
+        await settle();
+        CompareChartWrapper.view(vnode);
+        assert.equal(vnode.state.experimentResult, result, 'the chart is not blanked');
+        release();
+        await refresh;
+        CompareChartWrapper.view(vnode);
+        await settle();
+        assert.equal(fetches, before, 'a metadata refresh fetches nothing');
+    } finally {
+        setStepOverride(null);
+        globalThis.m.request = savedRequest;
+    }
 });
