@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+Upgrading from 5.x: see `site/docs/upgrade.html`
+(https://rezolus.com/docs/upgrade.html).
+
 ### Security
 
 - The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx
