@@ -849,10 +849,6 @@ Options:
                           the worst a wrong additive call does is add an event. A mutating tool can
                           take another person's events out of a shared recording, so it is off
                           unless the operator starting the server says otherwise. Server mode only.
-      --export-dir <DIR>  Directory the export_query tool may write files into (server mode only)
-                          Without it the tool is listed but refuses every call, naming this flag.
-                          Files land under a bare name the agent chooses (or one derived from the
-                          query), never over an existing file, never outside this directory.
       --viewer-url <URL>  Address of a running `rezolus view`, e.g. http://127.0.0.1:4200 (server mode only)
                           The viewer_link tool then returns a full URL; without it the tool returns the
                           query string and hash fragment for the client to append to a viewer's address.
@@ -882,8 +878,7 @@ A good workflow is describe-metrics (see what's there) → query / detect-anomal
 
 The stdio server also has tools with no CLI form: add_event marks an instant
 or range in the recording, run_checks evaluates its KPI checks (and writes the
-verdicts with annotate=true), export_query writes a range query as CSV or
-parquet under --export-dir, viewer_link builds a link that opens a running
+verdicts with annotate=true), viewer_link builds a link that opens a running
 viewer at a section and time range (a full URL with --viewer-url), and, only
 with --allow-mutating, remove_events takes events out again.
 
@@ -922,12 +917,6 @@ Options:
           the worst a wrong additive call does is add an event. A mutating tool can
           take another person's events out of a shared recording, so it is off
           unless the operator starting the server says otherwise. Server mode only.
-
-      --export-dir <DIR>
-          Directory the export_query tool may write files into (server mode only)
-          Without it the tool is listed but refuses every call, naming this flag.
-          Files land under a bare name the agent chooses (or one derived from the
-          query), never over an existing file, never outside this directory.
 
       --viewer-url <URL>
           Address of a running `rezolus view`, e.g. http://127.0.0.1:4200 (server mode only)
@@ -1309,7 +1298,6 @@ Usage: rezolus mcp install [OPTIONS]
 Options:
       --scope <SCOPE>     Where to register and where the skill goes: user (every project) or project (this directory) [default: user] [possible values: user, project]
       --allow-mutating    Register the server with --allow-mutating (enables remove_events)
-      --export-dir <DIR>  Register the server with --export-dir DIR (enables export_query); must exist
       --viewer-url <URL>  Register the server with --viewer-url URL (viewer_link returns full URLs)
       --no-skill          Register the server only; do not install the skill
       --dry-run           Report what would be done and change nothing
@@ -1339,12 +1327,12 @@ Claude Code resolves a server name local > project > user. When another scope's
 rezolus entry would win over the one written, install says so and names the
 command that removes it.
 
-The server flags given here (--allow-mutating, --export-dir, --viewer-url) are
+The server flags given here (--allow-mutating, --viewer-url) are
 baked into the registered command, so the server the client starts has them.
 
 EXAMPLES:
     rezolus mcp install
-    rezolus mcp install --scope project --export-dir ./exports
+    rezolus mcp install --scope project
     rezolus mcp install --dry-run
 
 Usage: rezolus mcp install [OPTIONS]
@@ -1358,9 +1346,6 @@ Options:
 
       --allow-mutating
           Register the server with --allow-mutating (enables remove_events)
-
-      --export-dir <DIR>
-          Register the server with --export-dir DIR (enables export_query); must exist
 
       --viewer-url <URL>
           Register the server with --viewer-url URL (viewer_link returns full URLs)

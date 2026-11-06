@@ -38,6 +38,11 @@ use super::state::{self, ApiResponse, AppState, CaptureParam};
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
+/// The viewer's assets in the source tree, which developer mode serves and
+/// watches in place of the embedded copy.
+#[cfg(feature = "developer-mode")]
+pub(super) const DEV_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/viewer/assets");
+
 pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
     let app_state = Arc::new(app_state);
 
@@ -94,9 +99,10 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
 
     #[cfg(feature = "developer-mode")]
     let router = {
-        warn!("running in developer mode. Rezolus Viewer must be run from within project folder");
+        warn!("running in developer mode: serving assets from {DEV_ASSETS_DIR}");
+        let assets = Path::new(DEV_ASSETS_DIR);
         router
-            .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
+            .route_service("/", ServeFile::new(assets.join("index.html")))
             .nest_service(
                 "/lib/charts",
                 ServeDir::new(Path::new(metriken_charts::ASSETS_PATH).join("charts")),
@@ -105,8 +111,8 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
                 "/lib/charts.css",
                 ServeFile::new(Path::new(metriken_charts::ASSETS_PATH).join("charts.css")),
             )
-            .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
-            .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
+            .nest_service("/lib", ServeDir::new(assets.join("lib")))
+            .fallback_service(ServeFile::new(assets.join("index.html")))
     };
 
     #[cfg(not(feature = "developer-mode"))]

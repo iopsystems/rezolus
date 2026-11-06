@@ -66,13 +66,6 @@ Rules that hold on every recording:
 - **`run_checks`** evaluates the recording's KPI checks (or a
   ServiceExtension object you pass as `queries`) and returns each verdict
   with its violation windows; `annotate: true` writes them as events.
-- **`export_query`** writes a range query as CSV or parquet (long form:
-  series, timestamp, value, lo, hi) for analysis outside PromQL. It works
-  only when the server was started with `--export-dir`. `filename` is a
-  bare name (no directories) and an existing file is never overwritten;
-  `step` defaults to 1 s; results over a million rows are refused, so raise
-  `step` or aggregate; a heatmap is refused, so export
-  `histogram_quantile(...)` of it.
 - **`viewer_link`** builds a link into a running `rezolus view`: a
   `section` (`cpu`, `memory`, ..., or `service/<name>`), optional
   `chart_id`, `from`/`to`, and the rest of the view state. With

@@ -39,7 +39,7 @@ cargo clippy
 cargo run -p dashboard                  # print to stdout
 cargo run -p dashboard -- output_dir/   # write files to directory
 
-# Developer mode build (serves viewer assets from disk; reload the page by hand)
+# Developer mode build (serves viewer assets from disk; the page reloads when one changes)
 cargo build --features developer-mode
 
 # Build the WASM viewer for the static site (outputs to site/viewer/pkg/,
@@ -54,11 +54,14 @@ crate's `assets/`, in iopsystems/metriken; rezolus has no copy. To change one,
 edit it in a metriken checkout and add an uncommitted
 `[patch.crates-io] metriken-charts = { path = "<metriken>/metriken-charts" }`
 to `Cargo.toml`; the checkout's version must satisfy the workspace's
-`metriken-charts` requirement, or cargo ignores the patch with a warning. The patch also rewrites `Cargo.lock`'s
-metriken-charts entry, and `build.sh` and `tests/support/charts.mjs` read
-`cargo metadata --locked`, so run `cargo build` once after adding it; commit
-neither file. `cargo run --features developer-mode -- view …` then serves
-the edited files from disk; reload the page by hand.
+`metriken-charts` requirement, or cargo ignores the patch with a warning.
+When the checkout's version differs from the one in `Cargo.lock`, `cargo build`
+keeps the locked version and records the patch as `[[patch.unused]]`; run
+`cargo update -p metriken-charts` to switch the lock to the checkout.
+`build.sh` and `tests/support/charts.mjs` read `cargo metadata --locked`, so
+they use whichever version the lock names. Commit neither the `[patch]` nor
+the `Cargo.lock` change. `cargo run --features developer-mode -- view …` then
+serves the edited files from disk and reloads the page when one changes.
 `node --import ./tests/support/charts.mjs --test tests/<file>.test.mjs` tests
 against them; without `--import`, an import of `charts/` fails with
 `ERR_MODULE_NOT_FOUND`. `./crates/viewer/build.sh` copies them into
@@ -256,9 +259,7 @@ target/release/rezolus mcp query multi.dendro "sum(irate(cpu_cycles[1m]))" --rec
 #   writer, whose report line the reply carries. A .dendro is edited in place, or copied to
 #   "output" first; a legacy input is refused with the upgrade command. Each write first drops the server's cached readers of its input and output, since
 #   dendro will not open for writing an archive a reader holds.
-#   export_query (src/mcp/export.rs) writes a range query as long-form CSV/parquet (series,
-#   timestamp, value, lo, hi) under `rezolus mcp --export-dir DIR` only, bare filename, never
-#   overwrites; viewer_link (src/mcp/link.rs) formats the url_state.js wire form (fragment + query;
+#   viewer_link (src/mcp/link.rs) formats the url_state.js wire form (fragment + query;
 #   full URL with `--viewer-url` or a viewer_url argument), pinned to the JS parser by
 #   tests/viewer_link_parity.test.mjs.
 ```
