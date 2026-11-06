@@ -57,10 +57,15 @@ pub(crate) struct Candidate {
 /// System-wide SMC keys, by family and name. Apple does not document these
 /// keys; the meanings are the ones open-source SMC tools use. On an M4 Max on
 /// AC power, `VD0R` × `ID0R` matched `PDTR` within 0.5% in each of seven
-/// reads from 31 to 50 W. `PSTR`, which those tools call system power, is not
-/// read: on AC power each of its values was the previous `PDTR` value.
-const TOTALS: [(&str, Family, &str); 3] = [
+/// reads from 31 to 50 W. With the battery discharging under load, `PSTR`
+/// (about 97 W) read `PDTR` + `PPBR` + 1.2 W at the median, and `PPBR` read
+/// 34.2 W in the second the battery gauge read 36.1 W of discharge. While the
+/// battery charges, `PPBR` reads about 0.4 W outside load steps, and `PDTR` −
+/// `PSTR`, averaged over a minute, is the charge power to within a few watts.
+const TOTALS: [(&str, Family, &str); 5] = [
     ("PDTR", Family::Power, "DC in"),
+    ("PSTR", Family::Power, "system"),
+    ("PPBR", Family::Power, "battery"),
     ("VD0R", Family::Voltage, "DC in"),
     ("ID0R", Family::Current, "DC in"),
 ];
@@ -103,9 +108,9 @@ fn rail_name(product: &str, letter: char) -> String {
 /// name, read from the SMC. A rail's voltage and current keys are the
 /// services' locations (`VP0b`, `IP0b`); its power key replaces the first
 /// letter with `P` (`PP0b`). A location that does not start with `V` (for a
-/// voltage service) or `I` (for a current service), or that is a `TOTALS`
-/// key, is skipped. Each rail is named once, from its voltage service if it
-/// has one, so the three families agree.
+/// voltage service) or `I` (for a current service), or whose key or power key
+/// is a `TOTALS` key, is skipped. Each rail is named once, from its voltage
+/// service if it has one, so the three families agree.
 pub(crate) fn rails(voltage: &[HidService], current: &[HidService]) -> Vec<Candidate> {
     let mut names: Vec<(String, String)> = Vec::new();
     let mut by_rail: HashMap<String, usize> = HashMap::new();
@@ -119,8 +124,10 @@ pub(crate) fn rails(voltage: &[HidService], current: &[HidService]) -> Vec<Candi
             let Some(key) = fourcc_str(s.location) else {
                 continue;
             };
+            let is_total = |k: &str| TOTALS.iter().any(|(t, _, _)| *t == k);
             if !key.starts_with(prefix)
-                || TOTALS.iter().any(|(k, _, _)| *k == key)
+                || is_total(&key)
+                || is_total(&format!("P{}", &key[1..]))
                 || !seen.insert(s.location)
             {
                 continue;
@@ -296,6 +303,7 @@ mod tests {
             service(0, "PMU vbuck0", b"VP0b"),
             service(1, "PMU vtemp", b"TP1b"),
             service(2, "PMU vin", b"VD0R"),
+            service(3, "PMU vsys", b"VSTR"),
         ];
         let current = [service(0, "PMU ibuck0", b"VP0b")];
         let rails = rails(&voltage, &current);
@@ -326,6 +334,17 @@ mod tests {
             ("VP0b", "PMU buck0")
         );
         assert_eq!(names(&candidates, Family::Power)[0], ("PP0b", "PMU buck0"));
+    }
+
+    #[test]
+    fn totals_are_the_charger_input_the_system_and_the_battery() {
+        let totals = totals();
+        assert_eq!(
+            names(&totals, Family::Power),
+            vec![("PDTR", "DC in"), ("PSTR", "system"), ("PPBR", "battery")]
+        );
+        assert_eq!(names(&totals, Family::Voltage), vec![("VD0R", "DC in")]);
+        assert_eq!(names(&totals, Family::Current), vec![("ID0R", "DC in")]);
     }
 
     #[test]
