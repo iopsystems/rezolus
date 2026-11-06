@@ -104,6 +104,14 @@
 
 ### Fixed
 
+- **A developer-mode viewer reloads the page when an asset changes.** The
+  file watcher was dropped as soon as it was set up, so no change reloaded the
+  page. It now watches `src/viewer/assets/` and the metriken-charts assets
+  until the server stops. A developer-mode build serves and watches those
+  paths as absolute paths fixed at compile time, so `rezolus view` no longer
+  has to run from the project folder, and `cargo test --all-features` no
+  longer panics with "failed to watch assets folder".
+
 - **`cpu_frequency` on macOS reads each CPU cluster's own frequency table.**
   The power manager's `perf-domains` property names the `voltage-states`
   table of each cluster; the sampler used `voltage-states5-sram` for every

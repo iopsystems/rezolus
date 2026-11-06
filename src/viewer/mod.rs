@@ -1366,8 +1366,10 @@ fn init_live_mode(
 async fn serve(listener: std::net::TcpListener, state: AppState) {
     let livereload = LiveReloadLayer::new();
 
+    // The watcher stops when it is dropped, so it is held until the server
+    // returns.
     #[cfg(feature = "developer-mode")]
-    {
+    let _watcher = {
         let reloader = livereload.reloader();
         let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
             if let Ok(event) = res {
@@ -1377,13 +1379,16 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
             }
         })
         .expect("failed to initialize watcher");
+        for dir in [
+            Path::new(routes::DEV_ASSETS_DIR),
+            Path::new(metriken_charts::ASSETS_PATH),
+        ] {
+            watcher
+                .watch(dir, notify::RecursiveMode::Recursive)
+                .unwrap_or_else(|e| panic!("failed to watch {}: {e}", dir.display()));
+        }
         watcher
-            .watch(
-                Path::new("src/viewer/assets"),
-                notify::RecursiveMode::Recursive,
-            )
-            .expect("failed to watch assets folder");
-    }
+    };
 
     let app: Router = routes::app(livereload, state);
 
