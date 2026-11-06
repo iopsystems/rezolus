@@ -158,10 +158,12 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
 9. **A legacy recording keeps its `source` label** (metriken
    `docs/journal/2026-10-19-recording-identity-and-views.md`, Q6, changed
    from option (c) to option (a) for 6.0.0). metriken-storage answers
-   PromQL from a source's flat labels, so hiding `source` needs a read-path
-   change, and rezolus reads `source` in about 36 places (the dashboard's
-   kind lookup, `src/recorder/mod.rs:886`, MCP, the viewer) that would first
-   have to read the kind through D2. A 6.x recording carries `alias` and
+   PromQL from a source's flat labels, which `layers::append` sets to the
+   merged labels only when it writes the source, so hiding a legacy
+   `source` needs a read-path change. rezolus reads `source` directly in
+   about 25 places (the dashboard's kind lookup, `src/recorder/mod.rs:886`,
+   MCP, the viewer), more through `.source` fields, which would first have
+   to read the kind through D2. A 6.x recording carries `alias` and
    `__producer__`, and `source` only where its producer's handshake
    declares one (the 6.x agent declares `source=rezolus`,
    `src/agent/exposition/http/mod.rs:247`); a user's `source=` is recorded
