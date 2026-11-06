@@ -6,12 +6,16 @@ use linkme::distributed_slice;
 /// Per-family lifetime identity cap. Slots are never reused in one process.
 pub const MAX_SENSORS: usize = 256;
 
+// The sampler the groups belong to: `hw_sensors` where a sampler compiles this
+// file in its own module (Linux and macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "hw_sensors";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("hw_sensors");
+
 macro_rules! acquisition_group {
     ($static:ident, $registration:ident, $name:literal) => {
-        pub static $static: AcquisitionGroup = AcquisitionGroup::new(
-            crate::agent::samplers::bpf_sampler_name("hw_sensors"),
-            $name,
-        );
+        pub static $static: AcquisitionGroup = AcquisitionGroup::new(GROUP_SAMPLER, $name);
         #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
         static $registration: &'static AcquisitionGroup = &$static;
     };
@@ -51,35 +55,35 @@ acquisition_group!(
 
 #[metric(
     name = "sensor_temperature",
-    description = "A native Linux thermal-zone or hwmon temperature reading in millidegrees Celsius. Distinct native sources may describe the same physical component and are intentionally not deduplicated.",
+    description = "A temperature reading in millidegrees Celsius, from a Linux thermal zone or hwmon channel, or a macOS HID temperature service. Distinct native sources may describe the same physical component and are intentionally not deduplicated.",
     metadata = { unit = "millidegrees Celsius", acq_group = "hw_sensors_temperature" }
 )]
 pub static SENSOR_TEMPERATURE: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_power",
-    description = "A native hwmon power reading in microwatts. INA3221 values are derived from sequential bus-voltage and current reads and carry derived=voltage_x_current metadata.",
+    description = "A power reading in microwatts, from a Linux hwmon channel or a macOS SMC key. INA3221 values are derived from sequential bus-voltage and current reads and carry derived=voltage_x_current metadata.",
     metadata = { unit = "microwatts", acq_group = "hw_sensors_power" }
 )]
 pub static SENSOR_POWER: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_voltage",
-    description = "A native hwmon bus-voltage reading in millivolts. Driver-specific shunt and summation channels are excluded.",
+    description = "A bus-voltage reading in millivolts, from a Linux hwmon channel or a macOS SMC key. Driver-specific shunt and summation channels are excluded.",
     metadata = { unit = "millivolts", acq_group = "hw_sensors_voltage" }
 )]
 pub static SENSOR_VOLTAGE: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_current",
-    description = "A native hwmon current reading in milliamps. Driver-specific summation channels are excluded.",
+    description = "A current reading in milliamps, from a Linux hwmon channel or a macOS SMC key. Driver-specific summation channels are excluded.",
     metadata = { unit = "milliamps", acq_group = "hw_sensors_current" }
 )]
 pub static SENSOR_CURRENT: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_fan_speed",
-    description = "A native hwmon fan tachometer reading in revolutions per minute.",
+    description = "A fan tachometer reading in revolutions per minute, from a Linux hwmon channel or a macOS SMC key.",
     metadata = { unit = "RPM", acq_group = "hw_sensors_fan_speed" }
 )]
 pub static SENSOR_FAN_SPEED: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
