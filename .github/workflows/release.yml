@@ -238,23 +238,24 @@ jobs:
           # src/viewer/assets/lib, apart from lib/charts/ and lib/charts.css,
           # which build.sh copied from the metriken-charts crate) so the
           # tarball is self-contained.
-          # Skip data/ — demo parquets aren't part of the package.
+          # Skip data/ — the demo recordings aren't part of the package.
           rsync -aL --exclude='data' site/viewer/ "$STAGE/"
           cp LICENSE-MIT LICENSE-APACHE "$STAGE/" 2>/dev/null || true
           cat > "$STAGE/README.md" << 'EOF'
           # Rezolus Viewer (static bundle)
 
-          This bundle is a self-contained Rezolus parquet viewer that runs
+          This bundle is a self-contained Rezolus recording viewer that runs
           entirely in the browser via WebAssembly. Drop the directory on
           any static webserver (nginx, caddy, S3 + CloudFront, GitHub
           Pages, `python -m http.server`, …) and visit `/viewer/`.
 
           ## Loading recordings
 
-          The viewer accepts parquet recordings via:
+          The viewer opens `.dendro` recordings (written by Rezolus 6.x, and
+          by Rezolus 5.x from 5.23.0) via:
 
           - **Drag-and-drop / file picker** on the landing page.
-          - **`?capture=label=path/to/file.parquet`** in the URL — relative
+          - **`?capture=label=path/to/file.dendro`** in the URL — relative
             paths are fetched from the same origin.
           - **`?capture=label=https://...`** for absolute URLs — requires
             either CORS headers on the source, or the local proxy
@@ -263,9 +264,15 @@ jobs:
           Two `?capture=` params (separated by `&`) put the viewer in
           A/B compare mode.
 
+          A `.rez` archive, a `.parquet` file or a `.parquet.ab.tar` written
+          by Rezolus 5.x is refused. Convert it on your machine with
+          `rezolus recording upgrade FILE` (Rezolus 6.x), which writes the
+          file's name with a `.dendro` extension (`x.parquet.ab.tar` becomes
+          `x.dendro`), and open that.
+
           ## Loading from arbitrary URLs
 
-          Cross-origin parquet URLs (e.g. another team's S3 bucket, a
+          Cross-origin recording URLs (e.g. another team's S3 bucket, a
           colleague's webserver) only work when the source serves CORS
           headers — most don't. To bypass that, run the full `rezolus`
           binary with `rezolus view --proxy-allow=<glob>`; the local
@@ -274,7 +281,7 @@ jobs:
 
           ## Customising
 
-          - Demo parquets go in `data/` (not shipped in this bundle).
+          - Demo recordings go in `data/` (not shipped in this bundle).
           - Service-extension templates live under `templates/`.
           - Frontend overrides go in `lib/` — the layout mirrors the
             in-tree `src/viewer/assets/lib/` so existing patches apply.

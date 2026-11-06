@@ -215,7 +215,7 @@ fn incomplete_notice(
          ticks after that are not in this file. If it was copied while a recorder still held \
          it, the copy is also missing whatever was still in SQLite's `-wal` sidecar — a \
          separate file that does not travel with an upload. `rezolus recording snapshot \
-         <archive> -o out.rez` takes a complete copy without stopping the recorder."
+         <archive> -o out.dendro` takes a complete copy without stopping the recorder."
     ))
 }
 

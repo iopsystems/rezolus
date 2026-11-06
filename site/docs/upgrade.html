@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Upgrading to 6.0 - Rezolus Docs</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    html { scroll-padding-top: 5rem; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+
+        .brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1rem;
+            letter-spacing: 0.15em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #58a6ff 0%, #79c0ff 100%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            mask-size: contain;
+            -webkit-mask-size: contain;
+            mask-repeat: no-repeat;
+            -webkit-mask-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
+<div class="hidden md:flex items-center gap-8 text-base font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="Open menu"
+class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+<div id="nav-menu" hidden
+class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="upgrade.html">Upgrading to 6.0</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="mcp.html">MCP Server</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.29.2</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Getting Started</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="upgrade.html">Upgrading to 6.0</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#record">Recording</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#hindsight">Hindsight</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#convert">Converting files</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#old-agents">Older agents</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#older-readers">Older readers</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#scripts">Scripts</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#agent">Agent config</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html#removed">Removed flags</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#long-running">Long-running</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#one-off">One-off</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#offline">Offline analysis</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="mcp.html">MCP Server</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Core Concepts</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Reference</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
+
+<h1 class="text-4xl font-extrabold tracking-tight mb-4">Upgrading to 6.0</h1>
+<p class="text-xl text-slate-500 dark:text-slate-400 mb-6">What a Rezolus 5.x setup does differently under 6.0, and what to run instead.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-6">6.0 is not released yet.</p>
+
+<ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-12 list-disc pl-6">
+<li>6.0 writes <code>.dendro</code> archives only. Asking for <code>.rez</code>, parquet or raw output is refused.</li>
+<li>6.0 opens <code>.dendro</code> archives only. A 5.x <code>.rez</code>, <code>.parquet</code> or <code>.parquet.ab.tar</code> is converted with <code>rezolus recording upgrade FILE</code>. A <code>.dendro</code> written by 5.x opens as it is.</li>
+<li>6.0 records an agent from 5.21.0 or later, over its <code>/metrics/stream</code> route. An older agent is refused.</li>
+<li>5.x cannot open a <code>.dendro</code> that 6.0 writes.</li>
+</ul>
+
+<!-- Record -->
+<section class="mb-16" id="record">
+<h2 class="text-xl font-bold mb-4">You record with <code>rezolus record</code></h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">The output must end in <code>.dendro</code>. Without <code>-o</code>, <code>record</code> writes <code>rezolus.dendro</code>, where 5.x wrote <code>rezolus.rez</code>. Any other output is refused with exit code 2 before an endpoint is contacted, and the message names a 5.x recorder (5.27.0 or later), which still writes the old formats.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-6">
+<div class="p-5 font-mono text-base leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o run.rez</code></div>
+<div class="text-sm text-slate-400">error: -o run.rez: rezolus 6.x writes .dendro only (-o out.dendro); .rez output was removed in 6.0. ...</div>
+<div class="text-slate-500 text-sm"># exit 2</div>
+<div class="flex gap-4 mt-3"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o run.dendro</code></div>
+</div>
+</div>
+
+<div class="overflow-x-auto mb-6">
+<table class="w-full text-sm text-left border-collapse">
+<thead><tr class="border-b border-slate-200 dark:border-slate-800">
+<th class="py-2 pr-4 font-bold">5.x</th><th class="py-2 font-bold">6.0</th>
+</tr></thead>
+<tbody class="text-slate-600 dark:text-slate-400 align-top">
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record -o run.rez</code>, <code>-o run.parquet</code>, <code>-o run.raw</code></td><td class="py-2"><code>record -o run.dendro</code></td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --format parquet</code> (or <code>rez</code>, <code>raw</code>)</td><td class="py-2">Leave out <code>--format</code>. <code>--format dendro</code> is the only value accepted.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --separate --endpoint A --endpoint B</code></td><td class="py-2"><code>record --endpoint A --endpoint B -o run.dendro</code>: one archive, with each endpoint as its own recording.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --stream -o run.rez</code></td><td class="py-2"><code>record -o run.dendro</code>. Every agent is recorded over its stream; <code>--stream</code> is an unknown argument (exit 2).</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>--endpoint URL,source=NAME</code></td><td class="py-2"><code>--endpoint URL,alias=NAME</code>. <code>source=</code> is still accepted and read as <code>alias=</code>, with a note on stderr.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>--metadata producer_epoch=VALUE</code> (or <code>producer_epochs=</code>)</td><td class="py-2">Refused (exit 2). The recorder writes the producer epoch itself; use another key.</td></tr>
+<tr><td class="py-2 pr-4"><code>output</code>, <code>format</code>, <code>separate = true</code> in a <code>--config</code> file</td><td class="py-2">The same rules apply: <code>output</code> must end in <code>.dendro</code>, and <code>format</code> other than <code>dendro</code> and <code>separate = true</code> are refused (exit 2).</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">A recording's name now lives in its <code>alias</code> label. A recording carries a <code>source</code> label only when its producer declares one. A KPI template or saved query that selects <code>source="NAME"</code> for a name you gave with <code>source=NAME</code> now selects nothing; select <code>alias="NAME"</code> instead.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --endpoint http://127.0.0.1:4241,source=web -o s.dendro</code></div>
+<div class="text-sm text-slate-400">note: source=web on http://127.0.0.1:4241/ is read as alias=web; source= is deprecated, use alias=</div>
+</div>
+</div>
+</section>
+
+<!-- Hindsight -->
+<section class="mb-16" id="hindsight">
+<h2 class="text-xl font-bold mb-4">You run hindsight</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">The packaged <code>/etc/rezolus/hindsight.toml</code> changes its <code>output</code> from <code>/var/lib/rezolus/rezolus.rez</code> to <code>/var/lib/rezolus/rezolus.dendro</code>. A SIGHUP capture is written beside it as <code>rezolus-&lt;timestamp&gt;.dendro</code>.</p>
+<ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4 list-disc pl-6">
+<li>If you never edited the file, the package upgrade replaces it and hindsight writes to the new path.</li>
+<li>If you edited it, dpkg asks which version to keep (and keeps yours under <code>--force-confold</code>). rpm keeps yours and writes the new one beside it as <code>hindsight.toml.rpmnew</code>.</li>
+<li>A kept file whose <code>output</code> does not end in <code>.dendro</code> is refused at startup with exit code 1, and the service does not run until you change it.</li>
+<li>The files 5.x wrote stay where they are. 6.0 writes <code>rezolus.dendro</code> and <code>rezolus-&lt;timestamp&gt;.dendro</code>, so anything that reads <code>/var/lib/rezolus/rezolus.rez</code> or globs <code>rezolus-*.rez</code> finds no dump written after the upgrade. Point it at the <code>.dendro</code> names.</li>
+</ul>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus hindsight /etc/rezolus/hindsight.toml</code></div>
+<div class="text-sm text-slate-400">output = "/var/lib/rezolus/rezolus.rez": hindsight 6.x writes .dendro archives only; use an output ending in .dendro. ...</div>
+<div class="text-slate-500 text-sm"># exit 1. Fix the config, then restart:</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo sed -i 's#^output = .*#output = "/var/lib/rezolus/rezolus.dendro"#' /etc/rezolus/hindsight.toml</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl restart rezolus-hindsight</code></div>
+</div>
+</div>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Hindsight reads the agent's <code>/metrics/stream</code>, so the agent it points at must be 5.21.0 or later. An older agent, or a <code>rezolus exporter</code> endpoint, is refused at startup with exit code 1. Existing <code>.rez</code> dumps are converted as described under <a class="text-blue-600 dark:text-blue-400" href="#convert">You have .rez or parquet files</a>.</p>
+<ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4 list-disc pl-6">
+<li><code>GET /dump</code> on hindsight's HTTP endpoint returns a <code>.dendro</code> archive (<code>dump.dendro</code>), where 5.x returned a <code>.rez</code>.</li>
+<li>Hindsight's <code>GET /status</code> no longer has <code>failed_scrapes</code> or <code>scrapes_failing_since</code>. Hindsight no longer scrapes; a dropped stream is reconnected after one interval.</li>
+</ul>
+</section>
+
+<!-- Convert -->
+<section class="mb-16" id="convert">
+<h2 class="text-xl font-bold mb-4">You have <code>.rez</code> or parquet files</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3"><code>rezolus view</code>, <code>rezolus mcp</code>, the static-site viewer and every <code>rezolus recording</code> subcommand except <code>upgrade</code> refuse a <code>.rez</code> archive (v1, v2 or v3), a <code>.parquet</code> file and a <code>.parquet.ab.tar</code> A/B tarball, and print the command that converts the file. The exit code is 1, except for <code>recording check</code>, which exits 2. Nothing converts a file when it is opened.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view old.rez</code></div>
+<div class="text-sm text-slate-400">old.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:</div>
+<div class="text-sm text-slate-400">&nbsp;&nbsp;rezolus recording upgrade old.rez</div>
+<div class="text-slate-500 text-sm"># exit 1</div>
+</div>
+</div>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3"><code>rezolus recording upgrade FILE</code> writes <code>FILE</code>'s name with a <code>.dendro</code> extension next to it, and leaves the input unchanged. <code>-o</code> names the output instead. It refuses to replace an existing file.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording upgrade old.rez</code></div>
+<div class="text-sm text-slate-400">converted old.rez (v3 .rez archive) to old.dendro: 2 source(s), 2 segment(s), 0 live WAL row(s), 4 clock offset(s)</div>
+<div class="flex gap-4 mt-3"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording upgrade capture.parquet -o capture.dendro</code></div>
+<div class="text-sm text-slate-400">converted capture.parquet (parquet recording) to capture.dendro: 1 source(s), 1 segment(s), 5 row(s)</div>
+<div class="mt-3 text-slate-500 text-sm"># Convert every .rez, parquet and A/B tarball in a directory</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">for f in *.rez *.parquet *.parquet.ab.tar; do [ -e "$f" ] || continue; rezolus recording upgrade "$f"; done</code></div>
+</div>
+</div>
+<ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4 list-disc pl-6">
+<li>A <code>.parquet.ab.tar</code> becomes one <code>.dendro</code> with two recordings labelled <code>arm=baseline</code> and <code>arm=experiment</code>, which the viewer opens as the comparison. <code>x.parquet.ab.tar</code> becomes <code>x.dendro</code>. The tarball's aliases and category are not carried over.</li>
+<li>A combined parquet written by 5.x <code>recording combine</code>, or by a 5.x recorder given several endpoints, becomes one recording per input.</li>
+<li>In 5.x, <code>recording upgrade old.rez</code> rewrote a v1 or v2 <code>.rez</code> in place as v3, and refused a v3 file ("already a v3 (SQLite) archive", exit 1). In 6.0 the same command converts any <code>.rez</code> version and writes <code>old.dendro</code> beside it. <code>--to v3</code> is refused (exit 1); <code>--to dendro</code> is accepted and gives the same result as leaving it out.</li>
+<li>A <code>.dendro</code> written by 5.x opens in 6.0 as it is. <code>recording upgrade</code> on it exits 1 with "already a dendro archive; there is nothing to upgrade".</li>
+</ul>
+</section>
+
+<!-- Old agents -->
+<section class="mb-16" id="old-agents">
+<h2 class="text-xl font-bold mb-4">You run agents older than 5.21.0</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">6.0 records a Rezolus agent only from its <code>/metrics/stream</code> route, which agents serve from 5.21.0 with <code>snapshot_format = "v3"</code> (the default). <code>record</code>, hindsight and the live viewer (<code>rezolus view http://host:4241</code>) refuse an older agent, a <code>snapshot_format = "v2"</code> agent, and a proxy that does not route <code>/metrics/stream</code>. Hindsight and the live viewer also refuse a <code>rezolus exporter</code> endpoint (exit 1).</p>
+<ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4 list-disc pl-6">
+<li>At startup, <code>record</code> exits 1 and writes nothing.</li>
+<li>An agent that comes up during the run, or that answers a reconnect with a refusal, is left out of the recording. The other endpoints are recorded, the archive is finalized, and the run exits 1.</li>
+</ul>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --url http://old-host:4241 -o run.dendro</code></div>
+<div class="text-sm text-slate-400">error: http://old-host:4241/ is Rezolus 5.20.0, which predates the replication stream (agents serve /metrics/stream from 5.21.0): ... Nothing was recorded. ...</div>
+<div class="text-slate-500 text-sm"># exit 1</div>
+</div>
+</div>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Either upgrade the agent to 5.21.0 or later, or record it with a 5.x recorder (5.27.0 or later) and convert the result with 6.0:</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-500 text-sm"># with the 5.x binary</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --url http://old-host:4241 -o run.rez</code></div>
+<div class="text-slate-500 text-sm mt-3"># with the 6.0 binary</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording upgrade run.rez</code></div>
+</div>
+</div>
+</section>
+
+<!-- Older readers -->
+<section class="mb-16" id="older-readers">
+<h2 class="text-xl font-bold mb-4">You read 6.0 recordings with 5.x</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">A <code>.dendro</code> written by 6.0 uses archive schema version 5. That includes <code>record</code> and hindsight output, Save as Report (named <code>&lt;recording&gt;-report.dendro</code> by default, or <code>&lt;baseline&gt;_vs_&lt;experiment&gt;.dendro</code> in a comparison) and the live viewer's Save (<code>rezolus-capture.dendro</code> by default).</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-500 text-sm"># 5.x, on a file written by 6.0</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp describe-recording run.dendro</code></div>
+<div class="text-sm text-slate-400">Failed to load recording: unsupported archive schema version 5: this build writes v4 and reads v4</div>
+</div>
+</div>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Every 5.x release from 5.23.0 opens <code>.dendro</code> schema version 4 only and refuses the file with this message. Releases before 5.23.0 do not open <code>.dendro</code> files at all. No command converts a 6.0 archive to an older format, so upgrade every reader (people, scripts and pipelines) to 6.0 before relying on 6.0 recordings.</p>
+</section>
+
+<!-- Scripts -->
+<section class="mb-16" id="scripts">
+<h2 class="text-xl font-bold mb-4">Scripts and integrations</h2>
+<ul class="space-y-3 text-lg text-slate-500 dark:text-slate-400 list-disc pl-6">
+<li>File names: change <code>*.rez</code> and <code>*.parquet</code> to <code>*.dendro</code> in output paths, globs and artifact collection.</li>
+<li>Parquet consumers: a <code>.dendro</code> is not a parquet file, and 6.0 has no parquet export. Read values with <code>rezolus mcp query FILE 'PROMQL'</code>, or keep a 5.x recorder for that pipeline.</li>
+<li>Exit codes: <code>record</code> refuses a removed output or flag with exit code 2 (a usage error). A command given a <code>.rez</code> or parquet input exits 1, except <code>recording check</code>, which exits 2.</li>
+<li><code>rate(x[range])</code> now returns the average rate over <code>[t - range, t]</code>. 5.x ignored the range and returned the per-step rate, the same as <code>irate</code>. A saved query, KPI template or <code>recording check</code> written for the per-step rate should use <code>irate(x[...])</code>, or <code>rate(x[s])</code> where <code>s</code> is the step. Gauges, <code>irate</code> and <code>rate(x[s])</code> (with <code>s</code> the step) return the same values as 5.x at every timestamp 5.x returned. 6.0 may also return a point at the recording's first or last tick.</li>
+<li><code>=~</code> and <code>!~</code> are anchored regular expressions, as in Prometheus. 5.x read them as lists of literal alternatives separated by <code>|</code>. Escape a <code>.</code>, <code>+</code>, <code>(</code>, <code>[</code> or <code>\</code> that is meant literally.</li>
+<li><code>rezolus mcp query</code>, <code>describe-metrics</code>, <code>detect-anomalies</code> and <code>analyze-correlation</code> on an archive with several recordings read them together and exit 0. 5.x exited 1 and listed the recordings. An A/B archive (recordings that carry <code>arm</code>) still exits 1 and needs <code>--recording arm=baseline</code> or <code>--recording arm=experiment</code>.</li>
+<li>A query written for one host can now match series from every host, or nothing. Over two hosts, <code>sum(irate(cpu_usage[5m])) / cpu_cores</code> answers "No series matched", because <code>cpu_cores</code> has one series per host. Use <code>sum by (host) (irate(cpu_usage[5m])) / on (host) cpu_cores</code>, a matcher such as <code>cpu_cores{host="web-01"}</code>, or <code>--recording host=web-01</code>.</li>
+<li><code>rezolus mcp query</code> on a metric the recording has, with a selector that matches no series, prints "No series matched." and exits 0. 5.x printed "Metric not found" and exited 1.</li>
+<li>Every series read from a <code>.dendro</code> carries its recording's labels: <code>host</code>, <code>source</code>, <code>endpoint</code>, <code>alias</code>, any <code>record --label</code>, and <code>__producer__</code> and <code>arm</code> where the recording has them. A series' own label under one of those keys is renamed <code>exported_&lt;key&gt;</code>, so a matcher on the series' own value needs the <code>exported_</code> name.</li>
+<li>An archive made by <code>recording combine</code> opens as an A/B comparison only when its recordings carry an <code>arm</code> label. Give <code>combine</code> the arms explicitly: <code>rezolus recording combine baseline.dendro experiment.dendro --ab baseline=baseline.dendro experiment=experiment.dendro -o ab.dendro</code>. To open an older combined archive as a comparison, use <code>rezolus view ab.dendro --baseline host=A --experiment host=B</code>. When its two recordings have identical labels (two runs combined on one host), no selector can name either one, and <code>view</code> exits 1 with "matched 2 recordings". Label them by position instead: <code>rezolus recording combine ab.dendro --ab baseline=0 experiment=1 -o ab2.dendro</code>.</li>
+<li><code>recording filter x.dendro -o y.dendro</code> refuses to replace an existing <code>y.dendro</code> (exit 1). 5.x overwrote it.</li>
+<li>The agent's <code>/status</code> no longer has <code>index_resyncs</code>.</li>
+<li><code>rezolus-capture</code> (the script and the Docker image) writes one <code>capture.dendro</code> in <code>--output-dir</code> in place of <code>capture.parquet</code> and the per-endpoint parquet files. <code>--source rezolus</code> is refused.</li>
+<li>Tools that read the agent's <code>/metrics/stream</code> directly see a new content type, <code>application/vnd.metriken.replication.v1+dendro</code>, and <code>x-metriken-*</code> headers in place of <code>x-rezolus-*</code>. Every 5.x <code>record --stream</code> refuses a 6.0 agent's stream; drop <code>--stream</code>, and the 5.x recorder scrapes the agent instead.</li>
+<li><code>rezolus view a.dendro b.dendro</code> opens <code>b.dendro</code> as the experiment of a comparison. 5.x ignored a second file after a <code>.rez</code> or <code>.dendro</code>, with a warning.</li>
+</ul>
+</section>
+
+<!-- Agent -->
+<section class="mb-16" id="agent">
+<h2 class="text-xl font-bold mb-4">Agent configuration and metrics</h2>
+<ul class="space-y-3 text-lg text-slate-500 dark:text-slate-400 list-disc pl-6">
+<li>Three pairs of samplers are merged. <code>[samplers.scheduler_runqueue]</code> and <code>[samplers.cpu_migrations]</code> are now <code>[samplers.scheduler]</code>; <code>[samplers.blockio_requests]</code> and <code>[samplers.blockio_latency]</code> are <code>[samplers.blockio]</code>; <code>[samplers.syscall_counts]</code> and <code>[samplers.syscall_latency]</code> are <code>[samplers.syscall]</code>. An old section name is read as the new one with a warning. Metric names are unchanged, but the <code>sampler</code> label, <code>rezolus status</code> and <code>rezolus_bpf_run_time</code> use the new names.</li>
+<li><code>hw_sensors</code> is on by default. <code>[samplers.hw_sensors] enabled = false</code> turns it off. It no longer reads <code>nvme</code> or <code>drivetemp</code> hwmon chips; <code>drivehealth</code> reports drive temperature. It no longer publishes the ACPI <code>Processor</code> cooling devices (one per logical CPU). Each channel gains <code>device</code> and <code>name</code> labels.</li>
+<li><code>tcp_connect_latency</code> has an <code>outcome</code> label (<code>established</code>, <code>refused</code>, <code>timeout</code>, <code>error</code>, <code>aborted</code>). A query without an <code>outcome</code> matcher merges every outcome, timeouts included; add <code>{outcome="established"}</code> for the 5.x meaning. The exporter's percentiles are per outcome.</li>
+<li><code>task_cpu_usage</code> leaves out threads younger than <code>task_min_lifetime</code> (default <code>"1s"</code>). Set <code>"0s"</code> for the 5.x behaviour.</li>
+<li>Setting <code>task_attribution = true</code> also turns on <code>process_attribution</code> unless it is set. Set <code>process_attribution = false</code> in <code>[samplers.cpu_usage]</code> for the 5.x behaviour.</li>
+<li><code>memory_slabinfo</code> publishes <code>memory_slab_cache_bytes</code> for every slab cache (up to 1024). <code>caches = "fixed"</code> in <code>[samplers.memory_slabinfo]</code> keeps the 5.x set of eight. Both <code>memory_slab_cache_*</code> metrics gain an <code>id</code> label, so a Prometheus server sees new series for every cache.</li>
+<li><code>ext4_journal</code> reports in nanoseconds instead of jiffies. <code>phase="wait"</code> and <code>phase="request_delay"</code> are removed. Its values are not comparable with 5.x recordings.</li>
+<li>On macOS, <code>cpu_usage</code> is one series per CPU with an <code>id</code> label, and the <code>nice</code> state is gone (niced time counts as <code>user</code>).</li>
+</ul>
+</section>
+
+<!-- Removed -->
+<section class="mb-16" id="removed">
+<h2 class="text-xl font-bold mb-4">Removed flags</h2>
+<div class="overflow-x-auto">
+<table class="w-full text-sm text-left border-collapse">
+<thead><tr class="border-b border-slate-200 dark:border-slate-800">
+<th class="py-2 pr-4 font-bold">5.x</th><th class="py-2 pr-4 font-bold">6.0 result</th><th class="py-2 font-bold">Instead</th>
+</tr></thead>
+<tbody class="text-slate-600 dark:text-slate-400 align-top">
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --format rez|parquet|raw</code></td><td class="py-2 pr-4">exit 2</td><td class="py-2">Leave it out; output is <code>.dendro</code>.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --separate</code></td><td class="py-2 pr-4">exit 2</td><td class="py-2">One archive with a recording per endpoint.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>record --stream</code></td><td class="py-2 pr-4">exit 2 (unknown argument)</td><td class="py-2">Leave it out; agents are always streamed.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording upgrade --to v3</code></td><td class="py-2 pr-4">exit 1</td><td class="py-2"><code>recording upgrade FILE</code></td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording combine -o x.parquet</code>, <code>-o x.rez</code>, <code>-o x.parquet.ab.tar</code></td><td class="py-2 pr-4">exit 1</td><td class="py-2"><code>-o x.dendro</code>; add <code>--ab baseline=A experiment=B</code> for a comparison.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording combine --pinned</code>, <code>--category</code>, <code>--bypass-time-check</code></td><td class="py-2 pr-4">exit 1 (<code>--category</code> without <code>--ab</code>: exit 2, a usage error in 5.x too)</td><td class="py-2">Leave them out.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording annotate --source</code>, <code>--node</code>, <code>--filter</code></td><td class="py-2 pr-4">exit 1</td><td class="py-2">Name a recording when it is recorded (<code>--endpoint URL,alias=NAME</code> or <code>--label</code>); shrink one with <code>recording filter</code>.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording filter --queries</code>, <code>--templates</code></td><td class="py-2 pr-4">exit 2 (unknown argument)</td><td class="py-2"><code>recording filter --samplers</code> or <code>--metrics</code>.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording metadata --schema</code>, <code>--file</code>, <code>--geometry</code>, <code>--field</code></td><td class="py-2 pr-4">exit 2 (unknown argument)</td><td class="py-2"><code>recording metadata -i FILE</code> (add <code>--json</code> for machine-readable output).</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording filter</code>, <code>annotate</code>, <code>check --annotate</code> editing a <code>.rez</code> or parquet in place</td><td class="py-2 pr-4">exit 1 (<code>check</code>: exit 2)</td><td class="py-2">Convert with <code>recording upgrade</code>, then edit the <code>.dendro</code> in place or write a copy with <code>-o</code>.</td></tr>
+<tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4"><code>recording convert</code> to parquet</td><td class="py-2 pr-4">refused</td><td class="py-2"><code>recording convert FILE.raw</code> writes a <code>.dendro</code>.</td></tr>
+<tr><td class="py-2 pr-4">Viewer Time selector (Aligned/Raw)</td><td class="py-2 pr-4">removed</td><td class="py-2">Open a chart on its own (the open-in-new-tab link) and use SHOW SAMPLES.</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-base">
+<a href="installation.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Installation</a>
+<a href="usage.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">Usage &rarr;</a>
+</div>
+
+</main>
+</div>
+<script>
+// Mobile nav. The header links are `hidden md:flex` and the docs sidebar is
+// `hidden lg:flex`, so below 1024px there is otherwise no navigation at all.
+const navToggle = document.getElementById('nav-toggle');
+const navMenu = document.getElementById('nav-menu');
+const setNav = (open) => {
+    navToggle.setAttribute('aria-expanded', String(open));
+    navToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
+    navMenu.hidden = !open;
+};
+if (navToggle && navMenu) {
+    navToggle.addEventListener('click', () => setNav(navToggle.getAttribute('aria-expanded') !== 'true'));
+    navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
+    window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => { if (e.matches) setNav(false); });
+}
+</script>
+</body></html>

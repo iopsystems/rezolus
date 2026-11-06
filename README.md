@@ -232,6 +232,7 @@ lookback and disk requirements before enabling it.
 | Task | Read next |
 | --- | --- |
 | Install packages, build from source, or check platform requirements | [Installation](docs/installation.md), [Docker](docker/README.md) |
+| Upgrade from 5.x: what 6.0 refuses and what to run instead | [Upgrading to 6.0](https://rezolus.com/docs/upgrade.html) |
 | Record, compare, export, retain history, or analyze recordings | [Usage guide](docs/usage.md) |
 | Find a metric's meaning, unit, and labels | [Metrics](docs/metrics.md) |
 | Configure service KPI dashboards | [KPI definitions and annotation](docs/parquet_metadata.md#service_queries) |
