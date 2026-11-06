@@ -63,7 +63,11 @@ docker run --rm -it --privileged --network=host \
 The archive holds a recording per endpoint: `alias=rezolus` for the system
 metrics and `alias=redis` for Redis. The viewer at http://localhost:8080
 opens it as one view, with the Redis endpoint shown as its own recording
-beside the system sections. No per-endpoint parquet copies are written.
+beside the system sections. The sidebar's `redis` section is built from the
+`valkey` template, whose KPIs query `redis/*` names that redis_exporter does
+not publish, so it lists them as unavailable; read the exporter's series in
+the Query Explorer, e.g. `irate(redis_commands_processed_total[5s])`. No
+per-endpoint parquet copies are written.
 
 ### System + service metrics (e.g., Valkey)
 

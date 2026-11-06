@@ -1277,9 +1277,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   - **Older consumers of the stream refuse this agent's stream**, naming the
     content type they got: every 5.x `record --stream`, and
     `record` to `.dendro`, `hindsight` and the live viewer from 6.0.0-alpha
-    builds through alpha.44. Drop `--stream` (5.x), upgrade, or record to
-    `.rez` or parquet with 5.x, which scrapes `/metrics/binary`; that path
-    is unchanged.
+    builds through alpha.44. Drop `--stream` (5.x), upgrade, or record with
+    5.x without `--stream`, which scrapes `/metrics/binary` to `.rez`,
+    parquet or `.dendro`; that path is unchanged.
   - A subscriber reads the time it woke before waiting for the pass lock,
     so subscribers at one boundary share one sampling pass. Before, one
     queued behind a pass longer than the TTL found it stale and sampled
