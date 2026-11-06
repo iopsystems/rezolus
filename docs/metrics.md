@@ -1833,9 +1833,9 @@ On macOS the sampler reads two sources, and neither needs root:
   device sensors (`PMU tdie1`, `PMU tdev1`, ...), the battery gas gauge and
   the NAND. `IOHIDEventSystemClient` is private API: IOKit exports it, but
   the SDK has no header for it.
-- Fan speeds, power-manager rail voltage, current and power, and the charger
-  input, from the System Management Controller (SMC) through the `AppleSMC`
-  user client.
+- Fan speeds, power-manager rail voltage, current and power, the charger
+  input, system power and battery discharge power, from the System
+  Management Controller (SMC) through the `AppleSMC` user client.
 
 The sampler finds its sensors once, at startup; a sensor it does not find
 then has no series. Reads are dispatched by consumer activity at most once
@@ -1851,17 +1851,17 @@ recording's own `source` label takes precedence.
 | `sensor_fan_speed` | `F<n>Ac` for each of the `FNum` fans, at most ten | `fan <n>` |
 | `sensor_voltage` | `VD0R`, and each rail's `V` key | `DC in`, and the rail |
 | `sensor_current` | `ID0R`, and each rail's `I` key | `DC in`, and the rail |
-| `sensor_power` | `PDTR`, and each rail's `P` key | `DC in`, and the rail |
+| `sensor_power` | `PDTR`, `PSTR`, `PPBR`, and each rail's `P` key | `DC in`, `system`, `battery`, and the rail |
 
 A rail is one that a HID voltage or current service on usage page `0xff08`
 names. The service named `PMU vbuck0` at location `VP0b` is rail `PMU buck0`,
 and its voltage, current and power are the SMC keys `VP0b`, `IP0b` and
 `PP0b`. A voltage service's location must start with `V` and a current
-service's with `I`, and a location that is one of `VD0R`, `ID0R` or `PDTR` is
-not a rail. The sampler does not read a key the SMC does not have or
-that is not a 32-bit float; on an M4 Max, 14 of the candidate keys are not
-read. When several sensors of one metric have the same name, each has its
-`sensor` appended, as in `gas gauge battery (TG0B)`.
+service's with `I`. A location that is `VD0R` or `ID0R`, or whose power key
+would be `PDTR`, `PSTR` or `PPBR`, is not a rail. The sampler does not read a
+key the SMC does not have or that is not a 32-bit float; on an M4 Max, 14 of
+the candidate keys are not read. When several sensors of one metric have the
+same name, each has its `sensor` appended, as in `gas gauge battery (TG0B)`.
 
 Apple does not document the SMC keys. `PDTR` (power from the charger), `VD0R`
 and `ID0R` (its voltage and current) carry the meanings open-source SMC tools
@@ -1869,20 +1869,47 @@ give them. On an M4 Max on AC power, `VD0R` × `ID0R` matched `PDTR` within
 0.5% in seven reads from 31 to 50 W, and each rail's power key equalled its
 voltage times its current. The SMC updates these keys about once a second,
 so a value can be up to a second older than the read that returned it.
-`PSTR`, which open-source tools call system power, is not read: on AC power
-each of its values was the previous `PDTR` value. The SMC has many more
-temperature keys (281 reading between 10 and 120 °C on an M4 Max), but their
-names are undocumented and differ between chips, so they are not read.
-`sensor_fan_pwm` and `sensor_cooling_state` have no macOS source. The sampler
-has not been run on an Intel Mac.
+
+`system` (`PSTR`) is the power the Mac consumes, from the charger and the
+battery, not counting power going into the battery. `battery` (`PPBR`) is the
+power the battery supplies. With the battery idle on AC power, `PSTR` equals
+the previous second's `PDTR`, and `PPBR` reads about 0.4 W.
+
+On an M4 Max on a Thunderbolt dock that held `PDTR` at about 57 W, with the
+battery discharging under load, `PSTR` (about 97 W) read `PDTR` + `PPBR` +
+1.2 W at the median over 116 one-second reads. The battery's own gauge
+(`Voltage` × `InstantAmperage` of `AppleSmartBattery` in `ioreg`) updates
+about once a minute while the current is steady, and every second or few
+while it changes, holding each reading until the next. It read 36.1 W of
+discharge at one update, and `PPBR` read 34.2 W in that second.
+
+While the battery charges, `PPBR` reads about 0.4 W (up to 7.6 W for a few
+seconds at a load step), so charging is not visible in `battery`. `DC in`
+minus `system` is the power going into the battery: at the four gauge updates
+before a load step, the gauge read 36.4, 72.6, 66.6 and 65.3 W, and the
+previous second's `PDTR` minus `PSTR` read 36.3, 72.5, 66.3 and 65.4 W. At
+the seven updates during and after the step, the previous second's `PDTR`
+minus `PSTR` reached each gauge reading one to two seconds later. Because
+`PSTR` trails `PDTR` by a second, a single read of `DC in` minus `system` is
+off by the change in `PDTR` over that second, which reached 45 W at a load
+step; average it over a minute.
+
+The SMC has many more temperature keys (281 reading between 10 and 120 °C on
+an M4 Max), but their names are undocumented and differ between chips, so
+they are not read. `sensor_fan_pwm` and `sensor_cooling_state` have no macOS
+source. The sampler has not been run on an Intel Mac or on a Mac without a
+battery.
 
 On an M4 Max, with only `hw_sensors` and `rezolus_rusage` enabled at a 5
-second interval and one scrape per second for 150 seconds, the sampler read 76
-sensors per sweep in 34.5 ms at the median, 38.0 ms at the 90th percentile and
-324 ms at most (60 sweeps; four took between 76 and 324 ms). The agent used 40
-to 60 ms more CPU per run than with the sampler off (0.03 to 0.04% of a
-core; two runs each). Each SMC read takes about 165 µs and each HID
-temperature read about 1 ms, nearly all of it waiting rather than on CPU.
+second interval and one scrape per second for 150 seconds, the sampler read
+the 76 sensors other than `system` and `battery` per sweep in 34.5 ms at the
+median, 38.0 ms at the 90th percentile and 324 ms at most (60 sweeps; four
+took between 76 and 324 ms). The agent used 40 to 60 ms more CPU per run
+than with the sampler off (0.03 to 0.04% of a core; two runs each). Thirty
+back-to-back sweeps of the 78 sensors, `system` and `battery` included, took
+33.0 ms at the median and 35.8 ms at most. Each SMC read takes about 165 µs
+and each HID temperature read about 1 ms, nearly all of it waiting rather
+than on CPU.
 
 ## Syscall
 

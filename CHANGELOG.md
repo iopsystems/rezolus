@@ -22,9 +22,10 @@
   IOHIDEventSystem temperature services (the power manager's die and device
   sensors, the battery gas gauge and the NAND), and `sensor_fan_speed`,
   `sensor_voltage`, `sensor_current` and `sensor_power` from the SMC: each fan,
-  each power-manager rail the HID services name, and the charger input.
-  Neither source needs root. On an M4 Max it reads 76 sensors in about 34 ms,
-  at most once every 5 seconds by default.
+  each power-manager rail the HID services name, the charger input, system
+  power (`PSTR`, named `system`) and battery discharge power (`PPBR`, named
+  `battery`). Neither source needs root. On an M4 Max a sweep of its 78
+  sensors takes about 33 ms, at most once every 5 seconds by default.
 
 - **The Memory section draws page faults on Linux.** The Reclaim group has a
   Page Faults chart, the rate of `memory_page_faults` (pgfault, every fault),
