@@ -746,14 +746,17 @@ Blocking 6.0.0:
 - **Prometheus `+Inf` bucket** — Open (iopsystems/metriken#377,
   decision 13). An overflow counter, and `histogram_quantile` returning
   `+Inf` for a quantile in it.
-- **systemslab reads and records `.dendro`** — Open (decision 14).
-  iopsystems/systemslab#6371, and the runner asking `rezolus record` for
-  `.dendro` (`crates/runner/src/metrics.rs:411`, `:466`).
-- **hindsight refuses an old agent with no message** — Open.
+- **systemslab reads and records `.dendro`** — Open (decision 14). Its
+  reader opening dendro schema 5 and its runner asking `rezolus record` for
+  `.dendro` (`crates/runner/src/metrics.rs:293`, `:411`, `:466`), merged
+  before the tag. iopsystems/systemslab#6371 has to move to a schema 5
+  reader on a pre-release pin first.
+- **hindsight refuses an old agent with no message** — Open (GO
+  criteria; #1662).
   `src/hindsight/mod.rs` logs the refusal with `error!` and calls
   `process::exit(1)` before the log is flushed, after creating the output
   file and a buffer directory.
-- **CLI help and docs at the tag** — Open. `usage.html`'s config example
+- **CLI help and docs at the tag** — Open (GO criteria). `usage.html`'s config example
   uses `source =`, which 5.29.2 reads; it moves to `alias =` in the release
   PR, since the site deploys from main.
 
@@ -762,12 +765,14 @@ agent, so that histogram reads of a released archive are tested; the 5.29.2
 fixtures in `tests/fixtures/released/` (#1659) were recorded on macOS and
 hold no histogram data.
 
-Deferred past 6.0.0 (decision 11): the cross-version CI job (and its 5.x
-versions move to 5.29.2); the smaller test gaps (V3 raw `recording convert`,
+Deferred past 6.0.0 (decision 11): the cross-version CI job (its 5.x
+binaries against a 6.0 agent and a 6.0 recorder against 5.x agents; its
+5.x-reader leg is dropped, since no 5.x release reads 6.0 output); the
+smaller test gaps (V3 raw `recording convert`,
 a WASM `.dendro` test, `tests/viewer_smoke.sh` in CI, reading
 `site/viewer/data/mr2-report.dendro` in a test, upgrading a v1 tar archive);
-a tar `.rez` fixture from a 5.17.1 prerelease; the measurement harness and
-the size comparison. Waived (decision 10): the 24-hour run and the release
+a tar `.rez` fixture from a 5.17.1 prerelease and a parquet fixture from a
+release before 5.18; the measurement harness and the size comparison. Waived (decision 10): the 24-hour run and the release
 candidate soak.
 
 `recording snapshot` refuses a `.rez` (it names `recording upgrade`), so the
@@ -780,7 +785,8 @@ detection (`src/recorder/detect.rs`, 6.0.0-alpha.50); removing the `.rez`,
 parquet and raw writers, MCP `export_query` and `--export-dir` (#1657)
 included; the in-repository callers (`rezolus-capture`, `compare-demo.sh`,
 the CI smoke steps); llm-perf records in-process and no longer runs
-`rezolus record`; the Homebrew formula (at 5.29.2, with no bump PRs open);
+`rezolus record`; the Homebrew formula (at 5.29.2; 5.29.2 produced one bump PR, #172,
+which was merged);
 compatibility fixtures from 5.29.2 (#1659); the upgrade page,
 `site/docs/upgrade.html` (#1660).
 
