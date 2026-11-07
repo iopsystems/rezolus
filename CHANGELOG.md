@@ -10,7 +10,7 @@
   `gpu_amd_smi` finds a GPU, because both would publish the same series. The
   GPU section plots the SoC and fabric clocks, and a group shown only when
   `gpu_rail_power` is recorded plots rail power and throttle status.
-  Backported from 6.0 (#1667).
+  Backported from 6.0 (#1667) in #1669.
 
 ## [5.29.2] - 2026-10-29
 
