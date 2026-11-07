@@ -289,7 +289,7 @@ impl Config {
     /// back to the `defaults` section). `None` if unset anywhere, in which case
     /// the sampler applies its own built-in default. Consumed by samplers that
     /// read cost-bearing sources off the sample cycle (`drivehealth`,
-    /// `filesystem`, GPU PMUs and `hw_sensors`).
+    /// `filesystem`, GPU PMUs, `gpu_amd_sysfs` and `hw_sensors`).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn sampler_interval(&self, name: &str) -> Option<std::time::Duration> {
         self.samplers

@@ -282,6 +282,7 @@ fn sink(bench: &Catalog) -> Catalog {
             ("sensor", "coretemp:native-0"),
             ("name", "coretemp temp1 native-0"),
             ("kind", "net_rx"),
+            ("rail", "vdd"),
         ]),
         labels(&[
             ("id", "1"),
@@ -295,6 +296,7 @@ fn sink(bench: &Catalog) -> Catalog {
             ("sensor", "coretemp:native-1"),
             ("name", "coretemp temp1 native-1"),
             ("kind", "timer"),
+            ("rail", "soc"),
         ]),
     ];
     let mut out = Catalog::default();
@@ -709,6 +711,30 @@ fn intel_all_engines() -> Catalog {
     out
 }
 
+/// An AMD APU read by `gpu_amd_sysfs`, whose rail and throttle metrics no
+/// other sampler publishes.
+fn amd_apu() -> Catalog {
+    let amd =
+        |label: (&'static str, &'static str)| labels(&[("id", "0"), ("vendor", "amd"), label]);
+    let mut out = Catalog::default();
+    out.gauges.insert(
+        "gpu_clock".into(),
+        ["graphics", "compute", "memory", "soc", "fabric"]
+            .iter()
+            .map(|clock| amd(("clock", clock)))
+            .collect(),
+    );
+    out.gauges.insert(
+        "gpu_rail_power".into(),
+        vec![amd(("rail", "vdd")), amd(("rail", "soc"))],
+    );
+    out.gauges.insert(
+        "gpu_throttle_status".into(),
+        vec![labels(&[("id", "0"), ("vendor", "amd")])],
+    );
+    out
+}
+
 /// GPUs and CPUs with ids `"01"` and `"1"`: one device where ids are
 /// compared as integers, two where they are compared as strings.
 fn non_canonical_ids() -> Catalog {
@@ -759,6 +785,7 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("gpus-without-vendor", gpus_without_vendor()),
         ("gpus-with-unparsed-id", gpus_with_unparsed_id()),
         ("intel-all-engines", intel_all_engines()),
+        ("amd-apu", amd_apu()),
         ("non-canonical-ids", non_canonical_ids()),
         ("macos", macos()),
         ("linux", linux(&bench)),
@@ -820,6 +847,26 @@ fn golden_name(catalog: &str, route: &str, ctx: &str) -> String {
     } else {
         format!("{catalog}/{route}.{ctx}.json")
     }
+}
+
+/// The checklist in `docs/principles.md` requires a test that the queries
+/// name each metric a sampler adds.
+#[test]
+fn the_gpu_section_plots_what_gpu_amd_sysfs_adds_on_an_apu_only() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let apu = render_generator(&amd_apu(), "/gpu", &ctx);
+    for name in [
+        "gpu_rail_power{rail=\\\"vdd\\\"}",
+        "gpu_rail_power{rail=\\\"soc\\\"}",
+        "gpu_throttle_status",
+        "gpu_clock{clock=\\\"soc\\\"}",
+        "gpu_clock{clock=\\\"fabric\\\"}",
+    ] {
+        assert!(apu.contains(name), "{name} is not plotted");
+    }
+
+    let other = render_generator(&intel_all_engines(), "/gpu", &ctx);
+    assert!(!other.contains("gpu_rail_power"));
 }
 
 #[test]
