@@ -70,6 +70,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "filesystem",
     "gpu_amd_pmu",
     "gpu_amd_smi",
+    "gpu_amd_sysfs",
     "gpu_apple",
     "gpu_intel_pmu",
     "gpu_nvidia",
@@ -248,9 +249,11 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("gpu_engine_busy_time", "gpu_intel_pmu"),
     ("gpu_frequency_sample", "gpu_intel_pmu"),
     ("gpu_pcie_bandwidth", "gpu_nvidia"),
+    ("gpu_rail_power", "gpu_amd_sysfs"),
     ("gpu_sm_occupancy", "gpu_nvidia"),
     ("gpu_sm_utilization", "gpu_nvidia"),
     ("gpu_tensor_utilization", "gpu_nvidia"),
+    ("gpu_throttle_status", "gpu_amd_sysfs"),
     ("memory_active", "memory_meminfo"),
     ("memory_anon", "memory_meminfo"),
     ("memory_available", "memory_meminfo"),
@@ -519,25 +522,29 @@ const BPF_SAMPLERS: &[&str] = &[
 ///   reporting into its usage sampler rather than having a standalone
 ///   `cpu_cores` one) — same name, different true sampler depending on
 ///   platform.
-/// - `gpu_clock`, `gpu_energy_consumption`, `gpu_power_usage`,
-///   `gpu_utilization`: shared vocabulary across `gpu_amd_smi`,
-///   `gpu_apple`, and `gpu_nvidia`.
+/// - `gpu_clock`, `gpu_power_usage`, `gpu_utilization`: shared vocabulary
+///   across `gpu_amd_smi`, `gpu_amd_sysfs`, `gpu_apple`, and `gpu_nvidia`.
+/// - `gpu_energy_consumption`: the same, without `gpu_amd_sysfs`.
 /// - `gpu_memory`: shared between `gpu_amd_smi`, `gpu_intel_pmu` and
 ///   `gpu_nvidia`. The Intel sampler publishes VRAM under the same
 ///   vendor-neutral name and labels, so cross-vendor dashboards work
 ///   unchanged; it is discrete-only, since an integrated GPU has no
 ///   device-local memory region.
 /// - `gpu_memory_utilization`, `gpu_pcie_throughput`, `gpu_temperature`:
-///   shared between `gpu_amd_smi` and `gpu_nvidia` only (no macOS/`gpu_apple`
-///   equivalent — `gpu/macos/apple/stats.rs` declares no metric under these names;
-///   and the i915 PMU exposes no memory-controller or PCIe counter).
+///   shared between `gpu_amd_smi` and `gpu_nvidia`, and for `gpu_temperature`
+///   `gpu_amd_sysfs` (no macOS/`gpu_apple` equivalent —
+///   `gpu/macos/apple/stats.rs` declares no metric under these names; and the
+///   i915 PMU exposes no memory-controller or PCIe counter).
 /// - `rezolus_bpf_run_count`, `rezolus_bpf_run_time`: see [`BPF_SAMPLERS`].
 ///
 /// Sorted alphabetically by name; each candidate list sorted alphabetically
 /// too.
 pub(crate) const AMBIGUOUS_METRICS: &[(&str, &[&str])] = &[
     ("cpu_cores", &["cpu_cores", "cpu_usage"]),
-    ("gpu_clock", &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"]),
+    (
+        "gpu_clock",
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_apple", "gpu_nvidia"],
+    ),
     (
         "gpu_energy_consumption",
         &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
@@ -550,12 +557,15 @@ pub(crate) const AMBIGUOUS_METRICS: &[(&str, &[&str])] = &[
     ("gpu_pcie_throughput", &["gpu_amd_smi", "gpu_nvidia"]),
     (
         "gpu_power_usage",
-        &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_apple", "gpu_nvidia"],
     ),
-    ("gpu_temperature", &["gpu_amd_smi", "gpu_nvidia"]),
+    (
+        "gpu_temperature",
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_nvidia"],
+    ),
     (
         "gpu_utilization",
-        &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_apple", "gpu_nvidia"],
     ),
     ("rezolus_bpf_run_count", BPF_SAMPLERS),
     ("rezolus_bpf_run_time", BPF_SAMPLERS),
@@ -771,6 +781,25 @@ mod tests {
         assert!(!c.subsystems_absent.contains(&"gpu_nvidia".to_string()));
         // unrelated domains still assert absence.
         assert!(c.subsystems_absent.contains(&"cpu_usage".to_string()));
+    }
+
+    #[test]
+    fn gpu_amd_sysfs_is_a_source_of_its_own_and_its_shared_metrics() {
+        for name in ["gpu_rail_power", "gpu_throttle_status"] {
+            assert!(METRIC_SAMPLERS.contains(&(name, "gpu_amd_sysfs")), "{name}");
+        }
+        for name in [
+            "gpu_clock",
+            "gpu_power_usage",
+            "gpu_temperature",
+            "gpu_utilization",
+        ] {
+            let (_, candidates) = AMBIGUOUS_METRICS
+                .iter()
+                .find(|(ambiguous, _)| *ambiguous == name)
+                .unwrap();
+            assert!(candidates.contains(&"gpu_amd_sysfs"), "{name}");
+        }
     }
 
     #[test]

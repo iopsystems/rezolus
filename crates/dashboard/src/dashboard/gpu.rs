@@ -346,7 +346,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut power = Group::new("Power", "power");
 
     let draw = power.subgroup("Power Draw");
-    draw.describe("Instantaneous power consumption, total and per-GPU.");
+    draw.describe(
+        "Power consumption, total and per-GPU. An AMD APU reports its whole socket, \
+         including the CPU cores.",
+    );
     if multi_gpu {
         draw.plot_promql(
             Plot::gauge("Power (W)", "power-watts", Unit::Count).with_axis_label("Watts"),
@@ -407,7 +410,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut clocks = Group::new("Clocks", "clocks");
 
     let freqs = clocks.subgroup("Clock Frequencies");
-    freqs.describe("Per-device clock speeds for graphics, memory, compute, and video engines.");
+    freqs.describe(
+        "Per-device clock speeds for graphics, memory, compute, video, SoC and data fabric.",
+    );
     freqs.plot_promql(
         Plot::gauge("Graphics", "clock-graphics", Unit::Frequency),
         "sum by (id, vendor) (gpu_clock{clock=\"graphics\"})".to_string(),
@@ -424,13 +429,55 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         Plot::gauge("Video", "clock-video", Unit::Frequency),
         "sum by (id, vendor) (gpu_clock{clock=\"video\"})".to_string(),
     );
+    freqs.plot_promql(
+        Plot::gauge("SoC", "clock-soc", Unit::Frequency),
+        "sum by (id, vendor) (gpu_clock{clock=\"soc\"})".to_string(),
+    );
+    freqs.plot_promql(
+        Plot::gauge("Data Fabric", "clock-fabric", Unit::Frequency),
+        "sum by (id, vendor) (gpu_clock{clock=\"fabric\"})".to_string(),
+    );
 
     view.group(clocks);
 
     amd_pmu(&mut view);
+    amd_apu(&mut view, data);
     intel_pmu(&mut view, data);
 
     view
+}
+
+/// Rail power and throttle status from the `gpu_amd_sysfs` sampler. Absent on
+/// any other host, where the section would have nothing to show.
+fn amd_apu(view: &mut View, data: &dyn MetricsSource) {
+    if data.label_values("gpu_rail_power", "rail").is_empty() {
+        return;
+    }
+
+    let mut apu = Group::new("AMD APU Rails and Throttling", "amd-apu");
+
+    let rails = apu.subgroup("Rail Power");
+    rails.describe("Power per rail. The VDD rail also carries loads other than graphics.");
+    rails.plot_promql(
+        Plot::gauge("VDD Rail (W)", "rail-power-vdd", Unit::Count).with_axis_label("Watts"),
+        "sum by (id, vendor) (gpu_rail_power{rail=\"vdd\"}) / 1000".to_string(),
+    );
+    rails.plot_promql(
+        Plot::gauge("SoC Rail (W)", "rail-power-soc", Unit::Count).with_axis_label("Watts"),
+        "sum by (id, vendor) (gpu_rail_power{rail=\"soc\"}) / 1000".to_string(),
+    );
+
+    let throttle = apu.subgroup("Throttling");
+    throttle.describe(
+        "The firmware's throttle status bitmask, nonzero while a limit is active. A limit \
+         shorter than the sampling interval can be missed. docs/metrics.md lists the bits.",
+    );
+    throttle.plot_promql(
+        Plot::gauge("Throttle Status", "throttle-status", Unit::Count),
+        "max by (id, vendor) (gpu_throttle_status)".to_string(),
+    );
+
+    view.group(apu);
 }
 
 /// AMD GPU hardware performance counters (the `gpu_amd_pmu` sampler) and the

@@ -112,6 +112,7 @@ per-process counterparts, for `cpu_usage` only, off by default
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
+  - [gpu_amd_sysfs](#gpu_amd_sysfs)
   - [gpu_apple](#gpu_apple)
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
@@ -1189,6 +1190,56 @@ had work queued, which does not mean its execution units were saturated. Pair
 busy time with frequency to distinguish "busy but downclocked" from genuinely
 saturated. EU-level detail requires the separate i915 perf/OA interface, and
 there is no VRAM bandwidth counter in this PMU.
+
+### gpu_amd_sysfs
+
+AMD APU telemetry from `/sys/class/drm/card*/device/gpu_metrics` and
+`pp_dpm_fclk`. It needs only the amdgpu driver, so it covers an APU host with
+no ROCm. amdgpu's `hwmon` voltages, power and edge temperature come from
+[hw_sensors](#hardware-sensors).
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `gpu_clock` | Clock speed in Hz; `fabric` is the current DPM level | `clock={graphics,compute,memory,soc,fabric}` |
+| `gpu_power_usage` | Socket power in milliwatts, including the CPU cores | |
+| `gpu_rail_power` | Rail power in milliwatts | `rail={vdd,soc}` |
+| `gpu_temperature` | Temperature in degrees Celsius | `sensor={graphics,soc}` |
+| `gpu_utilization` | Graphics engine busy percentage | |
+| `gpu_throttle_status` | The firmware's throttle status bitmask | |
+
+A GPU is read only if its `gpu_metrics` is format v2.1, the only format
+checked against a capture (a Radeon 780M, SMU 13.0.4). A discrete card, or an
+APU on a newer format, is left out. It is named in the unsupported reason when
+no card is kept, and at debug level otherwise. A GPU that is resetting when
+the agent starts is kept and read once the reset ends; one whose format then
+turns out not to be v2.1 logs one warning and stays unread, holding its id.
+A runtime-suspended GPU is left out. amdgpu suspends only discrete cards, which
+this sampler does not read.
+
+The sampler reports unsupported when `gpu_amd_smi` is enabled and ROCm SMI
+finds a GPU, because both number GPUs from 0 under `vendor="amd"` and every
+shared series would be doubled by a `sum by (id, vendor)`. Set
+`[samplers.gpu_amd_smi] enabled = false` to use this sampler on such a host.
+
+The clock, activity and power fields are named `average_*`, but the driver
+fills most of them from unfiltered firmware fields and the firmware's update
+period is not exposed, so a limit that lasts a moment can show as a small dip
+or not at all. `gpu_power_usage` is a 16-bit milliwatt field and cannot report
+above 65.5 W. `compute` and `graphics` are the same clock. `vdd` is the
+`average_gfx_power` field, which SMU 13.0.4 fills from the VDD rail, and it
+carries more than the graphics engine.
+
+`gpu_throttle_status` is published raw because its bits are defined per SMU
+firmware. On SMU 13.0.4 (`smu13_driver_if_v13_0_4.h`), bit 0 is SPL, 1 FPPT,
+2 SPPT, 3 SPPT_APU, 4 THM_CORE, 5 THM_GFX, 6 THM_SOC, 7 TDC_VDD, 8 TDC_SOC,
+9 PROCHOT_CPU, 10 PROCHOT_GFX, 11 EDC_CPU and 12 EDC_GFX.
+
+### Cadence
+
+This sampler reads on its own interval (`[samplers.gpu_amd_sysfs] interval`,
+default 1s), dispatched via `spawn_blocking`, and serves cached values in
+between. On a Radeon 780M a `gpu_metrics` read took about 0.3 ms, 2.3 ms at
+worst, and a `pp_dpm_fclk` read about 0.04 ms, 0.5 ms at worst.
 
 ### gpu_apple
 

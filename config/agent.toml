@@ -354,6 +354,15 @@ enabled = false
 # sampling period. Cached values are served between reads.
 # interval = "1s"
 
+# AMD APU clocks, power, temperature, utilization and throttle status from
+# amdgpu's sysfs files, for a host without ROCm. Reports unsupported when
+# gpu_amd_smi is enabled and ROCm SMI finds a GPU, because both would publish
+# the same series. See docs/metrics.md#gpu_amd_sysfs.
+[samplers.gpu_amd_sysfs]
+# Each read makes the driver fetch the firmware's metrics table, so reads run
+# on their own cadence. Cached values are served between reads.
+# interval = "1s"
+
 # Memory utilization from /proc/meminfo. On macOS, from the vm.* sysctls and
 # hw.memsize; see docs/metrics.md#memory_meminfo.
 [samplers.memory_meminfo]
