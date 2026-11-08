@@ -34,6 +34,12 @@
 
 ### Security
 
+- parquet and arrow 58.4.1 (thrift 0.23.0), zstd 0.13.4 and 0.14.3, and
+  zstd-safe 7.4.0 and 8.2.0, for RUSTSEC-2026-0435 (unbounded allocation in
+  thrift's binary protocol `read_bytes`), RUSTSEC-2026-0442 (arrow-data
+  RunEndEncoded validation), RUSTSEC-2026-0391, RUSTSEC-2026-0398 and
+  RUSTSEC-2026-0403 (zstd and zstd-safe). No `Cargo.toml` requirement
+  changes. In #1673.
 - The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx
   (CVE-2026-45249), an XSS in the Lines series tooltip. The viewer draws no
   Lines series, so it was not exposed. The charts set the drag-to-zoom
