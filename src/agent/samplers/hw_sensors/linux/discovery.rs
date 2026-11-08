@@ -281,9 +281,9 @@ fn discover_hwmon(sysfs: &Path, board: &Board, found: &mut Discovery) {
             }
         };
         // A read of an `nvme` or `drivetemp` hwmon channel sends the drive a
-        // command. drivehealth reads each drive's temperature (for NVMe, the
-        // Composite temperature) with its own command every 60s by default;
-        // NVMe's per-sensor temperatures (`temp2` and up) are not collected.
+        // command. drivehealth reads each drive's temperature with its own
+        // command, every 60s by default; for NVMe that is the Composite
+        // temperature and Temperature Sensors 1 to 8.
         if matches!(chip.as_str(), "nvme" | "drivetemp") {
             continue;
         }

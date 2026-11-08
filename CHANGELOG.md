@@ -22,8 +22,10 @@
   reads each drive's temperature at its own interval (it needs root). An
   `asusec` temperature channel reading -40 °C, the driver's value for an
   empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it
-  off, and an existing config that sets it keeps the sampler off. Backported
-  from 6.0 (#1527) in #1672.
+  off, and an existing config that sets it keeps the sampler off. A host
+  whose `/etc/rezolus/agent.toml` was edited keeps that file on a package
+  upgrade, with the old packaged `enabled = false`; remove that line to turn
+  the sampler on. Backported from 6.0 (#1527) in #1672.
 
 ### Security
 
