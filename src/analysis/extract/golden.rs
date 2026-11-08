@@ -471,6 +471,7 @@ mod tests {
         "filesystem",
         "gpu_amd_pmu",
         "gpu_amd_smi",
+        "gpu_amd_sysfs",
         "gpu_apple",
         "gpu_intel_pmu",
         "gpu_nvidia",

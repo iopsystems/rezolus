@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Added
+
+- An AMD APU sampler that needs no ROCm. `gpu_amd_sysfs` publishes
+  `gpu_clock`, including the SoC and data fabric clocks, `gpu_power_usage`,
+  `gpu_rail_power`, `gpu_temperature`, `gpu_utilization` and
+  `gpu_throttle_status` from amdgpu's `gpu_metrics` (format v2.1) and
+  `pp_dpm_fclk`, once a second by default. It reports unsupported when
+  `gpu_amd_smi` finds a GPU, because both would publish the same series. The
+  GPU section plots the SoC and fabric clocks, and a group shown only when
+  `gpu_rail_power` is recorded plots rail power and throttle status.
+  Backported from 6.0 (#1667) in #1669.
+
 ### Security
 
 - The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx

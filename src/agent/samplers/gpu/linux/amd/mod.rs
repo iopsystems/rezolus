@@ -3,14 +3,15 @@
 //! The library (`librocm_smi64.so`) is loaded at runtime with `dlopen` (see
 //! [`rocm_smi`]) rather than linked at build time, so the agent compiles on
 //! hosts without ROCm installed. On a host with no AMD GPU or no ROCm runtime
-//! the sampler gracefully returns `Ok(None)` at init time and reports as
-//! disabled (not failed).
+//! the sampler returns `Unsupported` at init time and reports as unsupported
+//! (not failed).
 
 const NAME: &str = "gpu_amd_smi";
 
-/// Maximum number of GPUs tracked by the AMD metric groups (both the SMI and PMU
-/// samplers). Shared so the two `stats.rs` files agree on one cap. GPUs with an
-/// index >= this are dropped by `CounterGroup`/`GaugeGroup` (logged once).
+/// Maximum number of GPUs tracked by the AMD metric groups (the SMI, PMU and
+/// sysfs samplers). Shared so the three `stats.rs` files agree on one cap. GPUs
+/// with an index >= this are dropped by `CounterGroup`/`GaugeGroup` (logged
+/// once).
 pub(crate) const MAX_GPUS: usize = 32;
 
 use crate::agent::*;
@@ -20,6 +21,7 @@ use tokio::sync::Mutex;
 mod pmu;
 mod rocm_smi;
 mod stats;
+mod sysfs;
 
 use rocm_smi::{ClockType, RocmSmi, TempSensor};
 use stats::*;
