@@ -70,14 +70,14 @@
   draws unstepped, which also draws a slow sampler's series on a line chart
   as a line instead of isolated points. Backported from 6.0 (#1546) in #1668.
 - A cgroup whose name holds a systemd `\xHH` escape, such as `\x2d`, can be
-  selected in the viewer. The picker put selected names into the query unescaped, so
-  systemd's `\x2d` (an escaped `-`) was consumed by the PromQL string and the
-  cgroup was neither shown on the individual side nor removed from the
-  aggregate. Names are now quoted for the PromQL string. A cgroup is offered
-  for selection when its name is letters, digits, `/ _ . : @ - = , ~ %` and
-  `\xHH` escapes; any other name is shown disabled with the reason, and a
-  link that selects one drops it with a console warning. Backported from 6.0
-  (#1547) in #1670.
+  selected in the viewer. The picker put selected names into the query
+  unescaped, so systemd's `\x2d` (an escaped `-`) was consumed by the PromQL
+  string and the cgroup was neither shown on the individual side nor removed
+  from the aggregate. Names are now quoted for the PromQL string. A cgroup is
+  offered for selection when its name is letters, digits,
+  `/ _ . : @ - = , ~ %` and `\xHH` escapes; any other name is shown disabled
+  with the reason, and a link that selects one drops it with a console
+  warning. Backported from 6.0 (#1547) in #1670.
 
 ## [5.29.2] - 2026-10-29
 
