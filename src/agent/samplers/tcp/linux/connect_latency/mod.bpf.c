@@ -21,7 +21,6 @@
 #define MAX_ENTRIES 10240
 #define AF_INET 2
 #define AF_INET6 10
-#define NO_EXIST 1
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -42,13 +41,21 @@ static __always_inline __u64 get_sock_ident(struct sock* sk) {
     return (__u64)sk;
 }
 
+// tcp_v4_connect and tcp_v6_connect are called only for a socket in CLOSE
+// (__inet_stream_connect, or mptcp_connect for the first subflow of an MPTCP
+// socket). A start time already in the map is stale and is replaced: it is
+// from an attempt that ended without a segment received in SYN_SENT, which
+// is what deletes it. Such an attempt failed before SYN_SENT, as one with no
+// route does, or timed out or was disconnected in SYN_SENT. tcp_v6_connect
+// calls tcp_v4_connect for a v4-mapped address, so such a connect is timed
+// from that inner call.
 static int trace_connect(struct sock* sk) {
     u64 sock_ident, ts;
 
     sock_ident = get_sock_ident(sk);
     ts = bpf_ktime_get_ns();
 
-    bpf_map_update_elem(&start, &sock_ident, &ts, NO_EXIST);
+    bpf_map_update_elem(&start, &sock_ident, &ts, BPF_ANY);
 
     return 0;
 }

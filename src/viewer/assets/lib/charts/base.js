@@ -163,7 +163,7 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
 
 // Plot-area top offset (pixels from the top of the Chart component
 // div to the top of the echarts grid). Chart modules that add a
-// legend above the plot (multi, scatter, line-overlay, heatmap,
+// legend above the plot (scatter, line-overlay, heatmap,
 // histogram_heatmap) push the grid down by this amount.
 //
 // Keep in sync with the .compare-slot-label / .compare-split-label
@@ -200,6 +200,9 @@ export function getBaseOption() {
                 color: COLORS.fgSecondary,
                 ...FONTS.axisLabel,
                 formatter: TIME_AXIS_FORMATTER,
+                // No label at the right edge: it would sit against the plot's
+                // edge whenever the window ends on a tick.
+                showMaxLabel: false,
                 // Drop colliding labels rather than overprinting them. During a
                 // zoom's intermediate merge echarts can briefly lay out every
                 // tick before it recomputes spacing; without this they overlap
@@ -253,6 +256,9 @@ export function getBaseOption() {
             feature: {
                 dataZoom: {
                     yAxisIndex: 'none',
+                    // A faint tint, so the series and the axis pointer show
+                    // through the selection while dragging.
+                    brushStyle: { color: 'rgba(210, 219, 238, 0.2)' },
                     icon: {
                         zoom: 'path://',
                         back: 'path://',
