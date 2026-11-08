@@ -30,6 +30,36 @@ export function insertGapNulls(zippedData, intervalSec) {
 }
 
 /**
+ * The gap interval and echarts `step` mode for one series, from its own point
+ * spacing. A series whose median positive step is at least 1.5 times the
+ * effective step (the interval, or a coarser Granularity override) is gapped
+ * at that median spacing and drawn unstepped; any other series keeps the
+ * interval and `step: 'start'`. The first case covers decimated buckets, such
+ * as a compare chart's baseline beside an experiment at the recording's
+ * interval, and also a native series that is sparser than the interval: a
+ * slow sampler (5 s readings in a 1 s recording) draws as a line between its
+ * readings, and a series missing every other row draws across those holes.
+ *
+ * @param {number[]} timeSec - point timestamps, seconds
+ * @param {number} intervalSec - the recording interval, seconds
+ * @returns {{ gapInterval: number, step: string|false }}
+ */
+export function seriesGapGeometry(timeSec, intervalSec) {
+    const steps = [];
+    for (let i = 1; i < (timeSec?.length || 0); i++) {
+        const d = timeSec[i] - timeSec[i - 1];
+        if (d > 0) steps.push(d);
+    }
+    steps.sort((a, b) => a - b);
+    const median = steps.length ? steps[Math.floor(steps.length / 2)] : 0;
+    const effective = Math.max(intervalSec || 0, getStepOverride() || 0);
+    if (effective > 0 && median >= effective * 1.5) {
+        return { gapInterval: median, step: false };
+    }
+    return { gapInterval: intervalSec, step: 'start' };
+}
+
+/**
  * Clamp a value to range bounds.
  * @param {number} v - the raw value
  * @param {{ min?: number, max?: number }} [range] - optional range bounds

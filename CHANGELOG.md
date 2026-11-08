@@ -12,6 +12,64 @@
   `gpu_rail_power` is recorded plots rail power and throttle status.
   Backported from 6.0 (#1667) in #1669.
 
+### Security
+
+- The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx
+  (CVE-2026-45249), an XSS in the Lines series tooltip. The viewer draws no
+  Lines series, so it was not exposed. The charts set the drag-to-zoom
+  selection colour and leave out the time axis's right-edge label, which
+  ECharts 6's defaults changed. What still differs: the "OOB" tick on
+  percentile charts takes the other tick labels' font, and a heatmap's first
+  or last column can end a pixel earlier. Backported from 6.0 (#1613) in
+  #1668.
+
+### Fixed
+
+- `ext4_alloc`, `ext4_journal` and `ext4_ops` start when the ext4 module
+  loads, and `xfs_log` when the xfs module loads. On a host whose root
+  filesystem is not ext4 (or not XFS), the module loads at the first mount of
+  that filesystem, which often comes after the agent has started at boot. The
+  ext4 samplers then failed to load with "Invalid argument (os error 22)" or
+  reported unsupported, `xfs_log` reported unsupported, and none was retried
+  until the agent restarted. A sampler whose module is not yet loaded now
+  reports unsupported with "waiting for kernel module ext4 to load", checks
+  every 5 s, and initialises once it loads. A kernel with no such module is
+  reported unsupported at once. Backported from 6.0 (#1441, #1442) in #1668.
+- `tcp_connect_latency` times a `connect()` retried after a failure before
+  `SYN_SENT`, such as one with no route, from the retry. It kept the failed
+  call's start time and timed the next `connect()` on the same socket from
+  it. Backported from 6.0 (#1645) in #1668.
+- NVMe health metrics carry an acquisition window on Linux. The
+  `drivehealth` sweep never acquired its NVMe acquisition group, so the
+  temperature-time and thermal-management counters published with no
+  window. A recording now holds one NVMe row per sweep instead of one per
+  tick, and `rate()` on these counters gets an uncertainty band. Backported
+  from 6.0 (#1553) in #1668.
+- The BPF counter, histogram and initial-value mmaps no longer close the map
+  fd that libbpf owns. Each wrapped the fd in a `File` and dropped it; they
+  now map through the borrowed fd. Backported from 6.0 (#1555) in #1668.
+- The macOS agent no longer leaks memory on every CPU sample. The
+  `cpu_usage` sampler never freed the array `host_processor_info` returns,
+  so each refresh leaked one page (16 KiB on Apple Silicon), about 1.4 GB a
+  day at one sample a second. `cpu_usage` on macOS is now one series per CPU
+  in each of `user` and `system`, labelled `id`, so the per-CPU charts draw
+  on a Mac. Niced time is counted as `user`, as on Linux, and the `nice`
+  state is gone. Backported from 6.0 (#1571) in #1668.
+- The cgroups section's aggregate charts leave out the selected cgroups. The
+  viewer removed their `name!~` exclusion before every query, so a cgroup
+  moved to the individual side was still counted on the left. Backported
+  from 6.0 (#1524) in #1668.
+- A per-entity line chart has no legend. A chart with one line per sensor,
+  mount or cgroup drew a legend that wrapped to as many rows as it had
+  series, over the plot and the time axis. The tooltip names every series at
+  the cursor. The compare-mode overlay keeps its two-entry legend.
+  Backported from 6.0 (#1545) in #1668.
+- A compare chart's decimated baseline draws an unbroken line, and a
+  decimated envelope breaks at a missing bucket. Each series is now gapped
+  and stepped by its own spacing; one spaced at least 1.5 times the interval
+  draws unstepped, which also draws a slow sampler's series on a line chart
+  as a line instead of isolated points. Backported from 6.0 (#1546) in #1668.
+
 ## [5.29.2] - 2026-10-29
 
 ### Security

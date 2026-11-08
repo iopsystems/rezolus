@@ -187,3 +187,55 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     view
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::dashboard::{build_dashboard_context, generate_section};
+
+    /// Path to the cross-language fixture, relative to this crate.
+    const FIXTURE: &str = "../../tests/fixtures/cgroup_queries.json";
+
+    /// Every query this section generates that carries the selection
+    /// placeholder. `tests/cgroup_pattern.test.mjs` substitutes a selection
+    /// into each one, so a new query shape here is covered there.
+    ///
+    /// `UPDATE_FIXTURES=1 cargo test -p dashboard cgroup_queries` rewrites it.
+    #[test]
+    fn cgroup_queries_fixture_matches_the_generator() {
+        let data = metriken_query::MemoryStore::builder().build();
+        let ctx = build_dashboard_context(None, &[], None, &[]);
+        let view = generate_section(&data, "/cgroups", &ctx).expect("cgroups section");
+        let json = serde_json::to_value(&view).unwrap();
+
+        let mut queries = Vec::new();
+        fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, out)),
+                serde_json::Value::Object(o) => {
+                    if let Some(q) = o.get("promql_query").and_then(|q| q.as_str()) {
+                        if q.contains("__SELECTED_CGROUPS__") {
+                            out.push(q.to_string());
+                        }
+                    }
+                    o.values().for_each(|v| walk(v, out));
+                }
+                _ => {}
+            }
+        }
+        walk(&json, &mut queries);
+        queries.sort();
+        queries.dedup();
+
+        let body = serde_json::to_string_pretty(&queries).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+        if std::env::var_os("UPDATE_FIXTURES").is_some() {
+            std::fs::write(&path, &body).unwrap();
+        }
+        let committed =
+            std::fs::read_to_string(&path).expect("fixture; regenerate with UPDATE_FIXTURES=1");
+        assert_eq!(
+            committed, body,
+            "regenerate with UPDATE_FIXTURES=1 if the change is deliberate"
+        );
+    }
+}
