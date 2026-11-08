@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 
 // #1523: selected cgroup names reach the engine inside a PromQL string.
 // promql-parser unquotes it (so a bare backslash escape is consumed) and
-// compiles it as a regex; metriken-storage then compares each `|`-separated
-// alternative with the name literally.
+// compiles it as a regex; metriken-query's `match_pattern` (labels.rs) then
+// compares each `|`-separated alternative with the name literally.
 
 globalThis.document = globalThis.document || { documentElement: { getAttribute: () => null } };
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));

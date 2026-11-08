@@ -12,8 +12,8 @@ import { discoverCgroups } from './cgroup_discovery.js';
 
 // Why a cgroup cannot be selected, or null when it can. A selection reaches
 // the query engine as a regex matcher, `name=~"a|b"`: promql-parser unquotes
-// the string and requires it to compile as a regex, then metriken-storage
-// `match_pattern` compares each `|`-separated alternative with the name
+// the string and requires it to compile as a regex, then metriken-query
+// `match_pattern` (labels.rs) compares each `|`-separated alternative with the name
 // literally, after turning `\.` into `.`. A name made of letters, digits,
 // `/ _ . : @ - = , ~ %` and `\xHH` escapes (systemd's escaped characters)
 // compiles and compares equal to itself; those characters cover systemd

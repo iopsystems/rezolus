@@ -676,7 +676,7 @@ const injectLabelRegex = (query, labelName, regexValue) =>
 // exclusion is removed, leaving the aggregate over every cgroup; other
 // matchers in the selector are kept. The pattern comes from the cgroup
 // selector's `cgroupPattern`, which quotes each name for the PromQL string and
-// leaves out names the engine cannot match.
+// leaves out names `cgroupUnselectableReason` rejects.
 const substituteCgroupPattern = (query, pattern) => {
     if (pattern) return query.replace(/__SELECTED_CGROUPS__/g, pattern);
     return query

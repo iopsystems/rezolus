@@ -69,8 +69,8 @@
   and stepped by its own spacing; one spaced at least 1.5 times the interval
   draws unstepped, which also draws a slow sampler's series on a line chart
   as a line instead of isolated points. Backported from 6.0 (#1546) in #1668.
-- A cgroup whose name holds a backslash or a quote can be selected in the
-  viewer. The picker put selected names into the query unescaped, so
+- A cgroup whose name holds a systemd `\xHH` escape, such as `\x2d`, can be
+  selected in the viewer. The picker put selected names into the query unescaped, so
   systemd's `\x2d` (an escaped `-`) was consumed by the PromQL string and the
   cgroup was neither shown on the individual side nor removed from the
   aggregate. Names are now quoted for the PromQL string. A cgroup is offered
