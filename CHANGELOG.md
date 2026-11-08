@@ -17,6 +17,21 @@
   on Linux and macOS. A sensor the controller does not implement has no
   value. Backported from 6.0 (#1549) in #1671.
 
+### Changed
+
+- `hw_sensors` is on by default. It follows `[defaults]` like other
+  samplers. On five hosts at the 5 second default it cost at most 0.08% of a
+  core; reads run on a blocking worker, not the scrape path. It no longer
+  reads ACPI `Processor` cooling devices, one per logical CPU, or `nvme` or
+  `drivetemp` hwmon chips, whose reads send the drive a command; `drivehealth`
+  reads each drive's temperature at its own interval (it needs root). An
+  `asusec` temperature channel reading -40 °C, the driver's value for an
+  empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it
+  off, and an existing config that sets it keeps the sampler off. A host
+  whose `/etc/rezolus/agent.toml` was edited keeps that file on a package
+  upgrade, with the old packaged `enabled = false`; remove that line to turn
+  the sampler on. Backported from 6.0 (#1527) in #1672.
+
 ### Security
 
 - The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx
