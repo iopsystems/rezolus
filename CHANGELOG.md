@@ -11,6 +11,11 @@
   GPU section plots the SoC and fabric clocks, and a group shown only when
   `gpu_rail_power` is recorded plots rail power and throttle status.
   Backported from 6.0 (#1667) in #1669.
+- `drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.
+  `drivehealth` decodes them from the SMART/Health log it already reads
+  (bytes 200 to 215), labelled `sensor={1..8}` and with the drive's labels,
+  on Linux and macOS. A sensor the controller does not implement has no
+  value. Backported from 6.0 (#1549) in #1671.
 
 ### Security
 
