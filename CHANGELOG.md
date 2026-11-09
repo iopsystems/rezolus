@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.30.0] - 2026-11-08
+
 ### Added
 
 - An AMD APU sampler that needs no ROCm. `gpu_amd_sysfs` publishes
@@ -7,10 +9,10 @@
   `gpu_rail_power`, `gpu_temperature`, `gpu_utilization` and
   `gpu_throttle_status` from amdgpu's `gpu_metrics` (format v2.1) and
   `pp_dpm_fclk`, once a second by default. It reports unsupported when
-  `gpu_amd_smi` finds a GPU, because both would publish the same series. The
-  GPU section plots the SoC and fabric clocks, and a group shown only when
-  `gpu_rail_power` is recorded plots rail power and throttle status.
-  Backported from 6.0 (#1667) in #1669.
+  `gpu_amd_smi` is enabled and ROCm SMI finds a GPU, because both would
+  publish the same series. The GPU section plots the SoC and fabric clocks,
+  and a group shown only when `gpu_rail_power` is recorded plots rail power
+  and throttle status. Backported from 6.0 (#1667) in #1669.
 - `drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.
   `drivehealth` decodes them from the SMART/Health log it already reads
   (bytes 200 to 215), labelled `sensor={1..8}` and with the drive's labels,
@@ -58,9 +60,10 @@
   ext4 samplers then failed to load with "Invalid argument (os error 22)" or
   reported unsupported, `xfs_log` reported unsupported, and none was retried
   until the agent restarted. A sampler whose module is not yet loaded now
-  reports unsupported with "waiting for kernel module ext4 to load", checks
-  every 5 s, and initialises once it loads. A kernel with no such module is
-  reported unsupported at once. Backported from 6.0 (#1441, #1442) in #1668.
+  reports unsupported with "waiting for kernel module ext4 to load; starts
+  when it does", checks every 5 s, and initialises once it loads. A kernel
+  with no such module is reported unsupported at once. Backported from 6.0
+  (#1441, #1442) in #1668.
 - `tcp_connect_latency` times a `connect()` retried after a failure before
   `SYN_SENT`, such as one with no route, from the retry. It kept the failed
   call's start time and timed the next `connect()` on the same socket from
@@ -2195,7 +2198,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.29.2...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.30.0...HEAD
+[5.30.0]: https://github.com/iopsystems/rezolus/compare/v5.29.2...v5.30.0
 [5.29.2]: https://github.com/iopsystems/rezolus/compare/v5.29.1...v5.29.2
 [5.29.1]: https://github.com/iopsystems/rezolus/compare/v5.29.0...v5.29.1
 [5.29.0]: https://github.com/iopsystems/rezolus/compare/v5.28.0...v5.29.0
