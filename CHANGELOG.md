@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.30.0] - 2026-11-08
+
 ### Added
 
 - An AMD APU sampler that needs no ROCm. `gpu_amd_sysfs` publishes
@@ -2195,7 +2197,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.29.2...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.30.0...HEAD
+[5.30.0]: https://github.com/iopsystems/rezolus/compare/v5.29.2...v5.30.0
 [5.29.2]: https://github.com/iopsystems/rezolus/compare/v5.29.1...v5.29.2
 [5.29.1]: https://github.com/iopsystems/rezolus/compare/v5.29.0...v5.29.1
 [5.29.0]: https://github.com/iopsystems/rezolus/compare/v5.28.0...v5.29.0
