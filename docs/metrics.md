@@ -112,6 +112,7 @@ per-process counterparts, for `cpu_usage` only, off by default
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
+  - [gpu_amd_sysfs](#gpu_amd_sysfs)
   - [gpu_apple](#gpu_apple)
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
@@ -125,6 +126,7 @@ per-process counterparts, for `cpu_usage` only, off by default
 - [Scheduler](#scheduler)
   - [scheduler](#scheduler-1)
 - [Hardware Sensors](#hardware-sensors)
+  - [thermal_pressure](#thermal_pressure)
 - [Syscall](#syscall)
   - [syscall](#syscall-1)
 - [TCP](#tcp)
@@ -1189,6 +1191,56 @@ busy time with frequency to distinguish "busy but downclocked" from genuinely
 saturated. EU-level detail requires the separate i915 perf/OA interface, and
 there is no VRAM bandwidth counter in this PMU.
 
+### gpu_amd_sysfs
+
+AMD APU telemetry from `/sys/class/drm/card*/device/gpu_metrics` and
+`pp_dpm_fclk`. It needs only the amdgpu driver, so it covers an APU host with
+no ROCm. amdgpu's `hwmon` voltages, power and edge temperature come from
+[hw_sensors](#hardware-sensors).
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `gpu_clock` | Clock speed in Hz; `fabric` is the current DPM level | `clock={graphics,compute,memory,soc,fabric}` |
+| `gpu_power_usage` | Socket power in milliwatts, including the CPU cores | |
+| `gpu_rail_power` | Rail power in milliwatts | `rail={vdd,soc}` |
+| `gpu_temperature` | Temperature in degrees Celsius | `sensor={graphics,soc}` |
+| `gpu_utilization` | Graphics engine busy percentage | |
+| `gpu_throttle_status` | The firmware's throttle status bitmask | |
+
+A GPU is read only if its `gpu_metrics` is format v2.1, the only format
+checked against a capture (a Radeon 780M, SMU 13.0.4). A discrete card, or an
+APU on a newer format, is left out. It is named in the unsupported reason when
+no card is kept, and at debug level otherwise. A GPU that is resetting when
+the agent starts is kept and read once the reset ends; one whose format then
+turns out not to be v2.1 logs one warning and stays unread, holding its id.
+A runtime-suspended GPU is left out. amdgpu suspends only discrete cards, which
+this sampler does not read.
+
+The sampler reports unsupported when `gpu_amd_smi` is enabled and ROCm SMI
+finds a GPU, because both number GPUs from 0 under `vendor="amd"` and every
+shared series would be doubled by a `sum by (id, vendor)`. Set
+`[samplers.gpu_amd_smi] enabled = false` to use this sampler on such a host.
+
+The clock, activity and power fields are named `average_*`, but the driver
+fills most of them from unfiltered firmware fields and the firmware's update
+period is not exposed, so a limit that lasts a moment can show as a small dip
+or not at all. `gpu_power_usage` is a 16-bit milliwatt field and cannot report
+above 65.5 W. `compute` and `graphics` are the same clock. `vdd` is the
+`average_gfx_power` field, which SMU 13.0.4 fills from the VDD rail, and it
+carries more than the graphics engine.
+
+`gpu_throttle_status` is published raw because its bits are defined per SMU
+firmware. On SMU 13.0.4 (`smu13_driver_if_v13_0_4.h`), bit 0 is SPL, 1 FPPT,
+2 SPPT, 3 SPPT_APU, 4 THM_CORE, 5 THM_GFX, 6 THM_SOC, 7 TDC_VDD, 8 TDC_SOC,
+9 PROCHOT_CPU, 10 PROCHOT_GFX, 11 EDC_CPU and 12 EDC_GFX.
+
+### Cadence
+
+This sampler reads on its own interval (`[samplers.gpu_amd_sysfs] interval`,
+default 1s), dispatched via `spawn_blocking`, and serves cached values in
+between. On a Radeon 780M a `gpu_metrics` read took about 0.3 ms, 2.3 ms at
+worst, and a `pp_dpm_fclk` read about 0.04 ms, 0.5 ms at worst.
+
 ### gpu_apple
 
 Produces the Apple silicon GPU's utilization, clock and power from IOReport,
@@ -1910,6 +1962,50 @@ back-to-back sweeps of the 78 sensors, `system` and `battery` included, took
 33.0 ms at the median and 35.8 ms at most. Each SMC read takes about 165 µs
 and each HID temperature read about 1 ms, nearly all of it waiting rather
 than on CPU.
+
+### thermal_pressure
+
+macOS only. `thermal_pressure` is the thermal pressure level the operating
+system reports to applications, from the `notify(3)` state of
+`com.apple.system.thermalpressurelevel`. It needs no root. Each refresh calls
+`notify_check`, a shared-memory check (16 to 50 ns on an M4 Max, varying with
+the machine's load), and calls `notify_get_state` (10 to 34 µs) only when
+`notify_check` reports a post, at startup, or after a failed check or read.
+Over 1,200 one-second reads on an M4 Max, `notify_check` reported each of the
+level's two rises and two falls. The levels are those of
+`OSThermalPressureLevel` in `<libkern/OSThermalNotification.h>`:
+
+| Value | Level |
+| --- | --- |
+| 0 | nominal |
+| 1 | moderate |
+| 2 | heavy |
+| 3 | trapping |
+| 4 | sleeping |
+
+The level is the operating system's classification, not a measure of
+throttling. Use `cpu_frequency` to see whether the CPU ran slower. On an
+M4 Max with every CPU busy and a compute kernel on the GPU, read once a
+second:
+
+- Starting from cold, the level rose from 0 to 1 after 115 seconds of load
+  in one run and 132 seconds in another, and to 2 two seconds later. In two
+  later runs, started while the Mac was still warm, it reached 1 after 38 and
+  51 seconds and 2 about 35 seconds after that. In the second run the fans
+  averaged about 5,550 RPM when the level reached 2.
+- In the second run, at level 0 under load, the performance cores'
+  10-second medians were 4.47 to 4.51 GHz, except from 40 to 70 seconds into
+  the load, when they were 3.50, 3.67 and 4.27 GHz. For the first minute at
+  level 2 they were between 3.85 and 4.51 GHz, and after that between 2.75
+  and 3.2 GHz. The efficiency cores ran at 2.59 GHz throughout.
+- The level went back to 1 while the load continued (after 249 seconds of
+  load in the first run, 242 in the second), and in the second run to 0 after
+  301 seconds. In the last 20 seconds of that run's load, at level 0, the
+  performance cores' 10-second medians were 2.64 and 3.26 GHz.
+
+`NSProcessInfo.thermalState` read 1 (fair) at both level 1 and level 2. The
+sampler has not been run on an Intel Mac or on Apple silicon other than the
+M4 Max, and levels 3 and 4 have not been seen.
 
 ## Syscall
 

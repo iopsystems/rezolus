@@ -469,6 +469,28 @@
               ]
             }
           ]
+        },
+        {
+          "when": {
+            "present": "thermal_pressure"
+          },
+          "then": [
+            {
+              "name": "Thermal Pressure",
+              "description": "The thermal pressure level macOS reports to applications: 0 nominal, 1 moderate, 2 heavy, 3 trapping, 4 sleeping. It is not a measure of throttling; CPU frequency shows that.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Thermal Pressure",
+                  "id": "thermal-pressure",
+                  "unit": "count",
+                  "axis_label": "Level",
+                  "query": "max(thermal_pressure)",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
         }
       ]
     }

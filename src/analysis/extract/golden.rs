@@ -482,6 +482,7 @@ mod tests {
         "filesystem",
         "gpu_amd_pmu",
         "gpu_amd_smi",
+        "gpu_amd_sysfs",
         "gpu_apple",
         "gpu_intel_pmu",
         "gpu_nvidia",
@@ -501,6 +502,7 @@ mod tests {
         "tcp_packet_latency",
         "tcp_receive",
         "tcp_retransmit",
+        "thermal_pressure",
         "xfs_log",
         "xfs_stats"
       ]

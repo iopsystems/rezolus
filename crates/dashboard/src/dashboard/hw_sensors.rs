@@ -117,6 +117,20 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
     }
 
+    if has_metric(data, "thermal_pressure") {
+        let pressure = sensors.subgroup("Thermal Pressure");
+        pressure.describe(
+            "The thermal pressure level macOS reports to applications: 0 nominal, 1 moderate, \
+             2 heavy, 3 trapping, 4 sleeping. It is not a measure of throttling; CPU frequency \
+             shows that.",
+        );
+        pressure.plot_promql_full(
+            Plot::gauge("Thermal Pressure", "thermal-pressure", Unit::Count)
+                .with_axis_label("Level"),
+            "max(thermal_pressure)".to_string(),
+        );
+    }
+
     if !sensors.is_empty() {
         view.group(sensors);
     }
