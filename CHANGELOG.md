@@ -26,9 +26,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   `gpu_rail_power`, `gpu_temperature`, `gpu_utilization` and
   `gpu_throttle_status` from amdgpu's `gpu_metrics` (format v2.1) and
   `pp_dpm_fclk`, once a second by default. It reports unsupported when
-  `gpu_amd_smi` finds a GPU, because both would publish the same series. The
-  GPU dashboard plots the SoC and fabric clocks, and a section shown only when
-  `gpu_rail_power` is recorded plots rail power and throttle status.
+  `gpu_amd_smi` is enabled and ROCm SMI finds a GPU, because both would
+  publish the same series. The GPU dashboard plots the SoC and fabric clocks,
+  and a section shown only when `gpu_rail_power` is recorded plots rail power
+  and throttle status.
 
 - **The cgroups section in an A/B comparison.** The section was hidden in
   compare mode; it is now listed, and its selector lists the cgroups of every

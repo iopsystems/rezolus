@@ -114,7 +114,8 @@ fn enumerate_in(sys_block: &Path, sys_nvme: &Path, dev: &Path) -> Vec<Drive> {
 }
 
 /// One drive's decoded reading. Every drive reports `temperature_c`; NVMe drives
-/// additionally carry thermal-throttle counters from the same log-page read.
+/// additionally carry thermal-throttle counters and Temperature Sensors 1 to 8
+/// from the same log-page read.
 ///
 /// No per-drive acquisition window: the whole sweep (this function's caller,
 /// `read_all`, plus the per-drive `set()` loop that follows it in
