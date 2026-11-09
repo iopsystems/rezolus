@@ -258,7 +258,9 @@ pub static DRIVE_INSTANCE_STORE_EXCEEDED_TP: CounterGroup = CounterGroup::new(MA
 )]
 pub static DRIVE_INSTANCE_STORE_QUEUE_LENGTH: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
-#[cfg(test)]
+// Linux and macOS only: elsewhere this file is included without a sampler, so
+// there is no `NVME_IDENTITY`.
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
 

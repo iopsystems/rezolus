@@ -560,8 +560,9 @@ drive via **read-only pass-through ioctls** — the same mechanism `smartctl` an
 `hddtemp` use, with **no kernel module** (temperature has no BPF or perf hook;
 this is the deliberate device-read exception in `docs/principles.md`). SATA uses
 `SG_IO` ATA PASS-THROUGH (`SMART READ DATA`, attribute 194); NVMe uses the admin
-Get Log Page 0x02 (Composite Temperature). Drives are enumerated once at startup
-from `/sys/block` and `/sys/class/nvme`.
+Get Log Page 0x02 (Composite Temperature, Temperature Sensors 1 to 8, and the
+thermal-throttle counters below). Drives are enumerated once at startup from
+`/sys/block` and `/sys/class/nvme`.
 
 On macOS the sampler reads NVMe drives only, through IOKit's NVMe SMART user
 client (Get Log Page 0x02, unprivileged), from the block storage devices whose
