@@ -300,6 +300,13 @@ const createMetadataView = () => {
     };
 };
 
+// The query the cgroup selector discovers cgroups with. In a comparison it
+// is `queryEveryCapture` over every capture, with the selected node applied
+// to each, so the selector lists a cgroup any capture recorded; otherwise it
+// is the baseline's query.
+const cgroupDiscoverQuery = ({ compare, baselineQuery, scopedQuery, withNode, queryEveryCapture }) =>
+    (compare ? (query) => queryEveryCapture(withNode(query), scopedQuery) : baselineQuery);
+
 const renderCgroupSection = ({
     attrs,
     titleText,
@@ -414,4 +421,4 @@ const renderCgroupSection = ({
     ]);
 };
 
-export { createSystemInfoView, createMetadataView, renderCgroupSection, collectServiceQueries };
+export { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscoverQuery, collectServiceQueries };

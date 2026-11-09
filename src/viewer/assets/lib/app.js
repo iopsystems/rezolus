@@ -18,7 +18,7 @@ setDisplayMode(true);
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor, setFamily } from './selection/selection.js';
 import { SaveModal, notify } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
-import { createSystemInfoView, createMetadataView, renderCgroupSection } from './sections/section_views.js';
+import { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscoverQuery } from './sections/section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { readViewState, writeViewState, clearViewState } from './ui/url_state.js';
@@ -1189,12 +1189,11 @@ const SectionContent = {
                 Chart: ChartView,
                 CgroupSelector,
                 executePromQLRangeQuery: baselineQuery,
-                // A comparison lists the cgroups of every capture.
                 // The selected node filters every capture, as it does the
                 // compare charts (`buildEffectiveQuery`).
-                discoverQuery: sectionCompare
-                    ? (query) => queryEveryCapture(withNode(query), scopedQuery)
-                    : baselineQuery,
+                discoverQuery: cgroupDiscoverQuery({
+                    compare: sectionCompare, baselineQuery, scopedQuery, withNode, queryEveryCapture,
+                }),
                 compare: sectionCompare,
                 Group,
                 applyResultToPlot,

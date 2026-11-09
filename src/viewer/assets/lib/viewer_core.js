@@ -569,9 +569,9 @@ const fetchExtraCaptures = (vnode) => {
 // `query` run on every capture of a comparison: on the baseline through
 // `baselineQuery` (which applies the section's scope), on each other capture
 // over its own range. The answer holds every capture's series, so
-// the cgroup selector lists a cgroup any capture recorded. The baseline's
-// failure rejects, as the baseline's query alone did; another capture whose
-// query fails, or that has no usable range, adds nothing.
+// the cgroup selector lists a cgroup any capture recorded. A rejection of
+// the baseline's query rejects the whole call; another capture whose query
+// fails, or that has no usable range, adds nothing.
 export const queryEveryCapture = async (query, baselineQuery, {
     listCaptures: list = listCaptures,
     captureMetadata: metadata = captureMetadata,
@@ -614,16 +614,16 @@ export const CompareChartWrapper = {
 
     view(vnode) {
         // Fetch again when what was fetched no longer matches the view: the
-        // experiment's query (a cgroup, node or GPU selection, or a refresh
-        // that replaced the plot), the step (the granularity selector), or
-        // the experiment's range (a followed archive grew). oninit runs once
+        // experiment's query (a cgroup, node or GPU selection), the step (the
+        // granularity selector), or the experiment's range (a followed
+        // archive grew). oninit runs once
         // per component, so without these checks the first result would
         // stay on screen.
         if (!vnode.state._fetchInFlight && vnode.state._fetchedQuery !== undefined
             && experimentQueryKey(vnode.attrs) !== vnode.state._fetchedQuery) {
-            // The query changed under this component (a cgroup selection,
-            // or a refresh that replaced the plot): what was fetched, or the
-            // error it gave, belongs to the old query.
+            // The query changed under this component (a cgroup, node or GPU
+            // selection): what was fetched, or the error it gave, belongs to
+            // the old query.
             vnode.state.error = null;
             vnode.state.experimentResult = null;
             vnode.state.extraCaptures = [];

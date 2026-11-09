@@ -214,3 +214,60 @@ test('a histogram chart does not fetch again while a refresh fetches the metadat
         globalThis.m.request = savedRequest;
     }
 });
+
+const { renderCgroupSection, cgroupDiscoverQuery } = await import('../src/viewer/assets/lib/sections/section_views.js');
+
+const cgroupSectionAttrs = () => ({
+    section: { route: '/cgroups' },
+    groups: [
+        { metadata: { side: 'left' }, plots: [plot(AGGREGATE)] },
+        { metadata: { side: 'right' }, plots: [plot(INDIVIDUAL)] },
+    ],
+});
+const renderCgroups = (extra) => renderCgroupSection({
+    attrs: cgroupSectionAttrs(),
+    titleText: 'Cgroups',
+    interval: 1,
+    chartsState: {},
+    Chart: 'Chart',
+    CgroupSelector: 'CgroupSelector',
+    executePromQLRangeQuery: () => null,
+    applyResultToPlot: () => {},
+    substituteCgroupPattern: (q) => q,
+    setActiveCgroupPattern: () => {},
+    globalColorMapper: { getColorByName: () => '#000' },
+    ...extra,
+});
+
+test('in compare mode each cgroup pair renders as a Group with both plots', () => {
+    const Group = 'Group';
+    const discoverQuery = () => null;
+    const [, selector, pairs] = renderCgroups({ compare: true, Group, discoverQuery }).children;
+    assert.equal(selector.attrs.discoverQuery, discoverQuery, 'the selector discovers with the query passed in');
+    assert.ok(Array.isArray(pairs) && pairs.length === 1, 'one Group per pair');
+    assert.equal(pairs[0].tag, Group);
+    assert.deepEqual(
+        pairs[0].attrs.subgroups.map((s) => [s.name, s.plots.map((p) => p.promql_query)]),
+        [['Aggregate', [AGGREGATE]], ['Individual', [INDIVIDUAL]]],
+    );
+});
+
+test('outside compare mode the cgroup pairs render side by side, not as Groups', () => {
+    const [, , pairs] = renderCgroups({ compare: false, Group: 'Group' }).children;
+    assert.equal(pairs.tag, 'div.cgroup-pairs');
+});
+
+test('a comparison discovers cgroups on every capture, with the node applied', async () => {
+    const calls = [];
+    const baselineQuery = (q) => { calls.push(['baseline', q]); return 'b'; };
+    const scopedQuery = (q) => { calls.push(['scoped', q]); return 's'; };
+    const withNode = (q) => `${q}+node`;
+    const queryEveryCapture = async (q, base) => { calls.push(['every', q]); return base(q); };
+    const args = { baselineQuery, scopedQuery, withNode, queryEveryCapture };
+
+    assert.equal(cgroupDiscoverQuery({ ...args, compare: false }), baselineQuery);
+
+    const discover = cgroupDiscoverQuery({ ...args, compare: true });
+    assert.equal(await discover('q'), 's');
+    assert.deepEqual(calls, [['every', 'q+node'], ['scoped', 'q+node']]);
+});
