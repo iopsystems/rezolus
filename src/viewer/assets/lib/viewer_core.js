@@ -567,11 +567,13 @@ const fetchExtraCaptures = (vnode) => {
 };
 
 // `query` run on every capture of a comparison: on the baseline through
-// `baselineQuery` (which applies the section's scope), on each other capture
-// over its own range. The answer holds every capture's series, so
-// the cgroup selector lists a cgroup any capture recorded. A rejection of
-// the baseline's query rejects the whole call; another capture whose query
-// fails, or that has no usable range, adds nothing.
+// `baselineQuery`, on each other capture over its own range. `baselineQuery`
+// applies only the section's scope; anything else `query` needs, such as the
+// selected node, is already in it, since every capture runs the same string.
+// The answer holds every capture's series, so the cgroup selector lists a
+// cgroup any capture recorded. A rejection of the baseline's query rejects
+// the whole call; another capture whose query fails, or that has no usable
+// range, adds nothing.
 export const queryEveryCapture = async (query, baselineQuery, {
     listCaptures: list = listCaptures,
     captureMetadata: metadata = captureMetadata,
@@ -616,9 +618,8 @@ export const CompareChartWrapper = {
         // Fetch again when what was fetched no longer matches the view: the
         // experiment's query (a cgroup, node or GPU selection), the step (the
         // granularity selector), or the experiment's range (a followed
-        // archive grew). oninit runs once
-        // per component, so without these checks the first result would
-        // stay on screen.
+        // archive grew). oninit runs once per component, so without these
+        // checks the first result would stay on screen.
         if (!vnode.state._fetchInFlight && vnode.state._fetchedQuery !== undefined
             && experimentQueryKey(vnode.attrs) !== vnode.state._fetchedQuery) {
             // The query changed under this component (a cgroup, node or GPU
