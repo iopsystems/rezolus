@@ -1,9 +1,9 @@
 //! NVMe temperature via `NVME_IOCTL_ADMIN_CMD` — Get Log Page 0x02 (SMART /
 //! Health Information), the module-free path (the `nvme` driver is already bound
 //! to the device). We issue the read-only Get Log Page admin command and decode
-//! the Composite Temperature plus the monotonic thermal-throttle counters
-//! (Warning/Critical Composite Temperature Time, host thermal-management
-//! transitions/time). The remaining SMART-log health (wear/spare/errors) is a
+//! the Composite Temperature, Temperature Sensors 1 to 8 and the monotonic
+//! thermal-throttle counters (Warning/Critical Composite Temperature Time, host
+//! thermal-management transitions/time). The remaining SMART-log health (wear/spare/errors) is a
 //! later phase off the same read. On an Amazon EBS or instance store device
 //! the same open also reads the EC2 statistics page 0xD0 ([`super::ec2`]).
 //!
@@ -57,7 +57,7 @@ struct NvmePassthruCmd {
 const EC2_STATS_NSID: u32 = 1;
 
 /// Issue Get Log Page 0x02 to the NVMe controller at `dev` (e.g. `/dev/nvme0`)
-/// and return its decoded health (temperature + thermal-throttle counters), and
+/// and return its decoded health (temperatures and thermal-throttle counters), and
 /// for an EC2 device (`ec2`) the EC2 statistics page 0xD0 as well. Each is
 /// `None` when its read or decode fails. One open serves both reads.
 pub fn read_health(dev: &Path, ec2: Option<Ec2Storage>) -> (Option<NvmeHealth>, Option<Ec2Stats>) {

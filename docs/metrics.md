@@ -1798,8 +1798,8 @@ background worker time on every sweep, not the scrape path. `nvme` and
 `drivetemp` hwmon chips and ACPI `Processor` cooling devices (one per logical
 CPU) are not read. Each drive hwmon read sends the drive a command, and
 `drivehealth` reads each drive's temperature at its own interval; for NVMe that
-is the Composite temperature, and the per-sensor temperatures the `nvme` hwmon
-chip also exposes are not collected. `drivehealth` needs root to open the drive
+is the Composite temperature and Temperature Sensors 1 to 8
+(`drive_temperature_sensor`). `drivehealth` needs root to open the drive
 devices, so an agent that does not run as root has no drive temperatures. A
 family holds at most 256 sensor identities; a host with more temperature
 channels than that, such as `coretemp` on a 256-core part, logs a warning and
