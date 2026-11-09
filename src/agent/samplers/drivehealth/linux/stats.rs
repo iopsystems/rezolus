@@ -41,16 +41,14 @@ pub static DRIVEHEALTH_SWEEP_ACQ: AcquisitionGroup =
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static DRIVEHEALTH_SWEEP_ACQ_REG: &'static AcquisitionGroup = &DRIVEHEALTH_SWEEP_ACQ;
 
-/// The NVMe-only thermal counters, which are a different population from the
-/// temperature gauge beside them.
+/// The NVMe-only metrics from the SMART/Health log: the thermal counters and
+/// Temperature Sensors 1 to 8.
 ///
-/// They were in `drivehealth_sweep` and labeled only for NVMe drives, so a SATA
-/// drive's slot carried labels on the temperature gauge and none on these —
-/// one slot meaning two things inside one group. That is exactly what a slot
-/// index cannot express, and what
-/// `a_groups_metrics_agree_on_slot_order_and_on_what_each_slot_means` pins for
-/// every other group. Splitting them says what was already true: these
-/// describe NVMe drives, and the gauge describes all of them.
+/// `drive_temperature` in `drivehealth_sweep` describes every drive, and these
+/// describe NVMe drives only, so they are a separate group: in one group a
+/// SATA drive's slot would carry labels on the gauge and none on these, and a
+/// slot must mean one thing across a group
+/// (`a_groups_metrics_agree_on_slot_order_and_on_what_each_slot_means`).
 pub static DRIVEHEALTH_NVME_ACQ: AcquisitionGroup =
     AcquisitionGroup::new(GROUP_SAMPLER, "drivehealth_nvme");
 
@@ -259,3 +257,51 @@ pub static DRIVE_INSTANCE_STORE_EXCEEDED_TP: CounterGroup = CounterGroup::new(MA
     metadata = { storage = "instance_store", unit = "operations", acq_group = "drivehealth_instance_store" }
 )]
 pub static DRIVE_INSTANCE_STORE_QUEUE_LENGTH: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
+
+// Linux and macOS only: elsewhere this file is included without a sampler, so
+// there is no `NVME_IDENTITY`.
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    /// Every metric in `drivehealth_nvme` is in the sampler's `NVME_GROUPS`,
+    /// so the labels discovery assigns to a drive reach each of them. A metric
+    /// tagged with the group but missing from that list publishes its slots
+    /// with no `device`, `model` or `serial`.
+    #[test]
+    fn every_drivehealth_nvme_metric_gets_the_drive_labels() {
+        // The last slot, which no other test assigns.
+        let slot = MAX_DRIVES - 1;
+        let labels = [("device".to_string(), "nvme-label-probe".to_string())].into();
+        super::super::NVME_IDENTITY.assign(slot, labels);
+
+        let mut checked = Vec::new();
+        for metric in metriken::metrics().iter() {
+            if metric.metadata().get("acq_group") != Some("drivehealth_nvme") {
+                continue;
+            }
+            let metadata = match metric.value() {
+                Some(Value::CounterGroup(g)) => g.load_metadata(slot),
+                Some(Value::GaugeGroup(g)) => g.load_metadata(slot),
+                _ => panic!("`{}` is not a counter or gauge group", metric.name()),
+            };
+            let name = match metric.metadata().get("sensor") {
+                Some(sensor) => format!("{} sensor={sensor}", metric.name()),
+                None => metric.name().to_string(),
+            };
+            assert_eq!(
+                metadata
+                    .as_ref()
+                    .and_then(|m| m.get("device"))
+                    .map(String::as_str),
+                Some("nvme-label-probe"),
+                "`{name}` did not get the drive's labels; add it to NVME_GROUPS"
+            );
+            checked.push(name);
+        }
+        super::super::NVME_IDENTITY.release(slot);
+
+        // 6 thermal counters and Temperature Sensors 1 to 8.
+        assert_eq!(checked.len(), 14, "{checked:?}");
+    }
+}
