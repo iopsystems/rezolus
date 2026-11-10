@@ -10,6 +10,11 @@
 //! is `+Inf`, with the band `(highest finite bound, +Inf)`. The query JSON
 //! writes it as the string "+Inf", where serde_json wrote `null`.
 //!
+//! metriken-recorder 0.12 stores a `_seconds` histogram's family in
+//! nanoseconds under the name with `seconds` replaced by `nanoseconds`, so
+//! the histogram is `request_duration_nanoseconds` and its overflow
+//! `request_duration_nanoseconds_overflow`; the queries name it so.
+//!
 //! Each scrape adds 9 observations at or below 0.1 s and 1 above 1 s, the
 //! highest finite bucket. Over each row-to-row delta (F 9, O 1) the 0.99
 //! quantile's rank is ceil(0.99 * 10) = 10 > 9, so it is +Inf, and the 0.5
@@ -22,8 +27,8 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-const P99: &str = "histogram_quantile(0.99, request_duration_seconds)";
-const P50: &str = "histogram_quantile(0.5, request_duration_seconds)";
+const P99: &str = "histogram_quantile(0.99, request_duration_nanoseconds)";
+const P50: &str = "histogram_quantile(0.5, request_duration_nanoseconds)";
 
 /// The highest finite bucket, 1 s, in the stored unit (nanoseconds).
 const TOP_BOUND: f64 = 1e9;
@@ -191,15 +196,15 @@ fn the_overflow_reads_back_through_mcp() {
     assert_eq!(
         counters,
         [
-            "request_duration_seconds_count",
-            "request_duration_seconds_overflow",
-            "request_duration_seconds_sum",
+            "request_duration_nanoseconds_count",
+            "request_duration_nanoseconds_overflow",
+            "request_duration_nanoseconds_sum",
         ],
         "{described}"
     );
     assert_eq!(
         section(&described, "HISTOGRAMS"),
-        ["request_duration_seconds"],
+        ["request_duration_nanoseconds"],
         "{described}"
     );
 
@@ -352,7 +357,7 @@ fn catalog(body: &serde_json::Value) -> std::collections::BTreeMap<String, Strin
 fn the_overflow_reads_back_through_both_viewers() {
     let output = recording();
     let overflow = (
-        "request_duration_seconds_overflow".to_string(),
+        "request_duration_nanoseconds_overflow".to_string(),
         "counter".to_string(),
     );
 

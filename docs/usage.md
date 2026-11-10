@@ -138,6 +138,23 @@ are streamed (5.21.0 or later) and Prometheus endpoints scraped, and one archive
 can hold both; a Prometheus scrape gets an acquisition window spanning the HTTP
 request and response. See [Streaming and scraping](#streaming-and-scraping).
 
+A Prometheus series whose name ends in a time or size unit (`_seconds`,
+`_ms`, `_us`, `_bytes`, `_kib`, `_bits` and the rest of metriken-recorder's
+list, before any `_bucket`, `_sum`, `_count` or `_total`), or whose metric's
+OpenMetrics `# UNIT` line names one, is stored in nanoseconds or bytes under its
+name with that unit replaced: `rpc_seconds_sum` as `rpc_nanoseconds_sum`,
+`rx_bits_total` as `rx_bytes_total` (divided by 8). The exporter's name is
+kept in the label `__prometheus_name__`, which listings and legends leave
+out. A query naming the exporter's name reads the stored series, in the
+stored unit and under the stored name, when the recording holds no series of
+that name. When two exporter names would be stored under one name
+(`rpc_seconds` and `rpc_ms`), both keep their own names and units. Earlier
+recorders wrote the exporter's names and units, except that a `_seconds`
+histogram's buckets were already in nanoseconds. A histogram whose smallest
+bucket bound is below 1 has its bounds multiplied by a power of 10, by
+earlier recorders too; the recorder now writes that factor as the `scale`
+key.
+
 With no `-o` the recording goes to `rezolus.dendro`. The output path must end in
 `.dendro`. rezolus 6.x writes no other format: an output ending in `.rez`,
 `.parquet` or `.raw` (or in anything else), a `--format` other than `dendro`,
@@ -732,9 +749,10 @@ embeds, so the recording carries what it is judged against. A complete file:
     {
       "role": "latency",
       "title": "p99 request latency",
-      "query": "request_latency_seconds",
+      "query": "request_latency_nanoseconds",
       "type": "histogram",
-      "check": {"above": 0.25, "quantile": 0.99, "for": "10s", "severity": "fail"}
+      "unit_system": "time",
+      "check": {"above": 250000000, "quantile": 0.99, "for": "10s", "severity": "fail"}
     },
     {
       "role": "throughput",
@@ -778,8 +796,14 @@ are optional. A KPI without `check` is a chart only. `unit_system` is one of
 The check:
 
 - Exactly one of `above` / `below` is the threshold, compared in the query's
-  own unit (seconds for the histogram above, requests per second for the
+  own unit (nanoseconds for the histogram above, requests per second for the
   rate). The comparison is strict: a value equal to the threshold passes.
+  The recorder stores a Prometheus series whose name ends in a time or size
+  unit in nanoseconds or bytes, under the name with that unit replaced: an
+  exporter's `request_latency_seconds` histogram is
+  `request_latency_nanoseconds`, so 0.25 s is `250000000`. A query naming
+  `request_latency_seconds` reads the same series, in nanoseconds, while
+  the recording has no series of that name.
 - `for` is the shortest run that counts (default `0s`, so one point is
   enough). Accepted forms: `500ms`, `10s`, `1m30s`, `2h`, `1d`, `1.5s`, or a
   bare number of seconds.
@@ -797,7 +821,7 @@ one line per check followed by a summary:
 
 ```
 PASS          Queue depth low  above 10
-FAIL          p99 request latency  p99 above 0.25 for 10s  [2026-09-28T14:03:11Z..2026-09-28T14:03:41Z, 3 windows]
+FAIL          p99 request latency  p99 above 250000000 for 10s  [2026-09-28T14:03:11Z..2026-09-28T14:03:41Z, 3 windows]
 2 checks: 1 passed, 1 failed, 0 warned, 0 indeterminate, 0 errors
 ```
 

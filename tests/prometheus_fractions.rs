@@ -16,6 +16,11 @@
 //! is its increase per scrape over 1, 0.5 exactly. Stored as integers, its
 //! values 0.75, 1.25, 1.75, ... would read 0, 1, 1, 2, ... and the ratio
 //! would alternate between 0 and 1.
+//!
+//! The fixture's names carry no unit token: metriken-recorder 0.12 renames
+//! and scales a series whose name ends in one (`_seconds`, `_bytes`, ...),
+//! which `tests/prometheus_units.rs` covers. These test that a value is
+//! stored as served.
 
 #![cfg(unix)]
 
@@ -33,13 +38,13 @@ fn counter_at(tick: u64) -> f64 {
     tick as f64 * 0.5 + 0.25
 }
 
-/// `busy_seconds_total`'s increase per scrape over `requests_total`'s.
+/// `work_done_total`'s increase per scrape over `requests_total`'s.
 const RATIO: f64 = 0.5;
 
 /// The query for [`RATIO`].
-const RATIO_QUERY: &str = "sum(irate(busy_seconds_total[1s])) / sum(irate(requests_total[1s]))";
+const RATIO_QUERY: &str = "sum(irate(work_done_total[1s])) / sum(irate(requests_total[1s]))";
 
-/// A stand-in Prometheus exporter serving the counter `busy_seconds_total`
+/// A stand-in Prometheus exporter serving the counter `work_done_total`
 /// ([`counter_at`]), the counter `requests_total` (the request count) and
 /// the gauge `load_fraction` ([`GAUGE`]).
 fn spawn_exporter() -> u16 {
@@ -55,9 +60,9 @@ fn spawn_exporter() -> u16 {
             }
             tick += 1;
             let body = format!(
-                "# HELP busy_seconds_total Seconds spent busy.\n\
-                 # TYPE busy_seconds_total counter\n\
-                 busy_seconds_total {}\n\
+                "# HELP work_done_total Units of work done.\n\
+                 # TYPE work_done_total counter\n\
+                 work_done_total {}\n\
                  # TYPE requests_total counter\n\
                  requests_total {tick}\n\
                  # TYPE load_fraction gauge\n\
@@ -170,7 +175,7 @@ fn a_prometheus_endpoints_fractions_read_back_through_mcp() {
     let gauges = section(&described, "GAUGES");
     assert_eq!(
         counters,
-        ["busy_seconds_total", "requests_total"],
+        ["requests_total", "work_done_total"],
         "{described}"
     );
     assert_eq!(gauges, ["load_fraction"], "{described}");
@@ -197,9 +202,9 @@ fn a_prometheus_endpoints_fractions_read_back_through_mcp() {
 
     // A bare metric name given to detect-anomalies is wrapped by its kind:
     // the float counter in irate(), the float gauge as is.
-    let anomalies = mcp(&["detect-anomalies", file, "busy_seconds_total"]);
+    let anomalies = mcp(&["detect-anomalies", file, "work_done_total"]);
     assert!(
-        anomalies.contains("Query: sum(irate(busy_seconds_total[1m]))"),
+        anomalies.contains("Query: sum(irate(work_done_total[1m]))"),
         "{anomalies}"
     );
     let anomalies = mcp(&["detect-anomalies", file, "load_fraction"]);
@@ -309,7 +314,7 @@ fn a_prometheus_endpoints_fractions_read_back_through_both_viewers() {
     let output = recording();
 
     let want_types = std::collections::BTreeMap::from([
-        ("busy_seconds_total".to_string(), "counter".to_string()),
+        ("work_done_total".to_string(), "counter".to_string()),
         ("requests_total".to_string(), "counter".to_string()),
         ("load_fraction".to_string(), "gauge".to_string()),
     ]);
@@ -366,7 +371,7 @@ fn a_prometheus_endpoints_fractions_read_back_through_both_viewers() {
         info["counter_names"]
             .as_array()
             .unwrap()
-            .contains(&serde_json::json!("busy_seconds_total")),
+            .contains(&serde_json::json!("work_done_total")),
         "{info}"
     );
     assert!(

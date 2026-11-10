@@ -5,7 +5,10 @@ all, and the rule for labels that exist for the query engine rather than for
 the person reading a chart. Audited 2026-09-22 against metriken-query 0.24.0,
 metriken-exposition 0.20.0 and this tree; the line references are to those.
 The "Where the rule is enforced" section describes the state after
-metriken-query 0.25.0 and the consumer change that followed it.
+metriken-query 0.25.0 and the consumer change that followed it. The rows for
+`__prometheus_name__`, `unit`, `overflow`, `overflow_bound` and `scale`, and
+rule 1, were checked on 2026-11-09 against metriken-storage 0.11.0,
+metriken-query 0.48.0 and metriken-recorder 0.12.0.
 
 ## Three kinds of key
 
@@ -16,7 +19,7 @@ splits it into three kinds, and the split is the whole subject of this document.
 |---|---|---|---|
 | **storage key** | `metric`, `metric_type`, `unit`, `grouping_power`, `max_value_power` | column field metadata | consumed or discarded on load; never a label |
 | **label** | `id`, `cpu`, `name`, `op`, `sampler`, `comm`, `pid`, `device`, `mount` | column field metadata | part of the series' identity; shown, listed, aggregated |
-| **internal label** | `__name__`, `__run__`, `__uid__` | `__name__` and `__run__` are minted by the query layer; `__uid__` is minted by the agent at slot assignment and travels with the slot's labels, on disk included | part of the series' identity and matchable in a selector; hidden from listings and legends |
+| **internal label** | `__name__`, `__run__`, `__uid__`, `__prometheus_name__` | `__name__` and `__run__` are minted by the query layer; `__uid__` is minted by the agent at slot assignment and travels with the slot's labels, on disk included; `__prometheus_name__` is written into column metadata by metriken-recorder's Prometheus converter | part of the series' identity and matchable in a selector; hidden from listings and legends |
 
 Prometheus draws the same lines. Its data model says "label names beginning
 with `__` MUST be reserved for internal Prometheus use", the metric name is
@@ -33,8 +36,9 @@ the schema every archive ever written carries and every loader reads
 (`metriken-query/src/parquet.rs:1708-1725`, `memory.rs:128-146`), and
 `__name__` is what PromQL expects. The translation already happens at load.
 
-`metric_type`, `unit`, `grouping_power` and `max_value_power` describe the
-column's shape, and the loaders strip them so they never become labels. Type is
+`metric_type`, `unit`, `grouping_power`, `max_value_power`, `overflow`,
+`overflow_bound` and `scale` describe the column's shape, and the loaders
+strip them so they never become labels (metriken-storage's `STORAGE_KEYS`). Type is
 not a label in Prometheus either. There is no `__type__` and there should not
 be one.
 
@@ -42,8 +46,10 @@ be one.
 |---|---|---|---|
 | `metric` | agent (`src/agent/exposition/http/snapshot.rs:416`), Prometheus converter (`src/recorder/prometheus.rs:64`), parquet ingest backfill (metriken-storage `src/rez/parquet_ingest.rs`) | every loader | becomes `__name__`; column name minus `:buckets` is the fallback |
 | `metric_type` | metriken-storage `src/rez/rez.rs`, combine (`src/parquet_tools/combine.rs:1387`), metriken-exposition's writer | loaders skip it; `recording metadata` prints it | selects counter/gauge/histogram handling |
-| `unit` | a metric's own static metadata only (`unit = "..."` in a sampler's `stats.rs`); the exposition crate never writes it except on `timestamp` | loaders skip it; MCP strips it from key lists | display hint |
+| `unit` | a metric's own static metadata (`unit = "..."` in a sampler's `stats.rs`); the exposition crate never writes it except on `timestamp`; metriken-recorder's Prometheus converter (0.12.0) on a series whose name ends in a unit token or whose metric has a `# UNIT` line: `nanoseconds`, `bytes`, `percentage` (values 0 to 100, as served), `ratio`, `celsius`, `hertz` or `cores`, and none on a `_count` | loaders skip it; MCP strips it from key lists; neither viewer reads it (a chart's unit is its plot's `unit_system`) | display hint |
 | `grouping_power`, `max_value_power` | agent (`snapshot.rs:948`, `:2651`), Prometheus converter (`prometheus.rs:364`) | the parquet loader removes them (`parquet.rs:1708`); **the live-agent loader does not** (`memory.rs:139`) | histogram bucket configuration |
+| `overflow`, `overflow_bound` | metriken-recorder's Prometheus converter (0.11.0), on a histogram whose `+Inf` bucket is served: the name of the counter of observations above the highest finite bound, and that bound in the stored unit | metriken-storage's parquet reader, which links the counter to the histogram's rows; metriken-query's `histogram_quantile` counts it | histogram overflow |
+| `scale` | metriken-recorder's Prometheus converter (0.12.0), on a histogram whose bounds it multiplied by a power of 10 because the smallest was below 1 (after the unit's factor); absent when the factor is 1 | nothing in metriken-query or this tree divides by it | a stored bound is the observation times `scale`; a reader that wants it in `unit` (without one, in the exporter's unit) divides by it |
 | `acq_group` | declared statically on ~290 metrics | **removed before emission** (`snapshot.rs:735`, `:2342`) | never reaches a column |
 | `description` | nothing in this tree (one test fixture) | | would become a label if anything wrote it |
 
@@ -64,6 +70,7 @@ matches on a subset and fails closed on an absent key (`labels.rs:100`).
 | static labels: `op`, `vendor`, `error`, `kind`, `direction`, `state`, `counter`, `reason`, `clock`, `pipe`, `level`, `frequency`, `sensor` (on `drive_temperature_sensor`) | declared per metric | immutable for the life of the metric |
 | `source` | `source=external` on external metrics (`snapshot.rs:1031`); `combine` adds `source`, `node`, `instance` to every column (`combine.rs:988`) | the metric browser hides `source` (`metric_browser.js:87`) |
 | `__run__` | injected by the segmented reader when a histogram's bucket config differs across segments (`segmented.rs:431-450`) | already a reserved internal label; matchable (`:623`), listed only on conflict (`:705`) |
+| `__prometheus_name__` | metriken-recorder's Prometheus converter (0.12.0, `PrometheusConverter::convert`), on a series it stores under a name other than the exporter's: the name the exporter served it under (a histogram's base name, `rpc_seconds` for `rpc_nanoseconds`) | Internal: hidden from listings and legends, matchable in a selector. metriken-query 0.48.0 reads a selector naming a metric no reachable series holds from the series whose `__prometheus_name__` is that name, as stored, under the stored name; when two stored names qualify, the query is an error naming `<stored>{__prometheus_name__="<name>"}`. A query result carries it beside `__name__` (the viewers' JSON, `mcp query`'s series header); matching and `without` ignore it |
 
 Column names carry sidecars that are not metadata at all and are skipped by
 name: `:wall_offset`, `:window_begin`, `:window_width`, `<m>:window_begin`,
@@ -75,9 +82,13 @@ relabeled slot gets (`rez.rs:25-34`, `:1608`; `parquet.rs:1684-1704`).
 An internal label is one the query engine needs for identity that a person
 reading a chart does not. The rule, adopted from Prometheus:
 
-1. **Its name begins with `__`.** The agent writes exactly one such label,
-   `__uid__`; no writer emits another, and the loaders do not check, so a
-   stray `__` key in column metadata is kept as a label.
+1. **Its name begins with `__`.** Two writers put one into column
+   metadata: the agent writes `__uid__` (`SlotIdentity::set`), and
+   metriken-recorder's Prometheus converter writes `__prometheus_name__` on
+   a series it renamed. The loaders do not check, so any other `__` key in
+   column metadata is kept as a label too. The readers add `__name__`,
+   `__run__` and `__recording__`, and a recording's identity layers can
+   carry `__producer__`.
 2. **It is part of series identity and matchable in a selector.**
    `foo{__uid__="..."}` works; a bare `foo` returns every occupant
    as its own series.

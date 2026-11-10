@@ -1,4 +1,4 @@
-import { firstVisibleLabelValue } from '../charts/util/labels.js';
+import { firstVisibleLabelValue, isInternalLabel } from '../charts/util/labels.js';
 // Pure comparison math. No DOM, no echarts, no mithril. Safe to run in Node.
 // Null-propagation is the universal rule: if either operand is null,
 // undefined, or NaN, the result is null.
@@ -210,8 +210,12 @@ export const canonicalQuantileLabel = (input) => {
 // disjoint key sets. See tests for examples.
 export const composeScatterLabel = (metric, { excludeValues } = {}) => {
     if (!metric || typeof metric !== 'object') return null;
-    const dims = { ...metric };
-    delete dims.__name__;
+    // Internal labels (`__name__`, `__prometheus_name__`, ...) are identity,
+    // never a dimension: a series read through metriken-query's fallback
+    // carries `__prometheus_name__` where an older recording's does not,
+    // and the two must pair.
+    const dims = Object.fromEntries(
+        Object.entries(metric).filter(([k]) => !isInternalLabel(k)));
 
     if (excludeValues && excludeValues.size > 0) {
         for (const k of Object.keys(dims)) {
