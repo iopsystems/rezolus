@@ -41,10 +41,11 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   compare mode; it is now listed, and its selector lists the cgroups of every
   capture. Each capture is searched on its own, so one recorded without
   `cgroup_cpu_usage` contributes the cgroups its other per-cgroup series name
-  (`cgroup_cpu_cycles`, `cgroup_syscall`, ...). Each aggregate chart overlays the captures, and each individual
-  chart becomes one overlay per selected cgroup or group. A cgroup only one
-  capture recorded draws that capture's line alone. An expanded chart still
-  draws the baseline only, as in every other section.
+  (`cgroup_cpu_cycles`, `cgroup_syscall`, ...). Each aggregate chart overlays
+  the captures, and each individual chart becomes one overlay per selected
+  cgroup or group. A cgroup only one capture recorded draws that capture's
+  line alone. An expanded chart still draws the baseline only, as in every
+  other section.
 
 - **hw_sensors on macOS.** The sampler publishes `sensor_temperature` from the
   IOHIDEventSystem temperature services (the power manager's die and device

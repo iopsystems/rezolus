@@ -8,8 +8,9 @@
 // that has some.
 //
 // Each capture of a comparison is searched on its own (`discoverEveryCapture`):
-// each may have `cgroup_cpu_usage` or only the other series, and a capture
-// with it says nothing about the cgroups of one without it.
+// each may have `cgroup_cpu_usage` or only the other series, and the names
+// found in a capture that has it do not include the cgroups of one that
+// lacks it.
 
 /** The per-cgroup series tried after `cgroup_cpu_usage`, by sampler. */
 export const FALLBACK_CGROUP_METRICS = [
