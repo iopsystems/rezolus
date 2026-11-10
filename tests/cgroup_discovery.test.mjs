@@ -3,7 +3,7 @@
 // a recording has none of it (cpu_usage with cgroup_attribution off).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { discoverCgroups } from '../src/viewer/assets/lib/features/cgroup_discovery.js';
+import { discoverCgroups, mergeResults } from '../src/viewer/assets/lib/features/cgroup_discovery.js';
 
 const result = (...names) => ({
     status: 'success',
@@ -45,4 +45,18 @@ test('without cgroup_cpu_usage the other per-cgroup series are unioned', async (
 test('a recording with no per-cgroup series finds none', async () => {
     const names = await discoverCgroups(engine({}));
     assert.equal(names.size, 0);
+});
+
+test('a comparison lists the cgroups of every capture', async () => {
+    // Two captures, each with a cgroup the other lacks, and a third whose
+    // query failed (null) or was refused.
+    const baseline = engine({ cgroup_cpu_usage: ['/a', '/b'] });
+    const experiment = engine({ cgroup_cpu_usage: ['/b', '/c'] });
+    const names = await discoverCgroups(async (query) => mergeResults([
+        await baseline(query),
+        await experiment(query),
+        null,
+        { status: 'error', error: 'refused' },
+    ]));
+    assert.deepEqual([...names].sort(), ['/a', '/b', '/c']);
 });
