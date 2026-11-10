@@ -535,10 +535,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   (a name ending in `_total`, `_sum` or `_count` is a counter, any other a
   gauge), summary quantiles, and a histogram's `_sum` and `_count`; a
   histogram's buckets are recorded as before. A recording of a Prometheus
-  endpoint made by this release holds segment format 3, which earlier
-  releases refuse ("segment format 3 is newer than this reader"); open it
-  with this release or later. Recordings of a Rezolus agent are unchanged,
-  and recordings made before this release read as they did.
+  endpoint made by this release holds segment format 3. 6.0 builds before
+  this one refuse an archive that holds one, including its other
+  recordings ("segment format 3 is newer than this reader"); open it with
+  this release or later. Archives holding only Rezolus agent recordings
+  are unchanged, and recordings made before this release read as they
+  did.
 
 - **An individual cgroup chart draws its selected names and groups from
   one query, and a group is matched by its unit's path.** Each
