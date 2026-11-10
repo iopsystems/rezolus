@@ -221,7 +221,7 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
     0.10, metriken-storage 0.9, metriken-query 0.46). The overflow
     (iopsystems/metriken#377): iopsystems/metriken#388, released in
     metriken-recorder 0.11, metriken-storage 0.10 and metriken-query 0.47
-    (iopsystems/metriken#389), and taken by rezolus in #PR. Units
+    (iopsystems/metriken#389), and taken by rezolus in #1679. Units
     (iopsystems/metriken#379) is open.
 
     Per-endpoint intervals, label selectors in `recording filter`, repeated
