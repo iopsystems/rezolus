@@ -52,6 +52,9 @@ pub struct AnomalyDetectionResult {
 pub struct Anomaly {
     pub timestamp: f64,
     pub value: f64,
+    /// Position in the analysed series: the result's finite values, so it
+    /// indexes `AnomalyDetectionResult::values` and `timestamps`, not the
+    /// query result when that held non-finite points (`non_finite_points`).
     pub index: usize,
     pub anomaly_type: AnomalyType,
     pub severity: AnomalySeverity,

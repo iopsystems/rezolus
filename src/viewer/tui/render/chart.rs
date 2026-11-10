@@ -111,7 +111,13 @@ fn draw_lines(f: &mut Frame, area: Rect, block: Block, unit: Option<&str>, serie
         .enumerate()
         .flat_map(|(i, s)| {
             let total = s.points.len().max(1);
-            finite_runs(&s.points).into_iter().map(move |run| {
+            // A series with no finite point keeps one empty dataset, so it
+            // is still named in the legend.
+            let mut runs = finite_runs(&s.points);
+            if runs.is_empty() {
+                runs.push(Vec::new());
+            }
+            runs.into_iter().map(move |run| {
                 let share = (target * run.len()).div_ceil(total).max(1);
                 (i, min_max_decimate(&run, share))
             })
@@ -239,6 +245,26 @@ mod tests {
         assert_ne!(gap, joined, "the line is not joined across the +Inf point");
         // The legend names the series once.
         assert_eq!(gap.matches("p99").count(), 1, "{gap:?}");
+    }
+
+    /// A series with no finite point draws nothing but stays in the legend.
+    #[test]
+    fn a_series_with_no_finite_point_is_still_in_the_legend() {
+        let data = ChartData::Lines(vec![
+            Series {
+                label: "p50".into(),
+                points: vec![(0.0, 1.0), (1.0, 2.0)],
+            },
+            Series {
+                label: "p99".into(),
+                points: vec![(0.0, f64::INFINITY), (1.0, f64::INFINITY)],
+            },
+        ]);
+        // Tall enough for ratatui to show a two-entry legend (at most a
+        // quarter of the chart's height).
+        let text = render_text(&data, 40, 30);
+        assert_eq!(text.matches("p50").count(), 1, "{text:?}");
+        assert_eq!(text.matches("p99").count(), 1, "{text:?}");
     }
 
     #[test]

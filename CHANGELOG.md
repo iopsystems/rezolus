@@ -552,8 +552,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   `mcp query` prints `+Inf` and counts the `+Inf` points, and
   `mcp detect-anomalies` leaves non-finite points out of its analysis and
   says how many. A check (`recording check`, `run_checks`) reads a `+Inf`
-  quantile as above the highest finite bound: a threshold below that bound
-  is violated, one above it indeterminate. A percentile chart draws a
+  quantile as above the highest finite bound: an `above:` threshold at or
+  below that bound is violated and a `below:` one passes; a threshold above
+  it is indeterminate. A percentile chart draws a
   `+Inf` quantile as a red dot in the band above its y-axis (the "OOB" band
   a chart with a configured maximum already has), with `+Inf` in the
   tooltip, and leaves out its band; zooming or pinning a percentile keeps

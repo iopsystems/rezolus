@@ -84,9 +84,12 @@ pub(crate) fn classify(
         Some((lo, hi)) if !lo.is_nan() && !hi.is_nan() => (lo.min(hi), lo.max(hi)),
         _ => (value, value),
     };
+    // A band open above, (bound, +Inf), excludes its bound: every overflow
+    // observation is strictly above the highest finite `le`.
+    let open = hi == f64::INFINITY;
     match bound {
         Bound::Above(t) => {
-            if lo > t {
+            if lo > t || (open && lo >= t) {
                 PointState::Violating
             } else if hi > t {
                 PointState::Indeterminate
@@ -936,6 +939,28 @@ mod tests {
         );
         assert_eq!(
             classify(f64::INFINITY, open, false, Bound::Below(5.0)),
+            Pass
+        );
+    }
+
+    /// Every overflow observation is strictly above the highest finite
+    /// bound, so a threshold at the bound is crossed (`above`) and not
+    /// undercut (`below`).
+    #[test]
+    fn an_open_band_excludes_its_bound() {
+        let open = Some((10.0, f64::INFINITY));
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Above(10.0)),
+            Violating
+        );
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Below(10.0)),
+            Pass
+        );
+        // A closed band still includes its ends: equal to the threshold
+        // passes.
+        assert_eq!(
+            classify(10.0, Some((10.0, 10.0)), false, Bound::Above(10.0)),
             Pass
         );
     }
