@@ -1,5 +1,6 @@
 import { expandLink, selectButton } from '../ui/chart_controls.js';
 import { collectGroupPlots } from '../features/group_utils.js';
+import { discoverCgroups, discoverEveryCapture } from '../features/cgroup_discovery.js';
 
 // The KPI templates a recording's metadata carries, one per source:
 // `per_source_metadata.<source>.<entry>.service_queries` (a combined parquet;
@@ -300,12 +301,16 @@ const createMetadataView = () => {
     };
 };
 
-// The query the cgroup selector discovers cgroups with. In a comparison it
-// is `queryEveryCapture` over every capture, with the selected node applied
-// to each, so the selector lists a cgroup any capture recorded; otherwise it
-// is the baseline's query.
-const cgroupDiscoverQuery = ({ compare, baselineQuery, scopedQuery, withNode, queryEveryCapture }) =>
-    (compare ? (query) => queryEveryCapture(withNode(query), scopedQuery) : baselineQuery);
+// How the cgroup selector discovers cgroups: a function resolving to the
+// names. In a comparison it searches every capture (`captureQueries` over
+// `scopedQuery`, the selected node applied to each query), so the selector
+// lists a cgroup any capture recorded; otherwise it searches the baseline
+// through `baselineQuery`.
+const cgroupDiscover = ({ compare, baselineQuery, scopedQuery, withNode, captureQueries }) =>
+    (compare
+        ? async () => discoverEveryCapture(
+            (await captureQueries(scopedQuery)).map((query) => (q) => query(withNode(q))))
+        : () => discoverCgroups(baselineQuery));
 
 const renderCgroupSection = ({
     attrs,
@@ -315,7 +320,7 @@ const renderCgroupSection = ({
     Chart,
     CgroupSelector,
     executePromQLRangeQuery,
-    discoverQuery = executePromQLRangeQuery,
+    discover = () => discoverCgroups(executePromQLRangeQuery),
     applyResultToPlot,
     substituteCgroupPattern,
     setActiveCgroupPattern,
@@ -367,7 +372,7 @@ const renderCgroupSection = ({
         m(CgroupSelector, {
             groups: attrs.groups,
             executeQuery: executePromQLRangeQuery,
-            discoverQuery,
+            discover,
             applyResultToPlot: applyResultToPlot,
             substitutePattern: substituteCgroupPattern,
             setActiveCgroupPattern: (p) => { setActiveCgroupPattern(p); },
@@ -421,4 +426,4 @@ const renderCgroupSection = ({
     ]);
 };
 
-export { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscoverQuery, collectServiceQueries };
+export { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscover, collectServiceQueries };

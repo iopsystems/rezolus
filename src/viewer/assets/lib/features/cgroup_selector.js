@@ -1,8 +1,9 @@
 // Attrs:
 //   groups: array of group objects with plots
 //   executeQuery: (query) => Promise<result> — runs a PromQL range query
-//   discoverQuery: (query) => Promise<result> — runs the cgroup discovery
-//     queries; in compare mode on every capture, merged (default executeQuery)
+//   discover: () => Promise<Set<string>> — the cgroup names to list; in
+//     compare mode those of every capture (default: discoverCgroups over
+//     executeQuery)
 //   applyResultToPlot: (plot, result) => void — applies PromQL result to a plot
 //   substitutePattern: (query, selection) => string — substitutes cgroup placeholder
 //   setActiveCgroupPattern: (selection) => void — sets the global active cgroup
@@ -124,11 +125,11 @@ export const selectedCgroupSelection = (route) => (persistedSelectedCgroups.size
     : null);
 
 // Discover the groups of the section at `route` if the selection names one
-// and they are not yet known. `executeQuery` runs a PromQL range query
-// within the scope of that section's charts.
-export const loadCgroupGroups = async (route, executeQuery) => {
+// and they are not yet known. `discover` resolves to the section's cgroup
+// names, as the selector's `discover` attr does.
+export const loadCgroupGroups = async (route, discover) => {
     if (persistedGroups.has(route) || ![...persistedSelectedCgroups].some(isCgroupGroupKey)) return;
-    persistedGroups.set(route, deriveCgroupGroups(await discoverCgroups(executeQuery)));
+    persistedGroups.set(route, deriveCgroupGroups(await discover()));
 };
 
 // Forget every section's groups, for a recording that replaces this one.
@@ -199,12 +200,12 @@ export const CgroupSelector = {
     },
 
     async fetchAvailableCgroups(vnode) {
-        // `discoverQuery` reads every capture of a comparison, so the list
+        // `discover` searches every capture of a comparison, so the list
         // holds the cgroups of each; `executeQuery` reads the baseline.
-        const { executeQuery, discoverQuery } = vnode.attrs;
+        const { executeQuery, discover } = vnode.attrs;
 
         try {
-            const cgroups = await discoverCgroups(discoverQuery || executeQuery);
+            const cgroups = await (discover ? discover() : discoverCgroups(executeQuery));
 
             if (cgroups.size === 0) {
                 vnode.state.error = 'No cgroup data found';
