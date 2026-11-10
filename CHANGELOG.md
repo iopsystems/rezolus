@@ -552,26 +552,40 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   histogram's buckets read as before (they were already in nanoseconds), and
   its `_sum` now does too: `rate(x_seconds_sum) / rate(x_seconds_count)`
   over a new recording reads nanoseconds where it read seconds. The
-  exporter's name is kept in the internal label `__prometheus_name__`, which
+  exporter's name, with any `:` replaced by `_` as the recorder already
+  did, is kept in the internal label `__prometheus_name__`, which
   `mcp describe-metrics`, the viewers' metric catalogs and label pickers,
-  and chart legends leave out, and which `mcp query` and the query JSON
-  show beside `__name__`. A query naming the exporter's name reads, when
+  and chart legends leave out. A selector's result carries it beside
+  `__name__` (in `mcp query` and the query JSON); a `histogram_quantiles`
+  result does not. A query naming the exporter's name reads, when
   no series it reaches has that name, the renamed series: in the stored
   unit, under the stored name. When two endpoints' `# UNIT` lines store one
   exporter name under two names, such a query is an error that names both
   and the matcher that picks one (`<stored name>{__prometheus_name__="<exporter
   name>"}`); `mcp query`, the MCP `query` tool and the viewers' query API
-  return that message as written. Two exporter names that would be stored
-  under one name (`rpc_seconds` and `rpc_ms`) both keep their names,
-  unscaled, for the rest of the recording. A histogram whose smallest bound
+  return that message as written. The error's example of a recording-label
+  matcher is `{source="..."}`; in a rezolus recording the recording label
+  is `alias` (`jobs_total{alias="b"}`), and `{source="..."}` returns the
+  same error. Two exporter names that would be stored under one name
+  (`rpc_seconds` and `rpc_ms`) both keep their names, with their whole
+  family, in the exporter's units, for the rest of the recording: a kept
+  `_seconds` histogram is stored in seconds times the generic `scale`
+  (metriken-recorder 0.11 stored it ×1e9), so a chart of it with
+  `unit_system: time` reads about 1e9 low, and a collision that first
+  appears mid-run stores one series under two names in one recording. A histogram whose smallest bound
   is below 1 is still stored ×10^k, now with that factor in the `scale`
   key, which, like `overflow` and `overflow_bound`, is not a label in any
   recording. Recordings made before this release keep their names and
   units, and a query by the exporter's name reads them as before. The
-  shipped KPI templates name their `_seconds` histograms by the exporter's
-  name, which reads the same nanosecond values in recordings made before
-  and after this release; the KPI check example in `docs/usage.md` now
-  names the stored histogram and states its threshold in nanoseconds.
+  shipped KPI templates name their 46 `_seconds` histograms by the
+  exporter's name, which reads the same nanosecond values in recordings
+  made before and after this release; the KPI check example in
+  `docs/usage.md` does the same and states its threshold in nanoseconds.
+  A KPI query that fails with an error other than a missing metric (such
+  as the two-names error) is logged at warn when the viewer marks the KPI
+  unavailable, and any other at debug. `mcp detect-anomalies` given a bare
+  exporter name wraps it by the kind of the series renamed from it, where
+  it passed the name through unwrapped and failed.
   Save as Report logs a query whose columns it cannot resolve with
   metriken-query's message, and calls only a syntax error malformed. In a
   comparison, a percentile chart's series are paired by their visible

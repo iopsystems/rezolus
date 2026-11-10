@@ -110,8 +110,8 @@ fn spawn_exporter(body: fn(u64) -> String) -> u16 {
     port
 }
 
-/// The recording every test reads: both endpoints recorded for 3 seconds
-/// at 200 ms into one archive, made once per test run under
+/// The recording every test reads: both endpoints recorded for 11 seconds
+/// at 200 ms (`mcp detect-anomalies` refuses less than 10 seconds) into one archive, made once per test run under
 /// `CARGO_TARGET_TMPDIR`. Its two recordings are read combined.
 fn recording() -> &'static std::path::Path {
     static ARCHIVE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -133,7 +133,7 @@ fn recording() -> &'static std::path::Path {
             .arg("--interval")
             .arg("200ms")
             .arg("--duration")
-            .arg("3s")
+            .arg("11s")
             .output()
             .expect("run rezolus record");
         assert!(
@@ -325,6 +325,36 @@ fn renamed_series_read_back_through_mcp() {
     let (ok, stdout, stderr) = mcp_output(&["query", file, AMBIGUOUS]);
     assert!(!ok, "{stdout}");
     check_ambiguity_message(&stderr, "mcp query");
+    // In a rezolus recording the recording label is `alias`, not the
+    // `source` the error's example names; it picks one recording.
+    let by_alias = mcp(&["query", file, "sum(irate(jobs_total{alias=\"other\"}[1s]))"]);
+    let values = printed_values(&by_alias);
+    assert_eq!(values.len(), 5, "{by_alias}");
+    for (key, v) in &values {
+        // 5 kilobytes per second, in bytes per second.
+        assert!((1e3..1e5).contains(v), "{key} by alias is {v}:\n{by_alias}");
+    }
+
+    // detect-anomalies wraps a bare exporter name by the kind of the
+    // series renamed from it, and reads it through the fallback.
+    for (name, query) in [
+        (
+            "cpu_busy_seconds_total",
+            "sum(irate(cpu_busy_seconds_total[1m]))",
+        ),
+        ("queue_wait_ms", "sum(queue_wait_ms)"),
+        (
+            "rpc_latency_seconds",
+            "histogram_quantile(0.99, rpc_latency_seconds)",
+        ),
+    ] {
+        let anomalies = mcp(&["detect-anomalies", file, name]);
+        assert!(
+            anomalies.contains(&format!("Query: {query}")),
+            "{name}:\n{anomalies}"
+        );
+    }
+
     // The form the error names reads one of them: `jobs_total` from the
     // `# UNIT jobs seconds` endpoint, 5 per second, in nanoseconds per
     // second (the other reads 5000 bytes per second).

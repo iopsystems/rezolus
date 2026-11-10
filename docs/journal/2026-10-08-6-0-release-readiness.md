@@ -228,9 +228,9 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
     original name reads the renamed series in the normalized unit, under the
     stored name (metriken's D1a), so a KPI over a scalar whose name ended in
     `_seconds` or `_ms` reads nanoseconds in a new recording; a `_seconds`
-    histogram's buckets were in nanoseconds already. The only names with a
-    unit in the shipped templates are `_seconds` histograms, which keep the
-    original names.
+    histogram's buckets were in nanoseconds already. The only Prometheus
+    names with a unit in the shipped templates are 46 `_seconds` histogram
+    KPIs, which keep the original names.
 
     Per-endpoint intervals, label selectors in `recording filter`, repeated
     scrapes of interval aggregates and grouping power 3 for converted

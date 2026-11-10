@@ -305,10 +305,27 @@ pub fn validate_service_extensions(
                 Ok(QueryResult::Matrix { result, .. }) => !result.is_empty(),
                 Ok(QueryResult::Scalar { .. }) => true,
                 Ok(QueryResult::HistogramHeatmap { result, .. }) => !result.data.is_empty(),
-                Err(_) => false,
+                Err(e) => {
+                    if kpi_error_is_notable(&e) {
+                        tracing::warn!("KPI {:?} is unavailable: {query}: {e}", kpi.title);
+                    } else {
+                        tracing::debug!("KPI {:?} is unavailable: {query}: {e}", kpi.title);
+                    }
+                    false
+                }
             };
         }
     }
+}
+
+/// Whether a KPI query's error says more than that the recording lacks its
+/// metric, which a template written for several producers expects: an
+/// evaluation error (an exporter's name stored under two names) or an
+/// unsupported operation. A parse error is not notable here, since an
+/// archive reports a metric it does not hold as one.
+fn kpi_error_is_notable(e: &metriken_query::QueryError) -> bool {
+    use metriken_query::QueryError::*;
+    matches!(e, EvaluationError(_) | Unsupported(_))
 }
 
 /// The section context of a combined source: `data` reads every recording
@@ -987,6 +1004,19 @@ pub fn generate_section(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_an_evaluation_or_unsupported_error_is_a_notable_kpi_error() {
+        use metriken_query::QueryError::*;
+        assert!(super::kpi_error_is_notable(&EvaluationError(
+            "x_total is stored under a and b".into()
+        )));
+        assert!(super::kpi_error_is_notable(&Unsupported("f".into())));
+        assert!(!super::kpi_error_is_notable(&MetricNotFound("x".into())));
+        assert!(!super::kpi_error_is_notable(&ParseError(
+            "query references no metric present in this .rez: x".into()
+        )));
+    }
+
     use super::*;
 
     /// An agent is known by its source, whichever samplers it ran; another

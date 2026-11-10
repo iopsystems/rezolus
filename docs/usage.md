@@ -148,7 +148,17 @@ kept in the label `__prometheus_name__`, which listings and legends leave
 out. A query naming the exporter's name reads the stored series, in the
 stored unit and under the stored name, when the recording holds no series of
 that name. When two exporter names would be stored under one name
-(`rpc_seconds` and `rpc_ms`), both keep their own names and units. Earlier
+(`rpc_seconds` and `rpc_ms`), both keep their own names and the exporter's
+units, with their whole families, from the scrape the collision appears in:
+a kept `_seconds` histogram is stored in seconds times the generic `scale`,
+so a chart of it in time units (nanoseconds) is mis-scaled, and a
+collision that starts mid-run splits the series between the two names.
+When two endpoints' `# UNIT` lines store one exporter name under two
+names, a query naming it is an error naming both and the matcher that
+picks one, `<stored name>{__prometheus_name__="<exporter name>"}`. Its
+other suggestion, a recording-label matcher, is written `{source="..."}`;
+in a rezolus recording the recording label is `alias`, so write
+`jobs_total{alias="b"}`. Earlier
 recorders wrote the exporter's names and units, except that a `_seconds`
 histogram's buckets were already in nanoseconds. A histogram whose smallest
 bucket bound is below 1 has its bounds multiplied by a power of 10, by
@@ -749,7 +759,7 @@ embeds, so the recording carries what it is judged against. A complete file:
     {
       "role": "latency",
       "title": "p99 request latency",
-      "query": "request_latency_nanoseconds",
+      "query": "request_latency_seconds",
       "type": "histogram",
       "unit_system": "time",
       "check": {"above": 250000000, "quantile": 0.99, "for": "10s", "severity": "fail"}
@@ -798,12 +808,12 @@ The check:
 - Exactly one of `above` / `below` is the threshold, compared in the query's
   own unit (nanoseconds for the histogram above, requests per second for the
   rate). The comparison is strict: a value equal to the threshold passes.
-  The recorder stores a Prometheus series whose name ends in a time or size
-  unit in nanoseconds or bytes, under the name with that unit replaced: an
-  exporter's `request_latency_seconds` histogram is
-  `request_latency_nanoseconds`, so 0.25 s is `250000000`. A query naming
-  `request_latency_seconds` reads the same series, in nanoseconds, while
-  the recording has no series of that name.
+  A Prometheus `_seconds` histogram's buckets are stored in nanoseconds, so
+  0.25 s is `250000000`. In a recording made with metriken-recorder 0.12
+  (rezolus 6.0.0-alpha.136) or later the histogram is stored as
+  `request_latency_nanoseconds`, and `request_latency_seconds` reads it
+  through the exporter-name fallback; in an older recording it is stored
+  under `request_latency_seconds`. The exporter's name reads both.
 - `for` is the shortest run that counts (default `0s`, so one point is
   enough). Accepted forms: `500ms`, `10s`, `1m30s`, `2h`, `1d`, `1.5s`, or a
   bare number of seconds.

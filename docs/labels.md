@@ -64,13 +64,13 @@ matches on a subset and fails closed on an absent key (`labels.rs:100`).
 |---|---|---|
 | `sampler` | set on every metric by the agent at `snapshot.rs:425` | what `sum by (sampler)` groups on. The static `sampler = "..."` declared in ten `stats.rs` files is dead: `:425` overwrites it |
 | `id` | group index (`snapshot.rs:822` and siblings) | the most-aggregated label in the dashboards: `by (id)` 44 times |
-| identity labels: `comm`, `pid`, `tgid`, `cgroup`, `device`, `mount`, `vendor` | `SlotIdentity::set` (`src/agent/identity.rs`) | **mutable**: a slot's labels change when its occupant does. Today that change is written into column metadata, which is the churn #1224 §2 removes |
+| identity labels: `comm`, `pid`, `tgid`, `cgroup`, `device`, `mount`, `vendor` | `SlotIdentity::assign` (metriken's `src/group/identity.rs`, re-exported by `src/agent/identity.rs`) | **mutable**: a slot's labels change when its occupant does. Today that change is written into column metadata, which is the churn #1224 §2 removes |
 | hw_sensors labels: `sensor`, `name`, `device`, `source`, `chip`, `channel`, `label`, `scope`, `board_model`, `soc_compatible`, `derived` | `insert_metadata`, once per slot (`src/agent/samplers/hw_sensors/linux/mod.rs`) | fixed for the slot's life: a slot is keyed by `sensor` and never reassigned |
-| `__uid__` | `SlotIdentity::set`, one per assignment, from the assignment's generation and the producer epoch | the occupant. Two assignments with identical labels (a PID wrapped onto the same comm, a cgroup recreated at the same path) get different uids and are different series. Internal: hidden everywhere, matchable in a selector |
+| `__uid__` | `SlotIdentity::assign`, one per assignment, from the assignment's generation and the producer epoch | the occupant. Two assignments with identical labels (a PID wrapped onto the same comm, a cgroup recreated at the same path) get different uids and are different series. Internal: hidden everywhere, matchable in a selector |
 | static labels: `op`, `vendor`, `error`, `kind`, `direction`, `state`, `counter`, `reason`, `clock`, `pipe`, `level`, `frequency`, `sensor` (on `drive_temperature_sensor`) | declared per metric | immutable for the life of the metric |
 | `source` | `source=external` on external metrics (`snapshot.rs:1031`); `combine` adds `source`, `node`, `instance` to every column (`combine.rs:988`) | the metric browser hides `source` (`metric_browser.js:87`) |
 | `__run__` | injected by the segmented reader when a histogram's bucket config differs across segments (`segmented.rs:431-450`) | already a reserved internal label; matchable (`:623`), listed only on conflict (`:705`) |
-| `__prometheus_name__` | metriken-recorder's Prometheus converter (0.12.0, `PrometheusConverter::convert`), on a series it stores under a name other than the exporter's: the name the exporter served it under (a histogram's base name, `rpc_seconds` for `rpc_nanoseconds`) | Internal: hidden from listings and legends, matchable in a selector. metriken-query 0.48.0 reads a selector naming a metric no reachable series holds from the series whose `__prometheus_name__` is that name, as stored, under the stored name; when two stored names qualify, the query is an error naming `<stored>{__prometheus_name__="<name>"}`. A query result carries it beside `__name__` (the viewers' JSON, `mcp query`'s series header); matching and `without` ignore it |
+| `__prometheus_name__` | metriken-recorder's Prometheus converter (0.12.0, `PrometheusConverter::convert`), on a series it stores under a name other than the exporter's: the name the exporter served it under, after the recorder's replacement of `:` with `_` (a histogram's base name, `rpc_seconds` for `rpc_nanoseconds`) | Internal: hidden from listings and legends, matchable in a selector. metriken-query 0.48.0 reads a selector naming a metric no reachable series holds from the series whose `__prometheus_name__` is that name, as stored, under the stored name; when two stored names qualify, the query is an error naming `<stored>{__prometheus_name__="<name>"}`. A selector's result carries it beside `__name__` (the viewers' JSON, `mcp query`'s series header); a `histogram_quantiles` result does not; matching and `without` ignore it |
 
 Column names carry sidecars that are not metadata at all and are skipped by
 name: `:wall_offset`, `:window_begin`, `:window_width`, `<m>:window_begin`,
@@ -83,7 +83,7 @@ An internal label is one the query engine needs for identity that a person
 reading a chart does not. The rule, adopted from Prometheus:
 
 1. **Its name begins with `__`.** Two writers put one into column
-   metadata: the agent writes `__uid__` (`SlotIdentity::set`), and
+   metadata: the agent writes `__uid__` (`SlotIdentity::assign`), and
    metriken-recorder's Prometheus converter writes `__prometheus_name__` on
    a series it renamed. The loaders do not check, so any other `__` key in
    column metadata is kept as a label too. The readers add `__name__`,
