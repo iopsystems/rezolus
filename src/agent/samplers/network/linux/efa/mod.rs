@@ -6,22 +6,36 @@
 //! counters; the device's own `hw_counters/` holds admin command and verbs
 //! error counters. These have no BPF or perf source, so each read parses a
 //! sysfs file (principle 15's exception). EFA has no `ports/<n>/counters/`
-//! (the InfiniBand port counters other RDMA drivers expose).
+//! (the InfiniBand port counters other RDMA drivers expose). An EFA device has
+//! one port, and the driver fetches its port counters for the whole device
+//! (`EFA_ADMIN_GET_STATS_SCOPE_ALL`).
 //!
-//! The set of files differs by driver version: kernel 6.18's driver has the
-//! `retrans_*`, `unresponsive_remote_events` and
-//! `impaired_remote_conn_events` port counters, and Amazon's out-of-tree
-//! driver adds the `alloc_mr_err` and `get_dma_mr_err` device counters. Each
-//! file is opened if it exists, and a counter with no file publishes nothing.
+//! The set of files differs by driver version. Mainline drivers before 6.17
+//! (Amazon's before r2.17.0) lack the `retrans_*`,
+//! `unresponsive_remote_events` and `impaired_remote_conn_events` files, and
+//! before 6.6 (r2.5.0) the `rdma_write_*` files too. On a device without RDMA
+//! write support the `rdma_write_*` files exist and read 0. Amazon's
+//! out-of-tree driver also has the `alloc_mr_err` and `get_dma_mr_err` device
+//! counters. Each file is opened if it exists, and a counter with no file
+//! publishes nothing.
+//!
+//! On a host with an EFA PCI function the sampler waits for the `efa` module
+//! (`samplers::deferred`), so a module that loads after the agent starts is
+//! read. On a host without one the sampler reports unsupported at start.
+//! Discovery runs once: a device unbound, or whose module is reloaded, after
+//! discovery is not read again until the agent restarts, and the agent logs a
+//! warning.
 //!
 //! ## Cadence
 //!
-//! Reading a port's counters makes the driver send four or five admin commands
-//! to the device (`efa_fill_port_stats`); the RDMA core then serves every file
+//! Reading a port's counters makes the driver send three to five admin
+//! commands to the device, by driver version and device
+//! (`efa_fill_port_stats`); the RDMA core then serves every file
 //! of that port from the result for `hw_counters/lifespan` (10 ms). On an
 //! im4gn.16xlarge sending about 55 Gbit/s over EFA, the first file read took
 //! 1.8 ms at p50 and 2.8 ms at worst, and the other 21 about 0.5 ms together.
-//! The device counters are read from the driver's memory. That is too slow for
+//! The device counters are read from the driver's memory (5.15 and later;
+//! before that, with admin commands too). That is too slow for
 //! the async worker and too often at the snapshot rate, so this sampler reads
 //! on its own interval (`[samplers.network_efa] interval`, default 1s) in
 //! `spawn_blocking`, as principle 17 requires, and serves the last values in
@@ -62,15 +76,56 @@ static PORT_IDENTITY: metriken::group::SlotIdentity =
 static DEVICE_IDENTITY: metriken::group::SlotIdentity =
     metriken::group::SlotIdentity::grouped(DEVICE_IDENTITY_GROUPS);
 
+/// Kernel modules this sampler needs loaded; see `samplers::deferred`.
+const MODULES: &[&str] = &["efa"];
+
+const SYSFS_PCI_DEVICES: &str = "/sys/bus/pci/devices";
+
+/// The PCI vendor ID of an EFA function (Amazon), and the prefix of its device
+/// IDs: the driver matches `0xefa0` to `0xefa4`.
+const EFA_PCI_VENDOR: &str = "0x1d0f";
+const EFA_PCI_DEVICE_PREFIX: &str = "0xefa";
+
+/// Above this `hw_counters/lifespan`, a value the RDMA core fetched for
+/// another reader can predate the acquisition window by up to the lifespan;
+/// 100 ms is a tenth of the default 1s interval.
+const MAX_LIFESPAN_MS: u64 = 100;
+
 fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    // `efa` is a PCI driver, loaded only on a host with an EFA function. On
+    // any other host, waiting for the module would wait for good.
+    if !has_efa_pci_function(Path::new(SYSFS_PCI_DEVICES)) {
+        return Err(crate::agent::sampler_status::Unsupported("no EFA device".to_string()).into());
+    }
+
+    crate::agent::samplers::deferred::until_loaded(NAME, MODULES, config, init_now)
+}
+
+/// Whether any PCI function under `devices` is an EFA device.
+fn has_efa_pci_function(devices: &Path) -> bool {
+    let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap_or_default();
+    std::fs::read_dir(devices)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let dir = entry.path();
+            read(dir.join("vendor")).trim() == EFA_PCI_VENDOR
+                && read(dir.join("device"))
+                    .trim()
+                    .starts_with(EFA_PCI_DEVICE_PREFIX)
+        })
+}
+
+fn init_now(config: Arc<Config>) -> SamplerResult {
     // Zero first, so every exit below leaves the groups empty rather than at
     // backing capacity, which would declare phantom all-null members.
     NETWORK_EFA_PORTS_ACQ.set_member_bound(0);
     NETWORK_EFA_DEVICES_ACQ.set_member_bound(0);
-
-    if !config.enabled(NAME) {
-        return Ok(None);
-    }
 
     let efa = discover(Path::new(SYSFS_INFINIBAND));
     if efa.ports.is_empty() {
@@ -160,7 +215,9 @@ impl Sampler for Efa {
     }
 }
 
-/// Read every entity's counters inside one acquisition window.
+/// Read every entity's counters inside one acquisition window. With several
+/// entities, one that fails keeps its previous values under a window the
+/// others stamped, the device-visit cost principle 18 accepts.
 fn sweep(entities: &mut [Entity], group: &AcquisitionGroup) {
     let guard = group.acquire();
     let mut read_any = false;
@@ -182,6 +239,8 @@ struct Entity {
     slot: usize,
     labels: BTreeMap<String, String>,
     counters: Vec<Counter>,
+    /// Whether the last refresh read any counter, so a change is logged once.
+    reading: bool,
 }
 
 /// One open `hw_counters` file. Held open so a read is a single `pread`.
@@ -197,9 +256,16 @@ struct Counter {
 impl Entity {
     /// Read and publish each counter. Returns whether any counter read; a
     /// counter that fails keeps its previous value.
+    ///
+    /// A read the driver refuses ends this entity's refresh. The RDMA core
+    /// caches only a successful fetch, so each further file of a failing port
+    /// would send the stats commands again up to the one that fails, and each
+    /// command that fails counts in `network_efa_cmds_err`. A file whose
+    /// contents do not parse is skipped and the rest are read.
     fn refresh(&mut self) -> bool {
         let mut buffer = [0; 32];
         let mut read_any = false;
+        let mut refused = None;
         for counter in &mut self.counters {
             match read_counter(&counter.file, &mut buffer) {
                 Ok(value) => {
@@ -212,9 +278,25 @@ impl Entity {
                         debug!("{NAME}: {:?} {}: {e}", self.labels, counter.name);
                     }
                     counter.failing = true;
+                    if e.kind() != std::io::ErrorKind::InvalidData {
+                        refused = Some(e);
+                        break;
+                    }
                 }
             }
         }
+        if self.reading && !read_any {
+            match refused {
+                Some(e) => warn!(
+                    "{NAME}: {:?}: counters can no longer be read: {e}",
+                    self.labels
+                ),
+                None => warn!("{NAME}: {:?}: counters can no longer be read", self.labels),
+            }
+        } else if !self.reading && read_any {
+            info!("{NAME}: {:?}: counters can be read again", self.labels);
+        }
+        self.reading = read_any;
         read_any
     }
 }
@@ -264,17 +346,19 @@ fn discover(class: &Path) -> Discovered {
         }
 
         let device_labels: BTreeMap<String, String> = [("device".to_string(), name.clone())].into();
+        // Every EFA device gets a slot, with or without device counters, so the
+        // device group's bound is the device count and never 0 beside ports
+        // (`samplers::deferred` lifts a zero bound after a deferred init).
         let counters = open_counters(&dir.join("hw_counters"), DEVICE_COUNTERS);
-        if !counters.is_empty() {
-            if found.devices.len() == MAX_DEVICES {
-                warn!("{NAME}: more than {MAX_DEVICES} EFA devices; {name} is not reported");
-            } else {
-                found.devices.push(Entity {
-                    slot: found.devices.len(),
-                    labels: device_labels.clone(),
-                    counters,
-                });
-            }
+        if found.devices.len() == MAX_DEVICES {
+            warn!("{NAME}: more than {MAX_DEVICES} EFA devices; {name} is not reported");
+        } else {
+            found.devices.push(Entity {
+                slot: found.devices.len(),
+                labels: device_labels.clone(),
+                reading: !counters.is_empty(),
+                counters,
+            });
         }
 
         let mut ports: Vec<u32> = std::fs::read_dir(dir.join("ports"))
@@ -285,12 +369,18 @@ fn discover(class: &Path) -> Discovered {
             .collect();
         ports.sort();
         for port in ports {
-            let counters = open_counters(
-                &dir.join("ports").join(port.to_string()).join("hw_counters"),
-                PORT_COUNTERS,
-            );
+            let hw_counters = dir.join("ports").join(port.to_string()).join("hw_counters");
+            let counters = open_counters(&hw_counters, PORT_COUNTERS);
             if counters.is_empty() {
                 continue;
+            }
+            if let Some(ms) = lifespan_ms(&hw_counters).filter(|ms| *ms > MAX_LIFESPAN_MS) {
+                warn!(
+                    "{NAME}: {name} port {port}: hw_counters/lifespan is {ms} ms; a value \
+                     fetched for another reader, or for this sampler's previous read when \
+                     the lifespan is at least the read interval, can be up to that much \
+                     older than its window"
+                );
             }
             if found.ports.len() == MAX_PORTS {
                 warn!(
@@ -304,10 +394,18 @@ fn discover(class: &Path) -> Discovered {
                 slot: found.ports.len(),
                 labels,
                 counters,
+                reading: true,
             });
         }
     }
     found
+}
+
+/// How long, in milliseconds, the RDMA core serves the counters in
+/// `hw_counters` from one fetch.
+fn lifespan_ms(hw_counters: &Path) -> Option<u64> {
+    let contents = std::fs::read(hw_counters.join("lifespan")).ok()?;
+    parse_counter(&contents)
 }
 
 /// Open each of `known` that exists in `dir`.
@@ -489,6 +587,85 @@ mod tests {
         assert_eq!(NETWORK_EFA_RETRANS_PKTS.value(MAX_PORTS - 1), Some(124166));
         assert_eq!(NETWORK_EFA_RX_DROPS.value(MAX_PORTS - 1), Some(204));
         assert_eq!(NETWORK_EFA_CMDS_ERR.value(MAX_DEVICES - 1), Some(0));
+    }
+
+    /// A refused read ends the port's refresh, since each further file would
+    /// send the device's admin commands again; a file that does not parse is
+    /// skipped. A directory in place of a file makes `pread` fail with
+    /// `EISDIR`, standing in for the driver refusing the read.
+    #[test]
+    fn a_refused_read_ends_the_refresh_and_an_unparsed_file_does_not() {
+        let class = tempfile::tempdir().unwrap();
+        device(class.path(), "rdmap0s27", "efa");
+        let mut found = discover(class.path());
+        let port = &mut found.ports[0];
+        port.slot = MAX_PORTS - 2;
+        let dir = class.path().join("rdmap0s27/ports/1/hw_counters");
+
+        std::fs::write(dir.join("tx_bytes"), "garbage\n").unwrap();
+        assert!(port.refresh());
+        assert!(port.counters[0].failing);
+        assert!(!port.counters[1].failing);
+
+        // `tx_pkts` (the second file) now fails to parse, so reading it after
+        // the refusal would mark it failing.
+        std::fs::write(dir.join("tx_pkts"), "garbage\n").unwrap();
+        let refused = File::open(class.path()).unwrap();
+        port.counters[0].file = refused;
+        for counter in &mut port.counters {
+            counter.failing = false;
+        }
+        assert!(!port.refresh());
+        assert!(port.counters[0].failing);
+        assert_eq!(port.counters[1].name, "tx_pkts");
+        assert!(!port.counters[1].failing, "read after a refusal");
+        assert!(!port.reading);
+    }
+
+    fn pci_function(devices: &Path, name: &str, vendor: &str, device: &str) {
+        let dir = devices.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("vendor"), format!("{vendor}\n")).unwrap();
+        std::fs::write(dir.join("device"), format!("{device}\n")).unwrap();
+    }
+
+    #[test]
+    fn only_an_amazon_efa_function_is_an_efa_device() {
+        let devices = tempfile::tempdir().unwrap();
+        pci_function(devices.path(), "0000:00:05.0", EFA_PCI_VENDOR, "0xec20");
+        pci_function(devices.path(), "0000:00:06.0", "0x15b3", "0xefa1");
+        assert!(!has_efa_pci_function(devices.path()));
+
+        pci_function(devices.path(), "0000:00:1b.0", EFA_PCI_VENDOR, "0xefa1");
+        assert!(has_efa_pci_function(devices.path()));
+        assert!(!has_efa_pci_function(Path::new("/nonexistent/pci")));
+    }
+
+    #[test]
+    fn a_device_without_device_counters_still_has_a_slot() {
+        let class = tempfile::tempdir().unwrap();
+        device(class.path(), "rdmap0s27", "efa");
+        for (path, _) in capture() {
+            if !path.starts_with("ports/") {
+                std::fs::remove_file(class.path().join("rdmap0s27").join(path)).unwrap();
+            }
+        }
+
+        let found = discover(class.path());
+
+        assert_eq!(found.ports.len(), 1);
+        assert_eq!(found.devices.len(), 1);
+        assert!(found.devices[0].counters.is_empty());
+        assert!(!found.devices[0].reading);
+    }
+
+    #[test]
+    fn lifespan_is_read_in_milliseconds() {
+        let class = tempfile::tempdir().unwrap();
+        device(class.path(), "rdmap0s27", "efa");
+        let dir = class.path().join("rdmap0s27/ports/1/hw_counters");
+        assert_eq!(lifespan_ms(&dir), Some(10));
+        assert_eq!(lifespan_ms(class.path()), None);
     }
 
     #[test]

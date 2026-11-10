@@ -3,8 +3,9 @@ use metriken::*;
 use crate::agent::timing::AcquisitionGroup;
 use linkme::distributed_slice;
 
-/// Upper bound on EFA ports tracked. An EC2 instance has at most 32 EFA
-/// devices today, each with one port.
+/// Upper bound on EFA ports tracked. An EFA device has one port
+/// (`phys_port_cnt = 1` in the driver), and 64 is above the EFA device count of
+/// any instance type we know of.
 pub const MAX_PORTS: usize = 64;
 
 /// Upper bound on EFA devices tracked.

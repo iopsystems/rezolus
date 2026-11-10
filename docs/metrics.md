@@ -1661,22 +1661,37 @@ Device counters come from the device's own `hw_counters/` and carry a
 | `network_efa_mmap_err` | Memory mappings of an EFA device's queues that failed | `device`, `id` |
 | `network_efa_reg_mr_err` | Memory region registrations on an EFA device that failed | `device`, `id` |
 
-The files present differ by driver version. Kernel 6.18's driver has every
-port counter above; older drivers lack the `retrans_*`,
-`unresponsive_remote_events` and `impaired_remote_conn_events` counters.
-Amazon's out-of-tree driver (3.3.1a) adds `alloc_mr_err` and `get_dma_mr_err`.
-A counter whose file is missing publishes nothing. `lifespan`,
-`submitted_cmds`, `completed_cmds` and `keep_alive_rcvd` are not read.
+The files present differ by driver version. Mainline drivers before 6.17
+(Amazon's before r2.17.0) lack the `retrans_*`, `unresponsive_remote_events`
+and `impaired_remote_conn_events` files; before 6.6 (r2.5.0) they also lack
+`rdma_write_*`. On a device without RDMA write support the `rdma_write_*`
+files exist and read 0. Amazon's out-of-tree driver also has `alloc_mr_err`
+and `get_dma_mr_err`. A counter whose file is missing publishes nothing.
+`lifespan`, `submitted_cmds`, `completed_cmds` and `keep_alive_rcvd` are not
+read.
+
+An EFA device has one port, and the driver fetches its port counters for the
+whole device. On a host with an EFA PCI function the sampler waits for the
+`efa` module, so a module that loads after the agent starts is read. On a host
+without one the sampler reports unsupported at start. Discovery runs once: a
+device unbound, or whose module is reloaded, after discovery is not read again
+until the agent restarts, and the agent logs a warning.
 
 #### Cadence
 
-Reading a port's counters makes the driver send four or five admin commands to
-the device. The RDMA core then answers every file of that port from the result
+Reading a port's counters makes the driver send three to five admin commands
+to the device, by driver version and device. The RDMA core then answers every file of that port from the result
 for `hw_counters/lifespan` milliseconds (10 by default). On an im4gn.16xlarge
 sending about 55 Gbit/s over EFA, the first file read took 1.8 ms at p50 and
 2.8 ms at worst, and the other 21 files about 0.5 ms together. So this sampler
 reads on its own interval (`[samplers.network_efa] interval`, default 1s),
-dispatched via `spawn_blocking`, and serves cached values in between.
+dispatched via `spawn_blocking`, and serves cached values in between. A port
+read the driver refuses ends that port's read for the interval, because the
+RDMA core caches only a successful fetch and each further file would send the
+stats commands again. At start, the agent warns when a port's `lifespan` is
+above 100 ms: a value fetched for another reader can then be that much older
+than the window it is published in. Mainline drivers before 5.15 fetch the
+device counters with admin commands too.
 
 ### network_interfaces
 

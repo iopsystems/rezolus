@@ -33,7 +33,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   error counters, as `network_efa_<counter>` with `device` and `port` labels.
   Reading a port's counters sends admin commands to the device (1.8 ms at p50
   on an im4gn.16xlarge under load), so the sampler reads on its own interval,
-  default 1s. The Network section gains an EFA group with a line per port.
+  default 1s. The Network section gains an EFA group with a line per port, or
+  per device for the device counters.
 
 - **An AMD APU sampler that needs no ROCm.** `gpu_amd_sysfs` publishes
   `gpu_clock`, including the SoC and data fabric clocks, `gpu_power_usage`,

@@ -971,7 +971,7 @@
       "subgroups": [
         {
           "name": "EFA Traffic",
-          "description": "Bits and packets per second through each EFA port, counted by the device. Includes RDMA reads and writes, two-sided messages and retransmissions.",
+          "description": "Bits and packets per second through each EFA port, counted by the device. Retransmissions are shown in EFA Retransmits & Errors.",
           "plots": [
             {
               "data": [],
@@ -1369,7 +1369,7 @@
         },
         {
           "name": "EFA Device Errors",
-          "description": "Failed admin commands and verbs setup calls on each EFA device. An application that cannot open its EFA endpoints usually shows up here.",
+          "description": "Failed admin commands and verbs setup calls (protection domain, queue pair, completion queue, memory region, address handle, user context, mmap) on each EFA device.",
           "plots": [
             {
               "data": [],

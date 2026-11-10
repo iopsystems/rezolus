@@ -243,8 +243,8 @@ const EFA_DEVICE_SUBGROUP: &str = "EFA Device Errors";
 const EFA: &[EfaSubgroup] = &[
     (
         "EFA Traffic",
-        "Bits and packets per second through each EFA port, counted by the device. Includes \
-         RDMA reads and writes, two-sided messages and retransmissions.",
+        "Bits and packets per second through each EFA port, counted by the device. \
+         Retransmissions are shown in EFA Retransmits & Errors.",
         &[
             (
                 "EFA Transmit",
@@ -398,8 +398,8 @@ const EFA: &[EfaSubgroup] = &[
     ),
     (
         EFA_DEVICE_SUBGROUP,
-        "Failed admin commands and verbs setup calls on each EFA device. An application that \
-         cannot open its EFA endpoints usually shows up here.",
+        "Failed admin commands and verbs setup calls (protection domain, queue pair, completion \
+         queue, memory region, address handle, user context, mmap) on each EFA device.",
         &[
             (
                 "Admin Command Errors",
