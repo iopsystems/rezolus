@@ -341,6 +341,8 @@ fn serve_stream(
         gauges: Vec::new(),
         histograms: Vec::new(),
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     for seq in 0u64.. {
         if frames.is_some_and(|n| seq >= n) {
@@ -358,6 +360,8 @@ fn serve_stream(
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(
             &group,

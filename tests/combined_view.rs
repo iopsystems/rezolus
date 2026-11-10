@@ -115,6 +115,8 @@ fn serve_stream(mut stream: TcpStream, path: &str) {
         gauges: Vec::new(),
         histograms: Vec::new(),
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     let start = wall_ns();
     for seq in 0u64.. {
@@ -129,6 +131,8 @@ fn serve_stream(mut stream: TcpStream, path: &str) {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(
             &group,

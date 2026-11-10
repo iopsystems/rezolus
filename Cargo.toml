@@ -17,9 +17,9 @@ libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.4"
 metriken-charts = "0.1.0"
-metriken-exposition = "0.25.2"
-metriken-query = { version = "0.44.0", default-features = false }
-metriken-storage = { version = "0.7.0", default-features = false }
+metriken-exposition = "0.27.0"
+metriken-query = { version = "0.46.0", default-features = false }
+metriken-storage = { version = "0.9.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -49,7 +49,7 @@ dashboard = { path = "crates/dashboard" }
 # archives (a `documents` table, segment indexes in their own table), which
 # dendro 0.5.1 and earlier refuse; it still reads and resumes schema 4. 0.6.1
 # adds `SourceWriter::set_identity`, which metriken-storage 0.6's writer uses.
-dendro = { version = "0.6.1", default-features = false }
+dendro = { version = "0.7.0", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -58,7 +58,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.133"
+version = "6.0.0-alpha.134"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -116,7 +116,7 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # docs/journal/2026-10-12-metriken-recorder.md). It writes each recording's
 # identity layers and no `source` of its own; the readers take a recording's
 # producer from its layers (`dashboard::identity`).
-metriken-recorder = "0.8.1"
+metriken-recorder = "0.10.0"
 # The archive writer behind the `recording` copies (`write`), the
 # raw-msgpack-to-dendro conversion behind `recording convert` (`convert`), and
 # the `.rez` and parquet to dendro converters (`to_dendro`, `rez`). `record`,
@@ -145,7 +145,7 @@ reqwest = { version = "0.13.3", default-features = false, features = [
 # `bundled` compiles SQLite from source: slower builds, but no runtime system
 # dependency, which is what the `.deb` in [package.metadata.deb] needs.
 rez.workspace = true
-rusqlite = { version = "0.40", features = ["bundled", "blob"] }
+rusqlite = { version = "0.41", features = ["bundled", "blob"] }
 rustls = { version = "0.23", default-features = false, features = [
     "logging",
     "ring",

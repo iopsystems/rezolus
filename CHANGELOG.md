@@ -12,6 +12,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   ECharts 6's defaults changed. What still differs: the "OOB" tick on
   percentile charts takes the other tick labels' font, and a heatmap's first
   or last column can end a pixel earlier.
+- rusqlite 0.41 (libsqlite3-sys 0.39, SQLite 3.54), with dendro 0.7 and
+  metriken-storage 0.9, for RUSTSEC-2026-0459 (CVE-2026-119375): SQLite before
+  3.54.0 can return uninitialized page-cache memory when a database is opened
+  with a `-wal` file whose page size differs. The WASM viewer's SQLite stays
+  at 3.53.0, from sqlite-wasm-rs 0.5; it opens recordings from bytes in
+  memory, with no `-wal` file.
 - rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
   and RUSTSEC-2026-0383. (#1510)
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
@@ -530,6 +536,24 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   last focal release; `install.sh` still installs it there, with a warning.
 
 ### Changed
+
+- **A Prometheus endpoint's values keep their fractions**
+  (metriken-recorder 0.10, metriken-storage 0.9, metriken-query 0.46).
+  `rezolus record` stored a scraped counter or gauge as an integer, so a
+  gauge of 0.25 read 0 and a counter in seconds moved in whole seconds. It
+  now stores them as floating-point counters and gauges: `mcp`, both
+  viewers and their metric catalogs list them as `counter` and `gauge`, a
+  counter is read through `rate()` and `irate()` as before, and a gauge
+  reads as served. This covers typed counters and gauges, untyped samples
+  (a name ending in `_total`, `_sum` or `_count` is a counter, any other a
+  gauge), summary quantiles, and a histogram's `_sum` and `_count`; a
+  histogram's buckets are recorded as before. A recording of a Prometheus
+  endpoint made by this release holds segment format 3. 6.0 builds before
+  this one refuse an archive that holds one, including its other
+  recordings ("segment format 3 is newer than this reader"); open it with
+  this release or later. Archives holding only Rezolus agent recordings
+  are unchanged, and recordings made before this release read as they
+  did.
 
 - **An individual cgroup chart draws its selected names and groups from
   one query, and a group is matched by its unit's path.** Each

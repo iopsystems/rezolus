@@ -28,7 +28,7 @@ parquet = { version = "60.0.0", default-features = false, features = [
     # Pulls in `lz4_flex` (pure Rust, no C).
     "lz4",
 ] }
-rusqlite = { version = "0.40", features = ["bundled", "blob", "serialize"] }
+rusqlite = { version = "0.41", features = ["bundled", "blob", "serialize"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 tar = { version = "0.4.45", default-features = false }

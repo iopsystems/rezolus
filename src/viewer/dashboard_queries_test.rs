@@ -601,6 +601,8 @@ fn archive(fixture: &Fixture) -> (tempfile::TempDir, std::path::PathBuf) {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 match kind {
                     Kind::Counter => group.counters = vec![Some(1_000 * i); n],

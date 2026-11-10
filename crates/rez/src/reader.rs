@@ -2159,6 +2159,8 @@ mod tests {
                 gauges: Vec::new(),
                 histograms: Vec::new(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -2182,6 +2184,8 @@ mod tests {
                     .collect(),
                 histograms: Vec::new(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -2206,6 +2210,8 @@ mod tests {
                     })
                     .collect(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -2232,6 +2238,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2359,6 +2367,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2369,6 +2379,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2525,6 +2537,8 @@ mod tests {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let freq = GroupSnapshot {
                     name: "cpu_usage/freq".to_string(),
@@ -2535,6 +2549,8 @@ mod tests {
                     gauges: vec![Some(2_000 + i as i64)],
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let sched = GroupSnapshot {
                     name: "cpu_usage/sched".to_string(),
@@ -2545,6 +2561,8 @@ mod tests {
                     gauges: Vec::new(),
                     histograms: vec![Some(h)],
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let s = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2647,6 +2665,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2657,6 +2677,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2771,6 +2793,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2781,6 +2805,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2890,6 +2916,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     },
                     GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2900,6 +2928,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     },
                 ];
                 let s = Snapshot::V3(SnapshotV3 {
@@ -3330,6 +3360,8 @@ mod tests {
                 gauges: Vec::new(),
                 histograms: Vec::new(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -3382,6 +3414,8 @@ mod tests {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let snap = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts(tick)),

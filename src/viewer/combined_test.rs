@@ -1458,6 +1458,8 @@ fn dual(i: u64, kind: Held) -> metriken_exposition::Snapshot {
         gauges: only(Held::Gauge),
         histograms: only(Held::Histogram),
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     let mut histogram = ::histogram::Histogram::new(7, 64).unwrap();
     histogram.increment(1_000 + i).unwrap();
@@ -1483,6 +1485,8 @@ fn dual(i: u64, kind: Held) -> metriken_exposition::Snapshot {
                 _ => Vec::new(),
             },
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         }],
     })
 }

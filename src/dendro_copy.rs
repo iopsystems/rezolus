@@ -107,6 +107,8 @@ pub(crate) mod fixtures {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         let memory = GroupSchema {
             counters: Vec::new(),
@@ -119,6 +121,8 @@ pub(crate) mod fixtures {
             }],
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         let window = Some(metriken::Window::new(ts - SECOND / 2, ts));
         Snapshot::V3(SnapshotV3 {
@@ -135,6 +139,8 @@ pub(crate) mod fixtures {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 },
                 GroupSnapshot {
                     name: "memory/meminfo".to_string(),
@@ -145,6 +151,8 @@ pub(crate) mod fixtures {
                     gauges: vec![Some(1_000 - i as i64)],
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 },
             ],
         })
