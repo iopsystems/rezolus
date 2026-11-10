@@ -290,13 +290,29 @@ fn build_context(
 
 /// Run each KPI's query against `data` and mark the KPIs that return
 /// nothing unavailable, so their charts are listed as such rather than drawn
-/// empty. What both viewers do for a capture's service templates.
+/// empty, and log each KPI whose query failed ([`UnavailableKpi::log`]). What
+/// both viewers do for a capture's service templates, for a single
+/// recording, each side of a comparison and each recording of a combined
+/// archive.
 pub fn validate_service_extensions(
     data: &dyn MetricsSource,
     exts: &mut [(String, ServiceExtension)],
 ) {
+    for kpi in check_service_extensions(data, exts) {
+        kpi.log();
+    }
+}
+
+/// [`validate_service_extensions`] without the logging: marks each KPI's
+/// availability and returns the KPIs whose query failed, for a caller that
+/// logs them its own way (the server viewer warns once per process).
+pub fn check_service_extensions(
+    data: &dyn MetricsSource,
+    exts: &mut [(String, ServiceExtension)],
+) -> Vec<UnavailableKpi> {
     use metriken_query::QueryResult;
     let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
+    let mut failed = Vec::new();
     for (_source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
             let query = kpi.effective_query();
@@ -306,24 +322,45 @@ pub fn validate_service_extensions(
                 Ok(QueryResult::Scalar { .. }) => true,
                 Ok(QueryResult::HistogramHeatmap { result, .. }) => !result.data.is_empty(),
                 Err(e) => {
-                    if kpi_error_is_notable(&e) {
-                        tracing::warn!("KPI {:?} is unavailable: {query}: {e}", kpi.title);
-                    } else {
-                        tracing::debug!("KPI {:?} is unavailable: {query}: {e}", kpi.title);
-                    }
+                    failed.push(UnavailableKpi {
+                        notable: kpi_error_is_notable(&e),
+                        message: format!("KPI {:?} is unavailable: {query}: {e}", kpi.title),
+                    });
                     false
                 }
             };
+        }
+    }
+    failed
+}
+
+/// A KPI whose query failed, found by [`check_service_extensions`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnavailableKpi {
+    /// Whether the error says more than that the recording lacks the
+    /// KPI's metric ([`kpi_error_is_notable`]): logged at warn, else debug.
+    pub notable: bool,
+    /// The KPI's title, its query and the error.
+    pub message: String,
+}
+
+impl UnavailableKpi {
+    /// Log the message, at warn when it is notable and at debug otherwise.
+    pub fn log(&self) {
+        if self.notable {
+            tracing::warn!("{}", self.message);
+        } else {
+            tracing::debug!("{}", self.message);
         }
     }
 }
 
 /// Whether a KPI query's error says more than that the recording lacks its
 /// metric, which a template written for several producers expects: an
-/// evaluation error (an exporter's name stored under two names) or an
-/// unsupported operation. A parse error is not notable here, since an
-/// archive reports a metric it does not hold as one.
-fn kpi_error_is_notable(e: &metriken_query::QueryError) -> bool {
+/// evaluation or unsupported-operation error (a function given the wrong
+/// kind of metric). A parse error is not notable here, since an archive
+/// reports a metric it does not hold as one.
+pub fn kpi_error_is_notable(e: &metriken_query::QueryError) -> bool {
     use metriken_query::QueryError::*;
     matches!(e, EvaluationError(_) | Unsupported(_))
 }

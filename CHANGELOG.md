@@ -581,9 +581,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   exporter's name, which reads the same nanosecond values in recordings
   made before and after this release; the KPI check example in
   `docs/usage.md` does the same and states its threshold in nanoseconds.
-  A KPI query that fails with an error other than a missing metric (such
-  as the two-names error) is logged at warn when the viewer marks the KPI
-  unavailable, and any other at debug. `mcp detect-anomalies` given a bare
+  A KPI query that fails with an evaluation or unsupported error is logged
+  at warn when a viewer marks the KPI unavailable (once per process in the
+  server viewer), and any other failure at debug. `mcp detect-anomalies` given a bare
   exporter name wraps it by the kind of the series renamed from it, where
   it passed the name through unwrapped and failed.
   Save as Report logs a query whose columns it cannot resolve with

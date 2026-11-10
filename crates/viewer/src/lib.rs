@@ -853,7 +853,7 @@ impl Viewer {
 
         // Validate against this capture's own reader so per-capture
         // unavailability is correctly reported.
-        validate_service_extensions_inline(self.reader.as_ref(), &mut service_exts);
+        dashboard::dashboard::validate_service_extensions(self.reader.as_ref(), &mut service_exts);
         (service_exts, resolved.notices)
     }
 
@@ -1731,31 +1731,6 @@ fn parse_template_registry(
         }
     }
     Ok(registry)
-}
-
-/// Validate KPI availability for service extensions by running each KPI's
-/// PromQL query against the data source.
-fn validate_service_extensions_inline(
-    data: &dyn MetricsSource,
-    exts: &mut [(String, dashboard::ServiceExtension)],
-) {
-    use metriken_query::QueryResult;
-    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
-    for (_source, ext) in exts.iter_mut() {
-        for kpi in &mut ext.kpis {
-            let query = kpi.effective_query();
-            let has_data = match data.query_range(&query, start, end, 1.0) {
-                Ok(result) => match &result {
-                    QueryResult::Vector { result, .. } => !result.is_empty(),
-                    QueryResult::Matrix { result, .. } => !result.is_empty(),
-                    QueryResult::Scalar { .. } => true,
-                    QueryResult::HistogramHeatmap { result, .. } => !result.data.is_empty(),
-                },
-                Err(_) => false,
-            };
-            kpi.available = has_data;
-        }
-    }
 }
 
 /// Enrich a file-metadata JSON map with pre-computed multi-node info.
