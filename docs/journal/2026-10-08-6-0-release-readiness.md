@@ -224,7 +224,7 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
     (iopsystems/metriken#389), and taken by rezolus in #1679. Units
     (iopsystems/metriken#379): iopsystems/metriken#392, released in
     metriken-recorder 0.12, metriken-storage 0.11 and metriken-query 0.48
-    (iopsystems/metriken#393), and taken by rezolus in #PR. A query by an
+    (iopsystems/metriken#393), and taken by rezolus in #1681. A query by an
     original name reads the renamed series in the normalized unit, under the
     stored name (metriken's D1a), so a KPI over a scalar whose name ended in
     `_seconds` or `_ms` reads nanoseconds in a new recording; a `_seconds`
