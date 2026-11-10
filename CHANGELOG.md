@@ -12,6 +12,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   ECharts 6's defaults changed. What still differs: the "OOB" tick on
   percentile charts takes the other tick labels' font, and a heatmap's first
   or last column can end a pixel earlier.
+- rusqlite 0.41 (libsqlite3-sys 0.39, SQLite 3.54), with dendro 0.7 and
+  metriken-storage 0.9, for RUSTSEC-2026-0459 (CVE-2026-119375): SQLite before
+  3.54.0 can return uninitialized page-cache memory when a database is opened
+  with a `-wal` file whose page size differs. The WASM viewer's SQLite stays
+  at 3.53.0, from sqlite-wasm-rs 0.5; it opens recordings from bytes in
+  memory, with no `-wal` file.
 - rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
   and RUSTSEC-2026-0383. (#1510)
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
