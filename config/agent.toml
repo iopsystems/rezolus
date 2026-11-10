@@ -396,6 +396,15 @@ enabled = false
 # written back. Filesystem-agnostic. See docs/metrics.md#memory_writeback.
 [samplers.memory_writeback]
 
+# AWS Elastic Fabric Adapter (EFA) port and device counters from
+# /sys/class/infiniband: traffic, RDMA reads and writes, retransmits and
+# errors. Reports unsupported on a host with no EFA device. See
+# docs/metrics.md#network_efa.
+[samplers.network_efa]
+# Reading a port's counters sends admin commands to the device, so reads run
+# on their own cadence. Cached values are served between reads.
+# interval = "1s"
+
 # Reads ENA (Elastic Network Adapter) driver statistics via ethtool ioctls to
 # expose AWS EC2 allowance exceeded counters for bandwidth, PPS, connection
 # tracking, and link-local traffic. Does nothing on non-ENA interfaces.
