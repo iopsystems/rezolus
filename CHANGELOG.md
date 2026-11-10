@@ -538,7 +538,7 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 ### Changed
 
 - **A Prometheus endpoint's values keep their fractions**
-  (metriken-recorder 0.9, metriken-storage 0.8, metriken-query 0.45).
+  (metriken-recorder 0.10, metriken-storage 0.9, metriken-query 0.46).
   `rezolus record` stored a scraped counter or gauge as an integer, so a
   gauge of 0.25 read 0 and a counter in seconds moved in whole seconds. It
   now stores them as floating-point counters and gauges: `mcp`, both
