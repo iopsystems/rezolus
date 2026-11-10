@@ -2538,9 +2538,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.25.2"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d51e7cb89cb0140baa5bc76df6b5e4e33d5fd6696d3614ab34cd583678900aea"
+checksum = "fb5a97908e2cad66046aa0008f5cb0d2a3e1dc624ea341e99c4ae23ebcbd0fe4"
 dependencies = [
  "bytes",
  "chrono",
@@ -2562,9 +2562,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-model"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ae107ff864dddc55619588bc2234451dd6f6e08c468a40255a7740e84d7795"
+checksum = "a75bc5e71056f236b9d3a80b6a518191952953d997ad5713c24120a90001aa65"
 dependencies = [
  "histogram",
  "metriken-types",
@@ -2575,9 +2575,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.44.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4fd53db1460b3f5206e375a38be9824d7f213ba1b54cb49cab460833fe1c90e"
+checksum = "2e0f009c6282de77f21cd590c390be6a5f09445754e0682bf960d9234bb84f10"
 dependencies = [
  "arrow",
  "bytes",
@@ -2597,9 +2597,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-recorder"
-version = "0.8.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "540ad5d09b6756fb50308f56ba739fa6e0b348b15dcde8fb7ee30156ec653a72"
+checksum = "c870959cfbdf275fa7f680b6a4039a2ae82c8d279da1c84f1c4273cf2f15e2a6"
 dependencies = [
  "async-trait",
  "dendro",
@@ -2619,9 +2619,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f68ebf03147512ba68e75b7e9220038c6b1dd47d7699f1192423adcad7797075"
+checksum = "7e67b41babd69a7cd0cfd4fa1af2119a5a9e2f79df471f79adf9ebbcdf10b880"
 dependencies = [
  "arrow",
  "bytes",
@@ -3607,7 +3607,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.132"
+version = "6.0.0-alpha.133"
 dependencies = [
  "allan",
  "anyhow",

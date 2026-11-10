@@ -524,6 +524,22 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
+- **A Prometheus endpoint's values keep their fractions**
+  (metriken-recorder 0.9, metriken-storage 0.8, metriken-query 0.45).
+  `rezolus record` stored a scraped counter or gauge as an integer, so a
+  gauge of 0.25 read 0 and a counter in seconds moved in whole seconds. It
+  now stores them as floating-point counters and gauges: `mcp`, both
+  viewers and their metric catalogs list them as `counter` and `gauge`, a
+  counter is read through `rate()` and `irate()` as before, and a gauge
+  reads as served. This covers typed counters and gauges, untyped samples
+  (a name ending in `_total`, `_sum` or `_count` is a counter, any other a
+  gauge), summary quantiles, and a histogram's `_sum` and `_count`; a
+  histogram's buckets are recorded as before. A recording of a Prometheus
+  endpoint made by this release holds segment format 3, which earlier
+  releases refuse ("segment format 3 is newer than this reader"); open it
+  with this release or later. Recordings of a Rezolus agent are unchanged,
+  and recordings made before this release read as they did.
+
 - **An individual cgroup chart draws its selected names and groups from
   one query, and a group is matched by its unit's path.** Each
   `sum by (name) (...)` in the chart's query gets a `label_replace` per

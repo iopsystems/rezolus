@@ -998,6 +998,8 @@ mod tests {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         (
             Snapshot::V3(SnapshotV3 {

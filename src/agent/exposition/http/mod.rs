@@ -1653,6 +1653,8 @@ mod stream_frame_fixture {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         }
     }
 
@@ -1678,6 +1680,8 @@ mod stream_frame_fixture {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         })
         .unwrap();
         AgentRow {
@@ -1729,6 +1733,8 @@ mod stream_frame_fixture {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 })
                 .collect(),
         })
