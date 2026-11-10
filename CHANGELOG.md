@@ -537,6 +537,29 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
+- **A Prometheus histogram's observations above its highest finite bucket
+  count in its quantiles** (metriken-recorder 0.11, metriken-storage 0.10,
+  metriken-query 0.47). `rezolus record` dropped a histogram's `+Inf`
+  bucket, so a high quantile of a histogram with observations past its top
+  bucket read low. It now records them as the counter
+  `<histogram>_overflow`, listed in `mcp describe-metrics` and both
+  viewers' catalogs beside the histogram's `_sum` and `_count`, and
+  `histogram_quantile` counts them: a quantile that falls among them is
+  `+Inf`, with the band from the highest finite bound to `+Inf`, and lower
+  quantiles can move. A query result's JSON (the viewers' API, the MCP
+  `query` tool) writes a non-finite value as the string `"+Inf"`, `"-Inf"`
+  or `"NaN"`, as the Prometheus HTTP API does, where it wrote `null`;
+  `mcp query` prints `+Inf` and counts the `+Inf` points. A percentile
+  chart draws a `+Inf` quantile as a red dot in the band above its y-axis
+  (the "OOB" band a chart with a configured maximum already has), with the
+  value in the tooltip, and leaves out its band; a line chart, a compare
+  overlay and the terminal viewer draw a gap. Histograms recorded before
+  this release read as before. A 6.0 build before this one reading a
+  recording made by it returns the old quantile, lists one more counter
+  per histogram, and shows the histogram's `overflow` and `overflow_bound`
+  keys as labels. An exporter label named `overflow` or `overflow_bound`
+  is no longer a label, in any recording.
+
 - **A Prometheus endpoint's values keep their fractions**
   (metriken-recorder 0.10, metriken-storage 0.9, metriken-query 0.46).
   `rezolus record` stored a scraped counter or gauge as an integer, so a

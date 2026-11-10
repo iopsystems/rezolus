@@ -54,8 +54,12 @@ fn bounds(series: &[Series]) -> ([f64; 2], [f64; 2]) {
         for &(x, y) in &s.points {
             xmin = xmin.min(x);
             xmax = xmax.max(x);
-            ymin = ymin.min(y);
-            ymax = ymax.max(y);
+            // A +Inf quantile (one past a histogram's highest finite bucket)
+            // would make the y range infinite; `draw_lines` does not draw it.
+            if y.is_finite() {
+                ymin = ymin.min(y);
+                ymax = ymax.max(y);
+            }
         }
     }
     if !xmin.is_finite() {
@@ -86,9 +90,19 @@ fn draw_lines(f: &mut Frame, area: Rect, block: Block, unit: Option<&str>, serie
     // and ratatui iterates O(width) points per frame instead of the full,
     // possibly thousands-long, series. `reduced` outlives the `Chart` below.
     let target = (area.width as usize).saturating_mul(2).max(1);
+    // Non-finite values (a +Inf quantile) are not drawn: `bounds` leaves
+    // them out of the y range.
     let reduced: Vec<Vec<(f64, f64)>> = series
         .iter()
-        .map(|s| min_max_decimate(&s.points, target))
+        .map(|s| {
+            let finite: Vec<(f64, f64)> = s
+                .points
+                .iter()
+                .copied()
+                .filter(|p| p.1.is_finite())
+                .collect();
+            min_max_decimate(&finite, target)
+        })
         .collect();
     let datasets: Vec<Dataset> = series
         .iter()
@@ -152,6 +166,27 @@ mod tests {
             points: vec![(0.0, 1.0), (1.0, 2.0), (2.0, 1.5)],
         }]);
         render(&data, 60, 20);
+    }
+
+    #[test]
+    fn an_infinite_value_is_not_drawn() {
+        let series = |points: Vec<(f64, f64)>| {
+            vec![Series {
+                label: "p99".into(),
+                points,
+            }]
+        };
+        let with = series(vec![(0.0, 1.0), (1.0, f64::INFINITY), (2.0, 3.0)]);
+        assert_eq!(bounds(&with).1, [1.0, 3.0]);
+        // Drawn exactly as the finite points alone.
+        assert_eq!(
+            render_text(&ChartData::Lines(with), 40, 15),
+            render_text(
+                &ChartData::Lines(series(vec![(0.0, 1.0), (2.0, 3.0)])),
+                40,
+                15
+            )
+        );
     }
 
     #[test]

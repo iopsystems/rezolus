@@ -1102,13 +1102,13 @@ fn format_query_result(result: &QueryResult) -> String {
             for sample in result {
                 let bound = sample
                     .interval
-                    .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                    .map(|(lo, hi)| format!("  [{}, {}]", fixed6(lo), fixed6(hi)))
                     .unwrap_or_default();
                 writeln!(
                     &mut output,
                     "{} = {}{}",
                     format_metric(&sample.metric),
-                    sample.value.1,
+                    num(sample.value.1),
                     bound
                 )
                 .unwrap();
@@ -1135,14 +1135,14 @@ fn format_query_result(result: &QueryResult) -> String {
                     let ivl = series.intervals.as_ref();
                     let bound = |i: usize| -> String {
                         ivl.and_then(|v| v.get(i))
-                            .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                            .map(|(lo, hi)| format!("  [{}, {}]", fixed6(*lo), fixed6(*hi)))
                             .unwrap_or_default()
                     };
                     writeln!(
                         &mut output,
                         "  First: {} = {}{}",
                         first.0,
-                        first.1,
+                        num(first.1),
                         bound(0)
                     )
                     .unwrap();
@@ -1150,7 +1150,7 @@ fn format_query_result(result: &QueryResult) -> String {
                         &mut output,
                         "  Last:  {} = {}{}",
                         last.0,
-                        last.1,
+                        num(last.1),
                         bound(series.values.len() - 1)
                     )
                     .unwrap();
@@ -1165,9 +1165,20 @@ fn format_query_result(result: &QueryResult) -> String {
                     let sum: f64 = values.iter().sum();
                     let mean = sum / values.len() as f64;
 
-                    writeln!(&mut output, "  Min:   {}", min).unwrap();
-                    writeln!(&mut output, "  Max:   {}", max).unwrap();
-                    writeln!(&mut output, "  Mean:  {}", mean).unwrap();
+                    writeln!(&mut output, "  Min:   {}", num(min)).unwrap();
+                    writeln!(&mut output, "  Max:   {}", num(max)).unwrap();
+                    writeln!(&mut output, "  Mean:  {}", num(mean)).unwrap();
+                    // A +Inf quantile is one past the histogram's highest
+                    // finite bucket (metriken-query 0.47); say how many.
+                    let inf = values.iter().filter(|v| **v == f64::INFINITY).count();
+                    if inf > 0 {
+                        writeln!(
+                            &mut output,
+                            "  +Inf:  {inf} of {} points (above the histogram's highest finite bucket)",
+                            values.len()
+                        )
+                        .unwrap();
+                    }
                 }
                 writeln!(&mut output).unwrap();
             }
@@ -1175,7 +1186,7 @@ fn format_query_result(result: &QueryResult) -> String {
         QueryResult::Scalar { result, .. } => {
             writeln!(&mut output, "Scalar Result:").unwrap();
             writeln!(&mut output, "==============").unwrap();
-            writeln!(&mut output, "{} = {}", result.0, result.1).unwrap();
+            writeln!(&mut output, "{} = {}", result.0, num(result.1)).unwrap();
         }
         QueryResult::HistogramHeatmap { result, .. } => {
             writeln!(&mut output, "Histogram Heatmap Result:").unwrap();
@@ -1208,6 +1219,27 @@ fn format_query_result(result: &QueryResult) -> String {
     }
 
     output
+}
+
+/// A value as the query JSON writes it: `+Inf`, `-Inf` and `NaN` as
+/// Prometheus spells them (Rust's `Display` gives `inf`), finite values as
+/// `Display` gives them.
+fn num(v: f64) -> String {
+    match v {
+        f64::INFINITY => "+Inf".to_string(),
+        f64::NEG_INFINITY => "-Inf".to_string(),
+        v if v.is_nan() => "NaN".to_string(),
+        v => v.to_string(),
+    }
+}
+
+/// `num`, with a finite value to six decimal places.
+fn fixed6(v: f64) -> String {
+    if v.is_finite() {
+        format!("{v:.6}")
+    } else {
+        num(v)
+    }
 }
 
 fn format_metric(metric: &std::collections::HashMap<String, String>) -> String {
@@ -1769,6 +1801,35 @@ pub(crate) mod tests {
         };
         let s2 = format_query_result(&without);
         assert!(!s2.contains('['), "no bounds expected: {s2}");
+    }
+
+    /// A +Inf quantile prints as `+Inf`, as the query JSON writes it, not
+    /// as Rust's `inf`, with its open band and a count of such points.
+    #[test]
+    fn format_query_result_prints_infinity_as_prometheus_does() {
+        use metriken_query::{MatrixSample, QueryResult};
+        let result = QueryResult::Matrix {
+            result: vec![MatrixSample::new(
+                HashMap::new(),
+                vec![(1.0, 2.5e9), (2.0, f64::INFINITY)],
+            )
+            .with_intervals(Some(vec![(2.0e9, 2.5e9), (1.0e10, f64::INFINITY)]))],
+            notices: Vec::new(),
+        };
+        let s = format_query_result(&result);
+        assert!(
+            s.contains("Last:  2 = +Inf  [10000000000.000000, +Inf]"),
+            "{s}"
+        );
+        assert!(s.contains("Max:   +Inf"), "{s}");
+        assert!(s.contains("+Inf:  1 of 2 points"), "{s}");
+        assert!(!s.contains(" inf") && !s.contains("[inf"), "{s}");
+
+        let scalar = QueryResult::Scalar {
+            result: (1.0, f64::NAN),
+            notices: Vec::new(),
+        };
+        assert!(format_query_result(&scalar).contains("1 = NaN"));
     }
 
     /// A result's notices follow the table, one JSON object a line; a
