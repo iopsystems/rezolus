@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use dashboard::Event;
-use metriken_query::MetricsSource;
+use metriken_query::{MetricsSource, QueryError};
 use serde::Deserialize;
 use tracing::warn;
 
@@ -108,9 +108,10 @@ pub enum Side {
 /// Resolve every entry's query against `source`, union the returned
 /// columns, and always keep `timestamp` + `duration`.
 ///
-/// Queries that fail to PARSE are logged and skipped — one malformed
-/// chart shouldn't abort the whole save. Queries that parse but match
-/// no series contribute nothing.
+/// A query whose columns cannot be resolved is logged and skipped, so one
+/// chart does not abort the whole save; the report then holds none of that
+/// chart's columns (`unresolved_query_warning`). Queries that resolve but
+/// match no series contribute nothing.
 pub fn resolve_kept_columns(
     payload: &ReportPayload,
     source: &dyn MetricsSource,
@@ -130,10 +131,25 @@ pub fn resolve_kept_columns(
         };
         match source.columns(query) {
             Ok(cols) => out.extend(cols),
-            Err(e) => warn!("report-save: skipped malformed query {query:?}: {e}"),
+            Err(e) => warn!("{}", unresolved_query_warning(query, &e)),
         }
     }
     out
+}
+
+/// The warning for `query`, whose columns could not be resolved. Only a
+/// syntax error makes a query malformed; any other error (an exporter's
+/// metric name stored under two names, which metriken-query refuses with
+/// the matcher that picks one) is quoted as metriken-query wrote it, since
+/// the query itself is well formed and the message says how to fix it.
+fn unresolved_query_warning(query: &str, e: &QueryError) -> String {
+    match e {
+        QueryError::ParseError(_) => format!("report-save: skipped malformed query {query:?}: {e}"),
+        _ => format!(
+            "report-save: the report keeps no columns for query {query:?}, which could not \
+             be resolved: {e}"
+        ),
+    }
 }
 
 // ── Building a report ────────────────────────────────────────────────
@@ -417,6 +433,30 @@ pub const OCCUPANT_RESTATE_NS: u64 = 300_000_000_000;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A syntax error is a malformed query; any other error is quoted, not
+    /// called malformed.
+    #[test]
+    fn only_a_syntax_error_is_called_malformed() {
+        let parse = QueryError::ParseError("unexpected `)`".to_string());
+        let warning = unresolved_query_warning("rate(x[1m]))", &parse);
+        assert!(warning.contains("malformed"), "{warning}");
+        assert!(warning.contains("unexpected `)`"), "{warning}");
+
+        let ambiguous = QueryError::EvaluationError(
+            "series an exporter served as x_total are stored under x_nanoseconds_total and \
+             x_bytes_total, in different units; name one of them with \
+             x_nanoseconds_total{__prometheus_name__=\"x_total\"}"
+                .to_string(),
+        );
+        let warning = unresolved_query_warning("rate(x_total[1m])", &ambiguous);
+        assert!(!warning.contains("malformed"), "{warning}");
+        assert!(warning.contains("rate(x_total[1m])"), "{warning}");
+        assert!(
+            warning.contains(&ambiguous.to_string()),
+            "the message is quoted whole: {warning}"
+        );
+    }
     use bytes::Bytes;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::ArrowWriter;

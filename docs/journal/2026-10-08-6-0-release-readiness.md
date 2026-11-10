@@ -1,7 +1,7 @@
 # Rezolus 6.0.0: release readiness
 
 **Status: OPEN.** Plan opened 2026-10-08, updated 2026-11-09. `Cargo.toml` is
-at `6.0.0-alpha.135`; no `v6.*` tag exists and the latest release is v5.30.0.
+at `6.0.0-alpha.136`; no `v6.*` tag exists and the latest release is v5.30.0.
 This entry lists what has to be true before 6.0.0 is tagged and in what order,
 and records the decisions taken on 2026-10-08, 2026-10-12, 2026-11-05 and
 2026-11-06. On 2026-10-12
@@ -215,14 +215,22 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
       the band `[top bound, +Inf)` for a quantile among them
       (iopsystems/metriken#377).
 
-    Two of the three have landed. Floats (iopsystems/metriken#378):
+    All three have landed. Floats (iopsystems/metriken#378):
     iopsystems/metriken#384, released in metriken-recorder 0.9 and
     metriken-storage 0.8, and taken by rezolus in #1677 (metriken-recorder
     0.10, metriken-storage 0.9, metriken-query 0.46). The overflow
     (iopsystems/metriken#377): iopsystems/metriken#388, released in
     metriken-recorder 0.11, metriken-storage 0.10 and metriken-query 0.47
     (iopsystems/metriken#389), and taken by rezolus in #1679. Units
-    (iopsystems/metriken#379) is open.
+    (iopsystems/metriken#379): iopsystems/metriken#392, released in
+    metriken-recorder 0.12, metriken-storage 0.11 and metriken-query 0.48
+    (iopsystems/metriken#393), and taken by rezolus in #1681. A query by an
+    original name reads the renamed series in the normalized unit, under the
+    stored name (metriken's D1a), so a KPI over a scalar whose name ended in
+    `_seconds` or `_ms` reads nanoseconds in a new recording; a `_seconds`
+    histogram's buckets were in nanoseconds already. The only Prometheus
+    names with a unit in the shipped templates are 46 `_seconds` histogram
+    KPIs, which keep the original names.
 
     Per-endpoint intervals, label selectors in `recording filter`, repeated
     scrapes of interval aggregates and grouping power 3 for converted

@@ -16,6 +16,7 @@ metriken-storage = { workspace = true, features = ["archive"] }
 regex = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tracing = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 include_dir.workspace = true

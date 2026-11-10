@@ -289,16 +289,58 @@ fn auto_construct_query(
         query
     };
 
-    if data.has_counter(metric_name) {
-        Ok(format!("sum(irate({}[1m]))", query))
-    } else if data.has_gauge(metric_name) {
-        Ok(format!("sum({})", query))
-    } else if data.has_histogram(metric_name) {
-        Ok(format!("histogram_quantile(0.99, {})", query))
-    } else {
+    // An exporter's name that the recorder stored under another name (a
+    // Prometheus `rpc_seconds` as `rpc_nanoseconds`) is not in the catalog;
+    // the query keeps the exporter's name, which metriken-query reads from
+    // the renamed series, and is wrapped by that series' kind.
+    let kind = kind_of(data, metric_name).or_else(|| renamed_kind(data, metric_name));
+    match kind {
+        Some(Kind::Counter) => Ok(format!("sum(irate({}[1m]))", query)),
+        Some(Kind::Gauge) => Ok(format!("sum({})", query)),
+        Some(Kind::Histogram) => Ok(format!("histogram_quantile(0.99, {})", query)),
         // Unknown metric: return as-is and let normal error handling report it
-        Ok(query.to_string())
+        None => Ok(query.to_string()),
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Counter,
+    Gauge,
+    Histogram,
+}
+
+/// The kind of metric `name` in `data`'s catalog.
+fn kind_of(data: &dyn MetricsSource, name: &str) -> Option<Kind> {
+    if data.has_counter(name) {
+        Some(Kind::Counter)
+    } else if data.has_gauge(name) {
+        Some(Kind::Gauge)
+    } else if data.has_histogram(name) {
+        Some(Kind::Histogram)
+    } else {
+        None
+    }
+}
+
+/// The kind of the series a Prometheus exporter served as `name` and the
+/// recorder stored under another name: a name `name` can be stored under
+/// (`fallback_candidates`) holding a series whose `__prometheus_name__` is
+/// `name`.
+fn renamed_kind(data: &dyn MetricsSource, name: &str) -> Option<Kind> {
+    use metriken_storage::prometheus_units::{fallback_candidates, PROMETHEUS_NAME_LABEL};
+    fallback_candidates(name).iter().find_map(|stored| {
+        let kind = kind_of(data, stored)?;
+        let labels = match kind {
+            Kind::Counter => data.counter_labels(stored),
+            Kind::Gauge => data.gauge_labels(stored),
+            Kind::Histogram => data.histogram_labels(stored),
+        };
+        labels
+            .iter()
+            .any(|l| l.get(PROMETHEUS_NAME_LABEL).map(String::as_str) == Some(name))
+            .then_some(kind)
+    })
 }
 
 /// Perform anomaly detection on a time series

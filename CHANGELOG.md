@@ -537,6 +537,61 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
+- **A Prometheus series whose name ends in a unit is stored in nanoseconds
+  or bytes, under a normalized name** (metriken-recorder 0.12,
+  metriken-storage 0.11, metriken-query 0.48, metriken-charts 0.1.4).
+  `rezolus record` stores a series whose name ends in a time or size unit
+  (`_seconds`, `_ms`, `_us`, `_bytes`, `_kib`, `_bits`, ... before any
+  `_bucket`, `_sum`, `_count` or `_total`), or whose OpenMetrics `# UNIT`
+  line names one, in nanoseconds or bytes, with the `unit` key set, under
+  the name with its unit replaced: `rpc_seconds_sum` is
+  `rpc_nanoseconds_sum` (×1e9), `queue_ms` is `queue_nanoseconds` (×1e6),
+  `rx_bits_total` is `rx_bytes_total` (÷8). A histogram's buckets, `_sum`
+  and overflow bound, a summary's quantiles and `_sum`, and scalars are
+  scaled by one factor; a `_count` is renamed and not scaled. A `_seconds`
+  histogram's buckets read as before (they were already in nanoseconds), and
+  its `_sum` now does too: `rate(x_seconds_sum) / rate(x_seconds_count)`
+  over a new recording reads nanoseconds where it read seconds. The
+  exporter's name, with any `:` replaced by `_` as the recorder already
+  did, is kept in the internal label `__prometheus_name__`, which
+  `mcp describe-metrics`, the viewers' metric catalogs and label pickers,
+  and chart legends leave out. A selector's result carries it beside
+  `__name__` (in `mcp query` and the query JSON); a `histogram_quantiles`
+  result does not. A query naming the exporter's name reads, when
+  no series it reaches has that name, the renamed series: in the stored
+  unit, under the stored name. When two endpoints' `# UNIT` lines store one
+  exporter name under two names, such a query is an error that names both
+  and the matcher that picks one (`<stored name>{__prometheus_name__="<exporter
+  name>"}`); `mcp query`, the MCP `query` tool and the viewers' query API
+  return that message as written. The error's example of a recording-label
+  matcher is `{source="..."}`; in a rezolus recording the recording label
+  is `alias` (`jobs_total{alias="b"}`), and `{source="..."}` returns the
+  same error. Two exporter names that would be stored under one name
+  (`rpc_seconds` and `rpc_ms`) both keep their names, with their whole
+  family, in the exporter's units, for the rest of the recording: a kept
+  `_seconds` histogram is stored in seconds times the generic `scale`
+  (metriken-recorder 0.11 stored it ×1e9), so a chart of it with
+  `unit_system: time` reads about 1e9 low, and a collision that first
+  appears mid-run stores one series under two names in one recording. A histogram whose smallest bound
+  is below 1 is still stored ×10^k, now with that factor in the `scale`
+  key, which, like `overflow` and `overflow_bound`, is not a label in any
+  recording. Recordings made before this release keep their names and
+  units, and a query by the exporter's name reads them as before. The
+  shipped KPI templates name their 46 `_seconds` histograms by the
+  exporter's name, which reads the same nanosecond values in recordings
+  made before and after this release; the KPI check example in
+  `docs/usage.md` does the same and states its threshold in nanoseconds.
+  A KPI query that fails with an evaluation or unsupported error is logged
+  at warn when a viewer marks the KPI unavailable (once per process in the
+  server viewer), and any other failure at debug. `mcp detect-anomalies` given a bare
+  exporter name wraps it by the kind of the series renamed from it, where
+  it passed the name through unwrapped and failed.
+  Save as Report logs a query whose columns it cannot resolve with
+  metriken-query's message, and calls only a syntax error malformed. In a
+  comparison, a percentile chart's series are paired by their visible
+  labels only, so a renamed series pairs with an older recording's. 6.0
+  builds before this one show `scale` as a label on such a histogram.
+
 - **A Prometheus histogram's observations above its highest finite bucket
   count in its quantiles** (metriken-recorder 0.11, metriken-storage 0.10,
   metriken-query 0.47, metriken-charts 0.1.3). `rezolus record` dropped a

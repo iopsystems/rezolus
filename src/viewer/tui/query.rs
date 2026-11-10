@@ -357,6 +357,32 @@ mod tests {
         assert_eq!(series_labels(&[&a]), vec!["h"]);
     }
 
+    /// A Prometheus series stored under a normalized name carries the
+    /// exporter's name in `__prometheus_name__`, which sorts before every
+    /// visible key; the legend is what it would be without it.
+    #[test]
+    fn a_renamed_series_is_not_named_by_its_exporter_name() {
+        let a = labels(&[
+            ("__name__", "rpc_nanoseconds"),
+            ("__prometheus_name__", "rpc_seconds"),
+            ("alias", "svc"),
+        ]);
+        assert_eq!(series_labels(&[&a]), vec!["svc"]);
+        let b = labels(&[
+            ("__name__", "rpc_nanoseconds"),
+            ("__prometheus_name__", "rpc_seconds"),
+            ("alias", "svc"),
+            ("op", "get"),
+        ]);
+        let c = labels(&[
+            ("__name__", "rpc_nanoseconds"),
+            ("__prometheus_name__", "rpc_ms"),
+            ("alias", "svc"),
+            ("op", "put"),
+        ]);
+        assert_eq!(series_labels(&[&b, &c]), vec!["get", "put"]);
+    }
+
     #[test]
     fn percentile_label_wins() {
         let a = labels(&[("host", "h"), ("percentile", "99")]);
