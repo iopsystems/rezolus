@@ -20,7 +20,6 @@ import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { pairedSeriesNamer } from './charts/util/labels.js';
 import { baseRoute, groupCompares, pinCompareMeta } from './features/group_utils.js';
-import { mergeResults } from './features/cgroup_discovery.js';
 
 // Normalization helpers for compare-mode captures.
 
@@ -572,35 +571,33 @@ const fetchExtraCaptures = (vnode) => {
     })();
 };
 
-// `query` run on every capture of a comparison: on the baseline through
-// `baselineQuery`, on each other capture over its own range. `baselineQuery`
-// applies only the section's scope; anything else `query` needs, such as the
-// selected node, is already in it, since every capture runs the same string.
-// The answer holds every capture's series, so the cgroup selector lists a
-// cgroup any capture recorded. A rejection of the baseline's query rejects
-// the whole call; another capture whose query fails, or that has no usable
-// range, adds nothing.
-export const queryEveryCapture = async (query, baselineQuery, {
+// One query function per capture of a comparison, the baseline's first: the
+// baseline's is `baselineQuery`, and each other capture's runs a query over
+// that capture's own range. `baselineQuery` applies only the section's scope;
+// anything else a query needs, such as the selected node, the caller puts in
+// the query string. A capture whose metadata cannot be read, or that has no
+// usable range, gets no function.
+export const captureQueries = async (baselineQuery, {
     listCaptures: list = listCaptures,
     captureMetadata: metadata = captureMetadata,
     queryRangeForCapture: queryCapture = queryRangeForCapture,
 } = {}) => {
     const caps = await list().catch(() => []);
     const others = (Array.isArray(caps) ? caps : []).filter((c) => c.id !== CAPTURE_BASELINE);
-    const results = await Promise.all([
-        Promise.resolve().then(() => baselineQuery(query)),
-        ...others.map(async (cap) => {
-            try {
-                const range = rangeFromMeta(await metadata(cap.id));
-                return range
-                    ? await queryCapture(cap.id, query, range.start, range.end, range.step)
-                    : null;
-            } catch (_) {
-                return null;
-            }
+    const ranges = await Promise.all(others.map(async (cap) => {
+        try {
+            return rangeFromMeta(await metadata(cap.id));
+        } catch (_) {
+            return null;
+        }
+    }));
+    return [
+        baselineQuery,
+        ...others.flatMap((cap, i) => {
+            const range = ranges[i];
+            return range ? [(query) => queryCapture(cap.id, query, range.start, range.end, range.step)] : [];
         }),
-    ]);
-    return mergeResults(results);
+    ];
 };
 
 export const CompareChartWrapper = {

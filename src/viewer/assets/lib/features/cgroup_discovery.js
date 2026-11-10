@@ -6,6 +6,11 @@
 // samplers still carry per-cgroup series. Then the names come from the union
 // of those, so the selector does not report "no cgroup data" for a recording
 // that has some.
+//
+// Each capture of a comparison is searched on its own (`discoverEveryCapture`):
+// each may have `cgroup_cpu_usage` or only the other series, and the names
+// found in a capture that has it do not include the cgroups of one that
+// lacks it.
 
 /** The per-cgroup series tried after `cgroup_cpu_usage`, by sampler. */
 export const FALLBACK_CGROUP_METRICS = [
@@ -44,19 +49,6 @@ export const extractCgroupNames = (result) => {
 };
 
 /**
- * One PromQL result holding the series of every result in `results` that
- * succeeded, for discovery across the captures of a comparison. A capture
- * whose query failed (null, or not `success`) adds nothing.
- */
-export const mergeResults = (results) => ({
-    status: 'success',
-    data: {
-        resultType: 'matrix',
-        result: results.flatMap((r) => (r?.status === 'success' ? r.data?.result || [] : [])),
-    },
-});
-
-/**
  * The cgroup names in a recording. `executeQuery(query)` resolves to a
  * PromQL result; a query that throws is skipped, as a metric the recording
  * lacks may.
@@ -81,6 +73,18 @@ export const discoverCgroups = async (executeQuery) => {
         for (const name of await run(`group by (name) (${metric})`)) {
             union.add(name);
         }
+    }
+    return union;
+};
+
+/**
+ * The cgroup names in any capture of a comparison: `discoverCgroups` run on
+ * each of `queries`, one query function per capture, and the names joined.
+ */
+export const discoverEveryCapture = async (queries) => {
+    const union = new Set();
+    for (const names of await Promise.all(queries.map(discoverCgroups))) {
+        for (const name of names) union.add(name);
     }
     return union;
 };

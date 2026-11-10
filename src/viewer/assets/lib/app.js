@@ -18,7 +18,7 @@ setDisplayMode(true);
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor, setFamily } from './selection/selection.js';
 import { SaveModal, notify } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
-import { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscoverQuery } from './sections/section_views.js';
+import { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscover } from './sections/section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { readViewState, writeViewState, clearViewState } from './ui/url_state.js';
@@ -27,7 +27,7 @@ import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { MetricBrowserView } from './features/metric_browser.js';
 import { createSourceRoutes } from './features/source_routes.js';
-import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView, queryEveryCapture } from './viewer_core.js';
+import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView, captureQueries } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import { contentFor, CLIENT_SECTIONS } from './ui/client_views.js';
 import {
@@ -1015,6 +1015,24 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     },
 });
 
+// The queries of a cgroups section: `baselineQuery` runs a PromQL range
+// query on the section's recording, reading only its sources
+// (`metadata.scope`) with the selected node applied, and `discover` resolves
+// to the cgroup names, those of every capture when `compare`.
+const cgroupQueries = (metadata, compare) => {
+    const withNode = (query) => {
+        const node = getSelectedNode();
+        return node ? injectLabel(query, 'node', node) : query;
+    };
+    const scopedQuery = (query) => executePromQLRangeQuery(
+        query, undefined, undefined, 'grid', metadata?.scope ?? null);
+    const baselineQuery = (query) => scopedQuery(withNode(query));
+    return {
+        baselineQuery,
+        discover: cgroupDiscover({ compare, baselineQuery, scopedQuery, withNode, captureQueries }),
+    };
+};
+
 const SectionContent = {
     view({ attrs }) {
         // No resolved section (route doesn't match a loaded section yet,
@@ -1172,15 +1190,7 @@ const SectionContent = {
             : `${sectionName} (${withData})`;
 
         if (baseRoute(attrs.section.route) === '/cgroups') {
-            const withNode = (query) => {
-                const node = getSelectedNode();
-                return node ? injectLabel(query, 'node', node) : query;
-            };
-            // The cgroup discovery's own queries read the section's
-            // recording's sources, as its charts do (`metadata.scope`).
-            const scopedQuery = (query) => executePromQLRangeQuery(
-                query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
-            const baselineQuery = (query) => scopedQuery(withNode(query));
+            const { baselineQuery, discover } = cgroupQueries(attrs.metadata, sectionCompare);
             return renderCgroupSection({
                 attrs,
                 titleText,
@@ -1191,9 +1201,7 @@ const SectionContent = {
                 executePromQLRangeQuery: baselineQuery,
                 // The selected node filters every capture, as it does the
                 // compare charts (`buildEffectiveQuery`).
-                discoverQuery: cgroupDiscoverQuery({
-                    compare: sectionCompare, baselineQuery, scopedQuery, withNode, queryEveryCapture,
-                }),
+                discover,
                 compare: sectionCompare,
                 Group,
                 applyResultToPlot,
@@ -1554,12 +1562,9 @@ const initDashboard = (config = {}) => {
                     loadSection(sectionKey, {
                         cgroupPattern: activeCgroupPattern ?? (async (section) => {
                             try {
-                                await loadCgroupGroups(route, (q) => {
-                                    const node = getSelectedNode();
-                                    if (node) q = injectLabel(q, 'node', node);
-                                    return executePromQLRangeQuery(
-                                        q, undefined, undefined, 'grid', section.metadata?.scope ?? null);
-                                });
+                                await loadCgroupGroups(route, cgroupQueries(
+                                    section.metadata, sectionCompares(compareMode, section.metadata),
+                                ).discover);
                             } catch (e) {
                                 console.warn('[cgroups] group discovery failed:', e);
                             }

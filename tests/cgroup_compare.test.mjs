@@ -1,7 +1,7 @@
 // The cgroups section in an A/B comparison: the experiment's query resolves
 // the cgroup selection as the baseline's does (experimentQuery), whether or
 // not the selector has written it into the plot; discovery lists the
-// cgroups of every capture (queryEveryCapture); and an individual chart with
+// cgroups of every capture (captureQueries); and an individual chart with
 // nothing selected says so instead of drawing an error.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,10 +41,10 @@ globalThis.sessionStorage = globalThis.localStorage;
 globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({}), text: async () => '' });
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
 
-const { experimentQuery, queryEveryCapture, CompareChartWrapper } = await import('../src/viewer/assets/lib/viewer_core.js');
+const { experimentQuery, captureQueries, CompareChartWrapper } = await import('../src/viewer/assets/lib/viewer_core.js');
 const { substituteCgroupPattern } = await import('../src/viewer/assets/lib/data.js');
 const { cgroupQueryVariants, deriveCgroupGroups, resolveCgroupSelection } = await import('../src/viewer/assets/lib/features/cgroup_selection.js');
-const { discoverCgroups } = await import('../src/viewer/assets/lib/features/cgroup_discovery.js');
+const { discoverEveryCapture } = await import('../src/viewer/assets/lib/features/cgroup_discovery.js');
 
 const INDIVIDUAL = 'sum by (name) (irate(cgroup_cpu_usage{name=~"__SELECTED_CGROUPS__"}[5m])) / 1000000000';
 const AGGREGATE = 'sum(irate(cgroup_cpu_usage{name!~"__SELECTED_CGROUPS__"}[5m])) / 1000000000';
@@ -89,30 +89,42 @@ test('an individual chart with nothing selected says so in compare mode', () => 
 });
 
 test('discovery lists the cgroups of every capture', async () => {
+    // The experiment has no cgroup_cpu_usage, only cgroup_cpu_cycles.
     const byCapture = {
-        baseline: ['/a', '/b'],
-        experiment: ['/b', '/c'],
-        arm3: ['/d'],
+        baseline: { cgroup_cpu_usage: ['/a', '/b'] },
+        experiment: { cgroup_cpu_cycles: ['/b', '/c'] },
+        arm3: { cgroup_cpu_usage: ['/d'] },
         broken: 'throw',
+        rangeless: { cgroup_cpu_usage: ['/e'] },
     };
-    const answer = (names) => ({
-        status: 'success',
-        data: { resultType: 'matrix', result: names.map((name) => ({ metric: { name }, values: [] })) },
-    });
+    const answer = (byMetric, query) => {
+        const metric = Object.keys(byMetric).find((k) => query.includes(k));
+        return {
+            status: 'success',
+            data: {
+                resultType: 'matrix',
+                result: (metric ? byMetric[metric] : []).map((name) => ({ metric: { name }, values: [] })),
+            },
+        };
+    };
     const seen = [];
     const deps = {
         listCaptures: async () => Object.keys(byCapture).map((id) => ({ id })),
-        captureMetadata: async (id) => ({ data: { minTime: 0, maxTime: 60, interval: 1, id } }),
+        captureMetadata: async (id) => (id === 'rangeless'
+            ? { data: {} }
+            : { data: { minTime: 0, maxTime: 60, interval: 1, id } }),
         queryRangeForCapture: async (id, query) => {
             seen.push(id);
             if (byCapture[id] === 'throw') throw new Error('refused');
-            return answer(byCapture[id]);
+            return answer(byCapture[id], query);
         },
     };
-    const names = await discoverCgroups((query) => queryEveryCapture(
-        query, async () => answer(byCapture.baseline), deps));
+    const queries = await captureQueries(async (query) => answer(byCapture.baseline, query), deps);
+    assert.equal(queries.length, 4, 'the baseline and each capture with a range');
+    const names = await discoverEveryCapture(queries);
     assert.deepEqual([...names].sort(), ['/a', '/b', '/c', '/d']);
     assert.ok(!seen.includes('baseline'), 'the baseline is read through its own scoped query');
+    assert.ok(!seen.includes('rangeless'), 'a capture with no range is not queried');
 });
 
 test('a compare chart fetches again when the selection changes, and only then', async () => {
@@ -215,7 +227,7 @@ test('a histogram chart does not fetch again while a refresh fetches the metadat
     }
 });
 
-const { renderCgroupSection, cgroupDiscoverQuery } = await import('../src/viewer/assets/lib/sections/section_views.js');
+const { renderCgroupSection, cgroupDiscover } = await import('../src/viewer/assets/lib/sections/section_views.js');
 
 const cgroupSectionAttrs = () => ({
     section: { route: '/cgroups' },
@@ -241,9 +253,9 @@ const renderCgroups = (extra) => renderCgroupSection({
 
 test('in compare mode each cgroup pair renders as a Group with both plots', () => {
     const Group = 'Group';
-    const discoverQuery = () => null;
-    const [, selector, pairs] = renderCgroups({ compare: true, Group, discoverQuery }).children;
-    assert.equal(selector.attrs.discoverQuery, discoverQuery, 'the selector discovers with the query passed in');
+    const discover = async () => new Set();
+    const [, selector, pairs] = renderCgroups({ compare: true, Group, discover }).children;
+    assert.equal(selector.attrs.discover, discover, 'the selector discovers with the function passed in');
     assert.ok(Array.isArray(pairs) && pairs.length === 1, 'one Group per pair');
     assert.equal(pairs[0].tag, Group);
     assert.deepEqual(
@@ -259,15 +271,21 @@ test('outside compare mode the cgroup pairs render side by side, not as Groups',
 
 test('a comparison discovers cgroups on every capture, with the node applied', async () => {
     const calls = [];
-    const baselineQuery = (q) => { calls.push(['baseline', q]); return 'b'; };
-    const scopedQuery = (q) => { calls.push(['scoped', q]); return 's'; };
+    const found = (name) => ({ status: 'success', data: { result: [{ metric: { name } }] } });
+    const baselineQuery = async (q) => { calls.push(['baseline', q]); return found('/b'); };
+    const scopedQuery = async (q) => { calls.push(['scoped', q]); return found('/s'); };
     const withNode = (q) => `${q}+node`;
-    const queryEveryCapture = async (q, base) => { calls.push(['every', q]); return base(q); };
-    const args = { baselineQuery, scopedQuery, withNode, queryEveryCapture };
+    const other = async (q) => { calls.push(['other', q]); return found('/o'); };
+    const captureQueries = async (base) => [base, other];
+    const args = { baselineQuery, scopedQuery, withNode, captureQueries };
 
-    assert.equal(cgroupDiscoverQuery({ ...args, compare: false }), baselineQuery);
+    assert.deepEqual([...await cgroupDiscover({ ...args, compare: false })()], ['/b']);
+    assert.ok(calls.every(([who]) => who === 'baseline'), 'outside compare only the baseline is read');
 
-    const discover = cgroupDiscoverQuery({ ...args, compare: true });
-    assert.equal(await discover('q'), 's');
-    assert.deepEqual(calls, [['every', 'q+node'], ['scoped', 'q+node']]);
+    calls.length = 0;
+    const names = await cgroupDiscover({ ...args, compare: true })();
+    assert.deepEqual([...names].sort(), ['/o', '/s']);
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every(([who, q]) => who !== 'baseline' && q.endsWith('+node')),
+        'every capture is read through its own query with the node applied');
 });

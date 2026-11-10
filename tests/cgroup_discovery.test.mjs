@@ -3,7 +3,7 @@
 // a recording has none of it (cpu_usage with cgroup_attribution off).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { discoverCgroups, mergeResults } from '../src/viewer/assets/lib/features/cgroup_discovery.js';
+import { discoverCgroups, discoverEveryCapture } from '../src/viewer/assets/lib/features/cgroup_discovery.js';
 
 const result = (...names) => ({
     status: 'success',
@@ -49,14 +49,23 @@ test('a recording with no per-cgroup series finds none', async () => {
 
 test('a comparison lists the cgroups of every capture', async () => {
     // Two captures, each with a cgroup the other lacks, and a third whose
-    // query failed (null) or was refused.
-    const baseline = engine({ cgroup_cpu_usage: ['/a', '/b'] });
-    const experiment = engine({ cgroup_cpu_usage: ['/b', '/c'] });
-    const names = await discoverCgroups(async (query) => mergeResults([
-        await baseline(query),
-        await experiment(query),
-        null,
-        { status: 'error', error: 'refused' },
-    ]));
+    // every query is refused.
+    const names = await discoverEveryCapture([
+        engine({ cgroup_cpu_usage: ['/a', '/b'] }),
+        engine({ cgroup_cpu_usage: ['/b', '/c'] }),
+        async () => { throw new Error('refused'); },
+    ]);
     assert.deepEqual([...names].sort(), ['/a', '/b', '/c']);
+});
+
+test('a capture without cgroup_cpu_usage is searched by the other series', async () => {
+    // The baseline has cgroup_cpu_usage; the experiment recorded with
+    // cgroup_attribution off for cpu_usage, so only cgroup_cpu_cycles names
+    // its cgroups. The baseline's answer to the first query must not end
+    // the experiment's search.
+    const names = await discoverEveryCapture([
+        engine({ cgroup_cpu_usage: ['/a'] }),
+        engine({ cgroup_cpu_cycles: ['/a', '/only-experiment'] }),
+    ]);
+    assert.deepEqual([...names].sort(), ['/a', '/only-experiment']);
 });
