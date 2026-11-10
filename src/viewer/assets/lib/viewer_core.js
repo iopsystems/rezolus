@@ -13,6 +13,7 @@ import {
     fetchQuantileSpectrumForPlot, nativeInterval, stepAtLeast,
     listCaptures, captureMetadata, mapLimit,
     fetchEntityHeatmapForCapture, isEntityQuery,
+    withoutInfinities, boxplotWithoutInfinities, plotOwnOpts,
 } from './data.js';
 import { canonicalQuantileLabel, composeScatterLabel } from './compare/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
@@ -75,7 +76,9 @@ const extractBaselineCapture = (spec, options = {}) => {
                     }
                 }
                 if (label == null) continue;
-                map.set(String(label), { timeData, valueData: data[i] || [] });
+                // A percentile chart keeps +Inf for its out-of-bounds band
+                // (markOverflow); a compare overlay draws it as a gap.
+                map.set(String(label), { timeData, valueData: withoutInfinities(data[i] || []) });
             }
         }
         cap.seriesMap = map;
@@ -120,7 +123,10 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
         cap.interpolated = pair.interpolated || null;
         // Decimated boxplot columns (fetched separately via display mode) for
         // the compare envelope — null when the fetch failed or is pending.
-        cap.boxplot = Array.isArray(options.boxplot) ? (options.boxplot[0] || null) : null;
+        // ±Infinity is a gap, as on the matrix path (parseFinite).
+        cap.boxplot = Array.isArray(options.boxplot)
+            ? boxplotWithoutInfinities(options.boxplot[0] || null)
+            : null;
         return cap;
     }
 
@@ -157,7 +163,7 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
                 if (label == null) continue;
                 map.set(String(label), {
                     timeData: Array.from(s.t),
-                    valueData: Array.from(s.median),
+                    valueData: withoutInfinities(Array.from(s.median)),
                 });
             }
             cap.seriesMap = map;
@@ -756,7 +762,9 @@ export const CompareChartWrapper = {
         }
 
         const result = renderCompareChart({
-            spec,
+            // The compare overlays draw +Inf as a gap, so they take the
+            // plot's own format, without the range markOverflow added.
+            spec: plotOwnOpts(spec) === spec.opts ? spec : { ...spec, opts: plotOwnOpts(spec) },
             captures: [baselineCap, experimentCap, ...extraCaps],
             anchors: anchors || { baseline: 0, experiment: 0 },
             // The family-baseline setting (null for a plain A/B): every

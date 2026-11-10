@@ -78,13 +78,18 @@ pub(crate) fn classify(
     if interpolated {
         return PointState::Indeterminate;
     }
+    // An infinite end is kept: a +Inf quantile's band (highest finite bound,
+    // +Inf) says the value is above the bound, which is all that is known.
     let (lo, hi) = match band {
-        Some((lo, hi)) if lo.is_finite() && hi.is_finite() => (lo.min(hi), lo.max(hi)),
+        Some((lo, hi)) if !lo.is_nan() && !hi.is_nan() => (lo.min(hi), lo.max(hi)),
         _ => (value, value),
     };
+    // A band open above, (bound, +Inf), excludes its bound: every overflow
+    // observation is strictly above the highest finite `le`.
+    let open = hi == f64::INFINITY;
     match bound {
         Bound::Above(t) => {
-            if lo > t {
+            if lo > t || (open && lo >= t) {
                 PointState::Violating
             } else if hi > t {
                 PointState::Indeterminate
@@ -909,6 +914,53 @@ mod tests {
         );
         assert_eq!(
             classify(6.0, Some((5.0, 7.0)), false, Bound::Below(5.0)),
+            Pass
+        );
+    }
+
+    /// A +Inf quantile (one past a histogram's highest finite bucket,
+    /// metriken-query 0.47) carries the band (highest finite bound, +Inf):
+    /// the value is somewhere above the bound. A threshold above the bound
+    /// may or may not be crossed; one below it is.
+    #[test]
+    fn an_open_band_above_the_top_bucket_is_classified_by_its_bound() {
+        let open = Some((10.0, f64::INFINITY));
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Above(20.0)),
+            Indeterminate
+        );
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Above(5.0)),
+            Violating
+        );
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Below(20.0)),
+            Indeterminate
+        );
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Below(5.0)),
+            Pass
+        );
+    }
+
+    /// Every overflow observation is strictly above the highest finite
+    /// bound, so a threshold at the bound is crossed (`above`) and not
+    /// undercut (`below`).
+    #[test]
+    fn an_open_band_excludes_its_bound() {
+        let open = Some((10.0, f64::INFINITY));
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Above(10.0)),
+            Violating
+        );
+        assert_eq!(
+            classify(f64::INFINITY, open, false, Bound::Below(10.0)),
+            Pass
+        );
+        // A closed band still includes its ends: equal to the threshold
+        // passes.
+        assert_eq!(
+            classify(10.0, Some((10.0, 10.0)), false, Bound::Above(10.0)),
             Pass
         );
     }

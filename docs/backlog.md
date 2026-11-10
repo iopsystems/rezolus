@@ -735,17 +735,10 @@ decisions 8 to 14 (2026-11-05 and 2026-11-06) for what 6.0.0 waits for.
 
 Blocking 6.0.0:
 
-- **Prometheus scalars as floats** — Open (iopsystems/metriken#378,
-  decision 13). A float gauge and float counter kind in metriken-model,
-  -exposition, -storage and -query, written by metriken-recorder for every
-  Prometheus scalar; the viewer reads them.
 - **Units in Prometheus names** — Open (iopsystems/metriken#379,
   decision 13). Detect and normalize the unit, rename with
   `__prometheus_name__` kept, metriken-query falling back to
   `__prometheus_name__`; `docs/labels.md` updated.
-- **Prometheus `+Inf` bucket** — Open (iopsystems/metriken#377,
-  decision 13). An overflow counter, and `histogram_quantile` returning
-  `+Inf` for a quantile in it.
 - **systemslab reads and records `.dendro`** — Open (decision 14). Its
   reader opening dendro schema 5 with decision 13's float kinds, and its
   runner asking `rezolus record` for `.dendro`

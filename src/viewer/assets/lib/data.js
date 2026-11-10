@@ -540,10 +540,113 @@ const substituteCgroupPattern = (query, selection) => {
 // path (applyResultToPlot) and the compare path (extractExperimentCapture
 // in viewer_core) apply. Extracted so the two callers can't drift.
 
-const parseNumeric = (v) => {
+// A query result writes a non-finite value as the string "+Inf", "-Inf" or
+// "NaN", as the Prometheus HTTP API does (metriken-query 0.47; `null` before).
+// `Number("+Inf")` is NaN, so the infinities are named here.
+const NON_FINITE_STRINGS = new Map([['+Inf', Infinity], ['Inf', Infinity], ['-Inf', -Infinity]]);
+
+// A value from a query result as a number: ±Infinity for "+Inf"/"-Inf", null
+// for null, "NaN" and anything that does not parse.
+export const parseNumeric = (v) => {
     if (v === null || v === undefined) return null;
+    if (typeof v === 'string' && NON_FINITE_STRINGS.has(v)) return NON_FINITE_STRINGS.get(v);
     const n = typeof v === 'number' ? v : Number(v);
     return Number.isNaN(n) ? null : n;
+};
+
+// parseNumeric, with ±Infinity as null. For the paths that draw a non-finite
+// value as a gap: a line chart drawn from the matrix given one Infinity sets
+// its y-axis extent wrong and leaves the finite points off the chart
+// (tests/histogram_overflow.test.mjs), where a null or NaN is a gap with the
+// axis intact.
+const parseFinite = (v) => {
+    const n = parseNumeric(v);
+    return Number.isFinite(n) ? n : null;
+};
+
+const isInfinite = (v) => v === Infinity || v === -Infinity;
+
+// `arr` with ±Infinity replaced by NaN (a gap), or `arr` itself when it holds
+// none. A typed array stays typed. Never mutates `arr`: decoded display
+// columns are shared with the tile cache.
+export const withoutInfinities = (arr) => {
+    if (!arr || typeof arr.some !== 'function' || !arr.some(isInfinite)) return arr;
+    const fix = (v) => (isInfinite(v) ? NaN : v);
+    return ArrayBuffer.isView(arr) ? arr.map(fix) : Array.from(arr, fix);
+};
+
+const BOXPLOT_COLUMNS = ['min', 'lo', 'median', 'hi', 'max', 'uncLo', 'uncHi'];
+
+// A decoded display series ({t, min, lo, median, hi, max, …}) with ±Infinity
+// replaced by NaN in every value column; the same object when it has none.
+export const boxplotWithoutInfinities = (s) => {
+    if (!s) return s;
+    let out = s;
+    for (const c of BOXPLOT_COLUMNS) {
+        const fixed = withoutInfinities(s[c]);
+        if (fixed !== s[c]) {
+            if (out === s) out = { ...s };
+            out[c] = fixed;
+        }
+    }
+    return out;
+};
+
+// A percentile chart's +Inf quantile (one past the histogram's highest finite
+// bucket, metriken-query 0.47) is drawn in the chart's out-of-bounds band: the
+// strip above the y-axis maximum where scatter.js parks values over
+// `format.range.max`, a red dot whose tooltip gives the value. A plot with no
+// `range.max` of its own gets one here, the largest finite value it holds
+// (values, display columns and band ends), so no finite value is moved. The
+// +Inf point's open band is not drawn (parseIntervals, displayIntervals), so
+// the highest finite bound is not on the chart. Without the range the point is
+// not drawn at all. The plot's own format is restored on the next result.
+// Every other chart, and a percentile chart with no finite value to put the
+// band above, draws ±Infinity as a gap.
+// A plot's opts as the plot defines them: without the range markOverflow
+// added. Anything that keeps or copies a plot's opts beyond this render (a
+// Notebook pin, a compare overlay) takes these.
+export const plotOwnOpts = (plot) => (
+    Object.prototype.hasOwnProperty.call(plot, '_formatBeforeOverflow')
+        ? { ...plot.opts, format: plot._formatBeforeOverflow }
+        : plot.opts
+);
+
+export const markOverflow = (plot) => {
+    if (Object.prototype.hasOwnProperty.call(plot, '_formatBeforeOverflow')) {
+        plot.opts = { ...plot.opts, format: plot._formatBeforeOverflow };
+        delete plot._formatBeforeOverflow;
+    }
+    const columns = Array.isArray(plot.data) ? plot.data.slice(1) : [];
+    const boxplot = Array.isArray(plot.boxplot) ? plot.boxplot : [];
+    const infinite = columns.some((c) => Array.isArray(c) && c.some(isInfinite))
+        || boxplot.some((s) => boxplotWithoutInfinities(s) !== s);
+    if (!infinite) return;
+
+    // A quantile is never -Inf, so only +Inf reaches the band.
+    const range = plot.opts?.format?.range;
+    if (plot._resolvedStyle === 'scatter' && !(range && range.max != null)) {
+        let max = -Infinity;
+        const scan = (v) => { if (Number.isFinite(v) && v > max) max = v; };
+        for (const c of columns) if (Array.isArray(c)) c.forEach(scan);
+        for (const s of boxplot) for (const c of BOXPLOT_COLUMNS) if (s[c]) s[c].forEach(scan);
+        for (const iv of plot.series_intervals || []) {
+            for (const pair of iv || []) if (Array.isArray(pair)) pair.forEach(scan);
+        }
+        // computeOobBand needs a span above the floor (and log10 of the max).
+        if (max > (range?.min ?? 0)) {
+            plot._formatBeforeOverflow = plot.opts?.format;
+            plot.opts = {
+                ...plot.opts,
+                format: { ...(plot.opts?.format || {}), range: { ...(range || {}), max } },
+            };
+            return;
+        }
+    }
+    plot.data = Array.isArray(plot.data)
+        ? plot.data.map((c, i) => (i === 0 ? c : withoutInfinities(c)))
+        : plot.data;
+    if (Array.isArray(plot.boxplot)) plot.boxplot = plot.boxplot.map(boxplotWithoutInfinities);
 };
 
 // Convert `result.data.result` (a PromQL range-query series array) into
@@ -611,7 +714,7 @@ export const promqlResultToHeatmapTriples = (results) => {
         for (const [ts, rawVal] of item.values || []) {
             const ti = timestampToIndex.get(ts);
             if (ti === undefined) continue;
-            const v = parseNumeric(rawVal);
+            const v = parseFinite(rawVal);
             if (v != null) {
                 if (v < minValue) minValue = v;
                 if (v > maxValue) maxValue = v;
@@ -653,8 +756,10 @@ export const parseIntervals = (sample) => {
     if (!Array.isArray(iv) || iv.length === 0) return null;
     const out = iv.map((pair) => {
         if (!Array.isArray(pair) || pair.length < 2) return null;
-        const lo = parseNumeric(pair[0]);
-        const hi = parseNumeric(pair[1]);
+        // A band with an infinite end (a +Inf quantile's (bound, +Inf)) has
+        // no top to draw; the display path drops it too (displayIntervals).
+        const lo = parseFinite(pair[0]);
+        const hi = parseFinite(pair[1]);
         if (lo === null || hi === null) return null;
         return lo <= hi ? [lo, hi] : [hi, lo];
     });
@@ -685,7 +790,7 @@ export const promqlResultToLinePair = (results) => {
     const values = Array.isArray(first?.values) ? first.values : [];
     return {
         timeData: values.map((pair) => Number(pair[0])),
-        valueData: values.map((pair) => parseNumeric(pair[1])),
+        valueData: values.map((pair) => parseFinite(pair[1])),
         // Optional rate()/histogram value band, parallel to valueData; null
         // for non-rate queries. Lets compare/experiment captures carry a band.
         intervals: parseIntervals(first),
@@ -709,10 +814,18 @@ export const promqlResultToSeriesMap = (results, labelFor) => {
         const values = Array.isArray(item.values) ? item.values : [];
         map.set(String(label), {
             timeData: values.map((pair) => Number(pair[0])),
-            valueData: values.map((pair) => parseNumeric(pair[1])),
+            valueData: values.map((pair) => parseFinite(pair[1])),
         });
     });
     return map;
+};
+
+// A decoded display response onto the plot (charts/display.js
+// applyDisplayToPlot), then its +Inf values handled as applyResultToPlot
+// handles them.
+export const applyDisplayResult = (plot, decoded) => {
+    applyDisplayToPlot(plot, decoded);
+    markOverflow(plot);
 };
 
 const applyResultToPlot = (plot, result) => {
@@ -803,7 +916,9 @@ const applyResultToPlot = (plot, result) => {
                                 allData.push(timestamps);
                             }
 
-                            const values = item.values.map(([_, val]) => parseFloat(val));
+                            // NaN where there is no value, as parseFloat
+                            // gave; +Inf kept for markOverflow.
+                            const values = item.values.map(([_, val]) => parseNumeric(val) ?? NaN);
                             allData.push(values);
                         }
                     }
@@ -825,7 +940,7 @@ const applyResultToPlot = (plot, result) => {
             const sample = result.data.result[0];
             if (sample.values && Array.isArray(sample.values)) {
                 const timestamps = sample.values.map(([ts, _]) => ts);
-                const values = sample.values.map(([_, val]) => parseFloat(val));
+                const values = sample.values.map(([_, val]) => parseNumeric(val) ?? NaN);
                 plot.data = [timestamps, values];
                 // Optional rate() uncertainty band, parallel to values.
                 plot.intervals = parseIntervals(sample);
@@ -847,6 +962,7 @@ const applyResultToPlot = (plot, result) => {
         plot.series_intervals = [];
         plot.intervals = null;
     }
+    markOverflow(plot);
 };
 
 // Remove the plots of `data` that have no data, adding them to
@@ -1124,7 +1240,7 @@ const createDataApi = ({
                     try {
                         const decoded = await fetchDisplaySeries(queries[0].query, metadata, signal, scope);
                         if (superseded()) return;
-                        applyDisplayToPlot(plot, decoded);
+                        applyDisplayResult(plot, decoded);
                     } catch (_) {
                         if (superseded()) return;
                         const res = await matrix((q) => executePromQLRangeQuery(q, metadata, signal, 'grid', scope));
