@@ -549,11 +549,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   quantiles can move. A query result's JSON (the viewers' API, the MCP
   `query` tool) writes a non-finite value as the string `"+Inf"`, `"-Inf"`
   or `"NaN"`, as the Prometheus HTTP API does, where it wrote `null`;
-  `mcp query` prints `+Inf` and counts the `+Inf` points. A percentile
-  chart draws a `+Inf` quantile as a red dot in the band above its y-axis
-  (the "OOB" band a chart with a configured maximum already has), with the
-  value in the tooltip, and leaves out its band; a line chart, a compare
-  overlay and the terminal viewer draw a gap. Histograms recorded before
+  `mcp query` prints `+Inf` and counts the `+Inf` points, and
+  `mcp detect-anomalies` leaves non-finite points out of its analysis and
+  says how many. A check (`recording check`, `run_checks`) reads a `+Inf`
+  quantile as above the highest finite bound: a threshold below that bound
+  is violated, one above it indeterminate. A percentile chart draws a
+  `+Inf` quantile as a red dot in the band above its y-axis (the "OOB" band
+  a chart with a configured maximum already has), with the value in the
+  tooltip, and leaves out its band; a line chart, a compare overlay and the
+  terminal viewer draw a gap. A chart pinned to the Notebook keeps its own
+  y-axis range, not the one drawn for a `+Inf`. Histograms recorded before
   this release read as before. A 6.0 build before this one reading a
   recording made by it returns the old quantile, lists one more counter
   per histogram, and shows the histogram's `overflow` and `overflow_bound`

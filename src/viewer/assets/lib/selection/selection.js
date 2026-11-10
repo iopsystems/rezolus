@@ -6,7 +6,7 @@ import { ChartsState } from '../charts/chart.js';
 import { ChartView } from '../ui/chart_view.js';
 import { CompareChartWrapper } from '../viewer_core.js';
 import { compareToggle } from '../ui/chart_controls.js';
-import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
+import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, plotOwnOpts, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { runCgroupVariants } from '../features/cgroup_selection.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
@@ -551,7 +551,10 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
         // capture wherever the entry is rendered.
         single_capture: compareMeta?.singleCapture === true || undefined,
         note: '',
-        chartOpts: JSON.parse(JSON.stringify(spec.opts)),
+        // The plot's own opts: a percentile chart showing a +Inf quantile
+        // has a range.max for this render only (data.js markOverflow).
+        // Every stored or exported chartOpts is copied from here.
+        chartOpts: JSON.parse(JSON.stringify(plotOwnOpts(spec))),
     });
     // Capture compare metadata on first pin in compare mode. Don't
     // overwrite later pins so the first author's intent wins (e.g.,

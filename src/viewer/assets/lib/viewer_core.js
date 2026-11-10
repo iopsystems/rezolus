@@ -13,7 +13,7 @@ import {
     fetchQuantileSpectrumForPlot, nativeInterval, stepAtLeast,
     listCaptures, captureMetadata, mapLimit,
     fetchEntityHeatmapForCapture, isEntityQuery,
-    withoutInfinities, boxplotWithoutInfinities,
+    withoutInfinities, boxplotWithoutInfinities, plotOwnOpts,
 } from './data.js';
 import { canonicalQuantileLabel, composeScatterLabel } from './compare/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
@@ -764,9 +764,7 @@ export const CompareChartWrapper = {
         const result = renderCompareChart({
             // The compare overlays draw +Inf as a gap, so they take the
             // plot's own format, without the range markOverflow added.
-            spec: Object.prototype.hasOwnProperty.call(spec, '_formatBeforeOverflow')
-                ? { ...spec, opts: { ...spec.opts, format: spec._formatBeforeOverflow } }
-                : spec,
+            spec: plotOwnOpts(spec) === spec.opts ? spec : { ...spec, opts: plotOwnOpts(spec) },
             captures: [baselineCap, experimentCap, ...extraCaps],
             anchors: anchors || { baseline: 0, experiment: 0 },
             // The family-baseline setting (null for a plain A/B): every

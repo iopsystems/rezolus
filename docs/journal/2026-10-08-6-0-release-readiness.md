@@ -215,6 +215,16 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
       the band `[top bound, +Inf)` for a quantile among them
       (iopsystems/metriken#377).
 
+    Two of the three have landed. Floats (iopsystems/metriken#378):
+    iopsystems/metriken#384, released in metriken-recorder 0.9 and
+    metriken-storage 0.8, and taken by rezolus in #1677 (metriken-recorder
+    0.10, metriken-storage 0.9, metriken-query 0.46). The overflow
+    (iopsystems/metriken#377): iopsystems/metriken#388, released in
+    metriken-recorder 0.11, metriken-storage 0.10 and metriken-query 0.47
+    (iopsystems/metriken#389), and taken by rezolus on branch
+    `feat/metriken-histogram-overflow`. Units (iopsystems/metriken#379) is
+    open.
+
     Per-endpoint intervals, label selectors in `recording filter`, repeated
     scrapes of interval aggregates and grouping power 3 for converted
     histograms follow 6.0.0 (iopsystems/metriken#380, #1661,

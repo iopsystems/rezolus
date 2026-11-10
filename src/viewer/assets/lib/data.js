@@ -603,6 +603,15 @@ export const boxplotWithoutInfinities = (s) => {
 // not drawn at all. The plot's own format is restored on the next result.
 // Every other chart, and a percentile chart with no finite value to put the
 // band above, draws ±Infinity as a gap.
+// A plot's opts as the plot defines them: without the range markOverflow
+// added. Anything that keeps or copies a plot's opts beyond this render (a
+// Notebook pin, a compare overlay) takes these.
+export const plotOwnOpts = (plot) => (
+    Object.prototype.hasOwnProperty.call(plot, '_formatBeforeOverflow')
+        ? { ...plot.opts, format: plot._formatBeforeOverflow }
+        : plot.opts
+);
+
 export const markOverflow = (plot) => {
     if (Object.prototype.hasOwnProperty.call(plot, '_formatBeforeOverflow')) {
         plot.opts = { ...plot.opts, format: plot._formatBeforeOverflow };
