@@ -539,9 +539,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 - **A Prometheus histogram's observations above its highest finite bucket
   count in its quantiles** (metriken-recorder 0.11, metriken-storage 0.10,
-  metriken-query 0.47). `rezolus record` dropped a histogram's `+Inf`
-  bucket, so a high quantile of a histogram with observations past its top
-  bucket read low. It now records them as the counter
+  metriken-query 0.47, metriken-charts 0.1.3). `rezolus record` dropped a
+  histogram's `+Inf` bucket, so a high quantile of a histogram with
+  observations past its top bucket read low. It now records them as the counter
   `<histogram>_overflow`, listed in `mcp describe-metrics` and both
   viewers' catalogs beside the histogram's `_sum` and `_count`, and
   `histogram_quantile` counts them: a quantile that falls among them is
@@ -555,8 +555,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   quantile as above the highest finite bound: a threshold below that bound
   is violated, one above it indeterminate. A percentile chart draws a
   `+Inf` quantile as a red dot in the band above its y-axis (the "OOB" band
-  a chart with a configured maximum already has), with the value in the
-  tooltip, and leaves out its band; a line chart, a compare overlay and the
+  a chart with a configured maximum already has), with `+Inf` in the
+  tooltip, and leaves out its band; zooming or pinning a percentile keeps
+  the y-axis on the finite values; a line chart, a compare overlay and the
   terminal viewer draw a gap. A chart pinned to the Notebook keeps its own
   y-axis range, not the one drawn for a `+Inf`. Histograms recorded before
   this release read as before. A 6.0 build before this one reading a

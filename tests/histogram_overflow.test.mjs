@@ -1,10 +1,9 @@
 // A histogram quantile past the highest finite bucket is +Inf (metriken-query
 // 0.47), written in a query result's JSON as the string "+Inf" and in the
 // display binary as an f64 Infinity. A percentile chart draws it in its
-// out-of-bounds band (markOverflow); without that it draws nothing there. A
-// line chart drawn from the JSON matrix given one Infinity sets its y-axis
-// extent wrong and leaves the finite points off the chart, so every chart but
-// a percentile chart gets a gap.
+// out-of-bounds band (markOverflow); without that it draws nothing there.
+// Every other chart gets a gap. metriken-charts 0.1.3 keeps ±Infinity out of
+// every series and axis computation itself; data.js does not depend on it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -39,6 +38,7 @@ const {
 } = await import('../src/viewer/assets/lib/data.js');
 const { configureScatterChart } = await import('../src/viewer/assets/lib/charts/scatter.js');
 const { configureLineChart } = await import('../src/viewer/assets/lib/charts/line.js');
+const { Chart } = await import('../src/viewer/assets/lib/charts/chart.js');
 
 
 // 1 s in nanoseconds: the highest finite bound, the band's lower end.
@@ -222,8 +222,9 @@ test('without markOverflow the +Inf percentile is not drawn', () => {
     plot.opts = { ...plot.opts, format: undefined };
     const { option } = renderedYAxis(plot);
     const p99 = option.series.find((s) => s.type === 'scatter' && s.name === 'p99');
+    const holdsInfinity = (d) => (Array.isArray(d) ? d : d?.value || []).includes(Infinity);
+    assert.ok(!p99.data.some(holdsInfinity), 'no p99 item holds Infinity');
     assert.ok(!p99.data.some((d) => d && d.value && d.value[2] != null), 'nothing parked');
-    assert.ok(p99.data.some((d) => Array.isArray(d) && d[1] === Infinity), 'an unplaceable point');
 });
 
 const lineResult = {
@@ -241,10 +242,56 @@ test('a line chart with a +Inf value keeps its finite points on the axis', () =>
     assert.ok(extent[0] <= 1 && extent[1] >= 4, `extent ${extent}`);
 });
 
-test('a line chart given Infinity loses its finite points (why it gets a gap)', () => {
+test('a line chart given Infinity keeps its finite points on the axis', () => {
     const plot = { opts: { id: 'l', type: 'gauge' } };
     applyResultToPlot(plot, lineResult);
     plot.data = [plot.data[0], [1, Infinity, 3, 4]];
     const { extent } = renderedYAxis(plot, configureLineChart);
-    assert.ok(!(extent[1] >= 4), `echarts kept the finite points in ${extent}`);
+    assert.ok(extent[0] <= 1 && extent[1] >= 4, `extent ${extent}`);
+});
+
+// A zoom and a legend pin rescale the y-axis from the chart's data
+// (Chart._rescaleYAxis), which a +Inf quantile must not take to an infinite
+// extent. Through the plot applyResultToPlot builds and the Chart class the
+// viewer's ChartView drives, with echarts stubbed to record the y-axis.
+const rescaled = (act) => {
+    const plot = percentilePlot();
+    applyResultToPlot(plot, percentileResult());
+    const yAxes = [];
+    const chart = Object.create(Chart.prototype);
+    Object.assign(chart, {
+        spec: plot,
+        domNode: stubElement(),
+        interval: 1,
+        pinnedSet: new Set(),
+        chartsState: {
+            zoomLevel: { start: 25, end: 100 },
+            isDefaultZoom: () => false,
+        },
+        echart: {
+            setOption: (o) => { if (!o.series && o.yAxis) yAxes.push(o.yAxis); },
+            dispatchAction() {}, on() {}, off() {},
+            getOption: () => ({ yAxis: [{ type: 'value' }] }),
+            convertToPixel: () => [0, 0],
+        },
+    });
+    configureScatterChart(chart);
+    act(chart);
+    assert.ok(yAxes.length > 0, 'the y-axis was rescaled');
+    return yAxes.at(-1);
+};
+
+test('a zoom over a +Inf percentile keeps the y-axis finite', () => {
+    const y = rescaled((chart) => chart._applyZoom({ start: 25, end: 100 }));
+    assert.ok(Number.isFinite(y.min) && Number.isFinite(y.max), JSON.stringify(y));
+    assert.ok(y.max >= 6e8, JSON.stringify(y));
+});
+
+test('pinning the +Inf percentile keeps the y-axis finite', () => {
+    const y = rescaled((chart) => {
+        chart.pinnedSet.add('p99');
+        chart._rescaleYAxis();
+    });
+    assert.ok(Number.isFinite(y.min) && Number.isFinite(y.max), JSON.stringify(y));
+    assert.ok(y.min <= 6e8 && y.max >= 6e8, JSON.stringify(y));
 });
