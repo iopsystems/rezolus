@@ -80,6 +80,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "memory_slabinfo",
     "memory_vmstat",
     "memory_writeback",
+    "network_efa",
     "network_ethtool",
     "network_interfaces",
     "network_traffic",

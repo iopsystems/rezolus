@@ -964,6 +964,603 @@
           ]
         }
       ]
+    },
+    {
+      "name": "EFA",
+      "id": "efa",
+      "subgroups": [
+        {
+          "name": "EFA Traffic",
+          "description": "Bits and packets per second through each EFA port, counted by the device. Retransmissions are shown in EFA Retransmits & Errors.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "EFA Transmit",
+                "id": "efa-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_tx_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "EFA Receive",
+                "id": "efa-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rx_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "EFA Packets Transmit",
+                "id": "efa-tx-packets",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_tx_pkts[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "EFA Packets Receive",
+                "id": "efa-rx-packets",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rx_pkts[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "EFA RDMA",
+          "description": "One-sided RDMA on each EFA port. Read and Write are the operations this host issued; Read Responses and Write Received are the bytes moved by operations remote hosts issued against this host's memory.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Read",
+                "id": "efa-rdma-read",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_read_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Write",
+                "id": "efa-rdma-write",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_write_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Read Responses",
+                "id": "efa-rdma-read-resp",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_read_resp_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Write Received",
+                "id": "efa-rdma-write-recv",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_write_recv_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Reads",
+                "id": "efa-rdma-read-wrs",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_read_wrs[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Writes",
+                "id": "efa-rdma-write-wrs",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_write_wrs[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "EFA Messages",
+          "description": "Two-sided send and receive work requests on each EFA port, and the bits they carried.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Send",
+                "id": "efa-send",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_send_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Receive",
+                "id": "efa-recv",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_recv_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Sends",
+                "id": "efa-send-wrs",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_send_wrs[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Receives",
+                "id": "efa-recv-wrs",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_recv_wrs[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "EFA Retransmits & Errors",
+          "description": "Retransmissions, receive drops, remote hosts that did not respond or whose connection the device counted as impaired, and RDMA work requests that completed with an error.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Retransmitted",
+                "id": "efa-retrans",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_retrans_bytes[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Retransmitted Packets",
+                "id": "efa-retrans-packets",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_retrans_pkts[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Retransmit Timeouts",
+                "id": "efa-retrans-timeouts",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_retrans_timeout_events[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Receive Drops",
+                "id": "efa-rx-drops",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rx_drops[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Unresponsive Remote",
+                "id": "efa-unresponsive-remote",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_unresponsive_remote_events[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Impaired Connections",
+                "id": "efa-impaired-remote",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_impaired_remote_conn_events[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Read Errors",
+                "id": "efa-rdma-read-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_read_wr_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RDMA Write Errors",
+                "id": "efa-rdma-write-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device, port) (irate(network_efa_rdma_write_wr_err[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "EFA Device Errors",
+          "description": "Failed admin commands and verbs setup calls (protection domain, queue pair, completion queue, memory region, address handle, user context, mmap) on each EFA device.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Admin Command Errors",
+                "id": "efa-cmds-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_cmds_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Admin Commands Without Completion",
+                "id": "efa-no-completion-cmds",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_no_completion_cmds[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Protection Domain Errors",
+                "id": "efa-alloc-pd-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_alloc_pd_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Region Allocation Errors",
+                "id": "efa-alloc-mr-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_alloc_mr_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Region Registration Errors",
+                "id": "efa-reg-mr-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_reg_mr_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "DMA Memory Region Errors",
+                "id": "efa-get-dma-mr-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_get_dma_mr_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "User Context Errors",
+                "id": "efa-alloc-ucontext-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_alloc_ucontext_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Queue Pair Errors",
+                "id": "efa-create-qp-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_create_qp_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Completion Queue Errors",
+                "id": "efa-create-cq-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_create_cq_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Address Handle Errors",
+                "id": "efa-create-ah-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_create_ah_err[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Mapping Errors",
+                "id": "efa-mmap-err",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (device) (irate(network_efa_mmap_err[5m]))"
+            }
+          ]
+        }
+      ]
     }
   ],
   "sections": [

@@ -145,7 +145,7 @@ for annotation and template instructions (archives require an explicit
 | Area | Examples | Availability |
 | --- | --- | --- |
 | CPU and scheduler | Usage, runqueue latency, cycles/instructions, cache/TLB behavior, migrations, frequency | Linux; PMU counters depend on hardware and available counter slots |
-| I/O and networking | Block-I/O latency and sizes, TCP behavior, interface statistics, syscall latency/counts | Linux; individual samplers depend on kernel support |
+| I/O and networking | Block-I/O latency and sizes, TCP behavior, interface statistics, AWS EFA counters, syscall latency/counts | Linux; individual samplers depend on kernel support |
 | Containers | Cgroup CPU usage and counters, migrations, syscalls, bandwidth/throttling | Linux cgroups; coverage varies by metric |
 | GPUs | Utilization, memory activity, clocks, power, temperature, and hardware counters | NVIDIA NVML/GPM, AMD SMI/PMU/sysfs, Intel i915 PMU, Apple GPU; metric sets differ |
 | Memory and capacity | Memory/NUMA statistics, local filesystem occupancy, drive health | Platform and device dependent |

@@ -735,6 +735,94 @@ fn amd_apu() -> Catalog {
     out
 }
 
+/// An EFA host read by `network_efa`: two devices with one port each, every
+/// port and device counter the sampler publishes.
+fn efa() -> Catalog {
+    let mut out = Catalog::default();
+    let ports: Vec<Labels> = ["rdmap0s27", "rdmap0s28"]
+        .iter()
+        .enumerate()
+        .map(|(i, device)| labels(&[("id", &i.to_string()), ("device", device), ("port", "1")]))
+        .collect();
+    let devices: Vec<Labels> = ["rdmap0s27", "rdmap0s28"]
+        .iter()
+        .enumerate()
+        .map(|(i, device)| labels(&[("id", &i.to_string()), ("device", device)]))
+        .collect();
+    for name in EFA_PORT_METRICS {
+        out.counters.insert(name.to_string(), ports.clone());
+    }
+    for name in EFA_DEVICE_METRICS {
+        out.counters.insert(name.to_string(), devices.clone());
+    }
+    out
+}
+
+/// Every port counter `network_efa` publishes (its `stats.rs`).
+const EFA_PORT_METRICS: &[&str] = &[
+    "network_efa_tx_bytes",
+    "network_efa_tx_pkts",
+    "network_efa_rx_bytes",
+    "network_efa_rx_pkts",
+    "network_efa_rx_drops",
+    "network_efa_send_bytes",
+    "network_efa_send_wrs",
+    "network_efa_recv_bytes",
+    "network_efa_recv_wrs",
+    "network_efa_rdma_read_wrs",
+    "network_efa_rdma_read_bytes",
+    "network_efa_rdma_read_wr_err",
+    "network_efa_rdma_read_resp_bytes",
+    "network_efa_rdma_write_wrs",
+    "network_efa_rdma_write_bytes",
+    "network_efa_rdma_write_wr_err",
+    "network_efa_rdma_write_recv_bytes",
+    "network_efa_retrans_bytes",
+    "network_efa_retrans_pkts",
+    "network_efa_retrans_timeout_events",
+    "network_efa_unresponsive_remote_events",
+    "network_efa_impaired_remote_conn_events",
+];
+
+/// Every device counter `network_efa` publishes.
+const EFA_DEVICE_METRICS: &[&str] = &[
+    "network_efa_cmds_err",
+    "network_efa_no_completion_cmds",
+    "network_efa_alloc_pd_err",
+    "network_efa_alloc_mr_err",
+    "network_efa_alloc_ucontext_err",
+    "network_efa_create_ah_err",
+    "network_efa_create_cq_err",
+    "network_efa_create_qp_err",
+    "network_efa_get_dma_mr_err",
+    "network_efa_mmap_err",
+    "network_efa_reg_mr_err",
+];
+
+/// The checklist in `docs/principles.md` requires a test that the queries
+/// name each metric a sampler adds.
+#[test]
+fn the_network_section_plots_every_metric_network_efa_adds() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let json = render_generator(&efa(), "/network", &ctx);
+    for name in EFA_PORT_METRICS {
+        assert!(
+            json.contains(&format!("sum by (device, port) (irate({name}[5m]))")),
+            "{name} is not plotted per port"
+        );
+    }
+    for name in EFA_DEVICE_METRICS {
+        assert!(
+            json.contains(&format!("sum by (device) (irate({name}[5m]))")),
+            "{name} is not plotted per device"
+        );
+    }
+
+    let other = render_generator(&Catalog::default(), "/network", &ctx);
+    assert!(!other.contains("network_efa"));
+    assert!(!other.contains("\"EFA\""));
+}
+
 /// GPUs and CPUs with ids `"01"` and `"1"`: one device where ids are
 /// compared as integers, two where they are compared as strings.
 fn non_canonical_ids() -> Catalog {
@@ -786,6 +874,7 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("gpus-with-unparsed-id", gpus_with_unparsed_id()),
         ("intel-all-engines", intel_all_engines()),
         ("amd-apu", amd_apu()),
+        ("efa", efa()),
         ("non-canonical-ids", non_canonical_ids()),
         ("macos", macos()),
         ("linux", linux(&bench)),

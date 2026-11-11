@@ -121,6 +121,8 @@ per-process counterparts, for `cpu_usage` only, off by default
   - [memory_vmstat](#memory_vmstat)
   - [memory_writeback](#memory_writeback)
 - [Network](#network)
+  - [network_efa](#network_efa)
+  - [network_ethtool](#network_ethtool)
   - [network_interfaces](#network_interfaces)
   - [network_traffic](#network_traffic)
 - [Scheduler](#scheduler)
@@ -1605,6 +1607,91 @@ counters exist to answer.
 across agent restarts for an unchanged set of interfaces. Adding or removing a
 NIC renumbers the ones after it — use `interface` to follow a series across
 that.
+
+### network_efa
+
+AWS Elastic Fabric Adapter (EFA) counters from sysfs. An EFA device is listed
+under `/sys/class/infiniband` (named `rdmap*`) with `efa` as its driver; other
+RDMA drivers are not read. On a host with no EFA device the sampler reports as
+unsupported and produces nothing.
+
+Port counters come from `ports/<n>/hw_counters/` and carry `device` (the
+device name, e.g. `rdmap0s27`) and `port` labels. `id` numbers the ports from
+0 in device-name and port-number order.
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `network_efa_tx_bytes` | Bytes transmitted by an EFA port | `device`, `port`, `id` |
+| `network_efa_tx_pkts` | Packets transmitted by an EFA port | `device`, `port`, `id` |
+| `network_efa_rx_bytes` | Bytes received by an EFA port | `device`, `port`, `id` |
+| `network_efa_rx_pkts` | Packets received by an EFA port | `device`, `port`, `id` |
+| `network_efa_rx_drops` | Packets an EFA port dropped on receive | `device`, `port`, `id` |
+| `network_efa_send_bytes` | Bytes in send work requests (two-sided messages) on an EFA port | `device`, `port`, `id` |
+| `network_efa_send_wrs` | Send work requests on an EFA port | `device`, `port`, `id` |
+| `network_efa_recv_bytes` | Bytes in receive work requests (two-sided messages) on an EFA port | `device`, `port`, `id` |
+| `network_efa_recv_wrs` | Receive work requests on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_read_wrs` | RDMA read work requests this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_read_bytes` | Bytes read by RDMA reads this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_read_wr_err` | RDMA read work requests this host issued on an EFA port that completed with an error | `device`, `port`, `id` |
+| `network_efa_rdma_read_resp_bytes` | Bytes an EFA port sent in response to RDMA reads issued by remote hosts | `device`, `port`, `id` |
+| `network_efa_rdma_write_wrs` | RDMA write work requests this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_write_bytes` | Bytes written by RDMA writes this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_write_wr_err` | RDMA write work requests this host issued on an EFA port that completed with an error | `device`, `port`, `id` |
+| `network_efa_rdma_write_recv_bytes` | Bytes an EFA port received from RDMA writes issued by remote hosts | `device`, `port`, `id` |
+| `network_efa_retrans_bytes` | Bytes an EFA port retransmitted | `device`, `port`, `id` |
+| `network_efa_retrans_pkts` | Packets an EFA port retransmitted | `device`, `port`, `id` |
+| `network_efa_retrans_timeout_events` | Retransmission timeouts on an EFA port | `device`, `port`, `id` |
+| `network_efa_unresponsive_remote_events` | Events an EFA port counted as a remote host not responding | `device`, `port`, `id` |
+| `network_efa_impaired_remote_conn_events` | Events an EFA port counted as an impaired connection to a remote host | `device`, `port`, `id` |
+
+Device counters come from the device's own `hw_counters/` and carry a
+`device` label. `id` numbers the devices from 0 in name order.
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `network_efa_cmds_err` | Admin commands to an EFA device that completed with an error | `device`, `id` |
+| `network_efa_no_completion_cmds` | Admin commands to an EFA device that got no completion | `device`, `id` |
+| `network_efa_alloc_pd_err` | Protection domain allocations on an EFA device that failed | `device`, `id` |
+| `network_efa_alloc_mr_err` | Memory region allocations on an EFA device that failed | `device`, `id` |
+| `network_efa_alloc_ucontext_err` | User context allocations on an EFA device that failed | `device`, `id` |
+| `network_efa_create_ah_err` | Address handle creations on an EFA device that failed | `device`, `id` |
+| `network_efa_create_cq_err` | Completion queue creations on an EFA device that failed | `device`, `id` |
+| `network_efa_create_qp_err` | Queue pair creations on an EFA device that failed | `device`, `id` |
+| `network_efa_get_dma_mr_err` | DMA memory region requests on an EFA device that failed | `device`, `id` |
+| `network_efa_mmap_err` | Memory mappings of an EFA device's queues that failed | `device`, `id` |
+| `network_efa_reg_mr_err` | Memory region registrations on an EFA device that failed | `device`, `id` |
+
+The files present differ by driver version. Mainline drivers before 6.17
+(Amazon's before r2.17.0) lack the `retrans_*`, `unresponsive_remote_events`
+and `impaired_remote_conn_events` files; before 6.6 (r2.5.0) they also lack
+`rdma_write_*`. On a device without RDMA write support the `rdma_write_*`
+files exist and read 0. Amazon's out-of-tree driver also has `alloc_mr_err`
+and `get_dma_mr_err`. A counter whose file is missing publishes nothing.
+`lifespan`, `submitted_cmds`, `completed_cmds` and `keep_alive_rcvd` are not
+read.
+
+An EFA device has one port, and the driver fetches its port counters for the
+whole device. On a host with an EFA PCI function the sampler waits for the
+`efa` module, so a module that loads after the agent starts is read. On a host
+without one the sampler reports unsupported at start. Discovery runs once: a
+device unbound, or whose module is reloaded, after discovery is not read again
+until the agent restarts, and the agent logs a warning.
+
+#### Cadence
+
+Reading a port's counters makes the driver send three to five admin commands
+to the device, by driver version and device. The RDMA core then answers every file of that port from the result
+for `hw_counters/lifespan` milliseconds (10 by default). On an im4gn.16xlarge
+sending about 55 Gbit/s over EFA, the first file read took 1.8 ms at p50 and
+2.8 ms at worst, and the other 21 files about 0.5 ms together. So this sampler
+reads on its own interval (`[samplers.network_efa] interval`, default 1s),
+dispatched via `spawn_blocking`, and serves cached values in between. A port
+read the driver refuses ends that port's read for the interval, because the
+RDMA core caches only a successful fetch and each further file would send the
+stats commands again. At start, the agent warns when a port's `lifespan` is
+above 100 ms: a value fetched for another reader can then be that much older
+than the window it is published in. Mainline drivers before 5.15 fetch the
+device counters with admin commands too.
 
 ### network_interfaces
 
