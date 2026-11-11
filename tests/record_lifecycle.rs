@@ -1759,17 +1759,22 @@ fn an_endpoint_whose_rows_cannot_be_recorded_stops_alone() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
     let who = format!("http://127.0.0.1:{agent}/ (bad)");
-    for needle in [
-        format!("error: {who}: a streamed frame could not be read"),
-        "before the epoch; it stopped recording\n".to_string(),
-        format!(
-            "error: {who} stopped recording during the run because its rows could not be \
-             recorded; {} holds its rows up to the failure",
-            output.display()
-        ),
-    ] {
-        assert!(stderr.contains(&needle), "{needle:?} in:\n{stderr}");
-    }
+    // rezolus's own line, which starts with `error:`, from the reason to
+    // its end; metriken-recorder logs the reason too.
+    let immediate = stderr
+        .lines()
+        .find(|l| l.starts_with(&format!("error: {who}: a streamed frame could not be read")))
+        .unwrap_or_else(|| panic!("the immediate line in:\n{stderr}"));
+    assert!(
+        immediate.contains("before the epoch") && immediate.ends_with("; it stopped recording"),
+        "{immediate}"
+    );
+    let summary = format!(
+        "error: {who} stopped recording during the run because its rows could not be \
+         recorded; {} holds its rows up to the failure",
+        output.display()
+    );
+    assert!(stderr.contains(&summary), "{summary:?} in:\n{stderr}");
     assert!(
         !stderr.contains("recording failed"),
         "the recording itself did not fail:\n{stderr}"

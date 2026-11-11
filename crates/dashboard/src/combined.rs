@@ -1931,7 +1931,10 @@ mod tests {
     /// A recording that lacks a label another carries is told apart by the
     /// other's value: `role!="x"`. Each scope selects its recording alone.
     /// A label with an empty value counts as absent, as the engine compares
-    /// it, so it does not tell two recordings apart.
+    /// it: recordings whose labels are equal once an empty value is read as
+    /// absent get no matcher between them and are not told apart, since
+    /// metriken-storage gives `__recording__` only to exactly equal label
+    /// sets.
     #[test]
     fn a_recording_lacking_a_label_is_selected_by_its_absence() {
         let pair = [

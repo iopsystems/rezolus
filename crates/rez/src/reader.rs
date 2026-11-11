@@ -687,9 +687,9 @@ mod tests {
     /// first, and `columns()` decides a selector against the label sets it
     /// knows, an absent key as `""` — so a `__run__`-qualified selector that
     /// `column_map` does not tag is rejected as "references no metric present
-    /// in this archive" long before `query_range` sees it. A dashboard pinning `__run__="0"` for
-    /// stability across an A/B pair must keep working on the side that never
-    /// drifted.
+    /// in this archive" long before `query_range` sees it. A dashboard
+    /// pinning `__run__="0"` for stability across an A/B pair must keep
+    /// working on the side that never drifted.
     ///
     /// Segmented tables only: `__run__` is a segment-splice concept, so a
     /// single-segment table (sealed only at finalize, or a slow sampler that
