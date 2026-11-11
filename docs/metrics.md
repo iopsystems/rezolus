@@ -1680,18 +1680,19 @@ until the agent restarts, and the agent logs a warning.
 #### Cadence
 
 Reading a port's counters makes the driver send three to five admin commands
-to the device, by driver version and device. The RDMA core then answers every file of that port from the result
-for `hw_counters/lifespan` milliseconds (10 by default). On an im4gn.16xlarge
-sending about 55 Gbit/s over EFA, the first file read took 1.8 ms at p50 and
-2.8 ms at worst, and the other 21 files about 0.5 ms together. So this sampler
-reads on its own interval (`[samplers.network_efa] interval`, default 1s),
-dispatched via `spawn_blocking`, and serves cached values in between. A port
-read the driver refuses ends that port's read for the interval, because the
-RDMA core caches only a successful fetch and each further file would send the
-stats commands again. At start, the agent warns when a port's `lifespan` is
-above 100 ms: a value fetched for another reader can then be that much older
-than the window it is published in. Mainline drivers before 5.15 fetch the
-device counters with admin commands too.
+to the device, by driver version and device. The RDMA core then serves every
+file of that port from the result for `hw_counters/lifespan` milliseconds (10
+by default). On an im4gn.16xlarge sending about 55 Gbit/s over EFA, the first
+file read took 1.8 ms at p50 and 2.8 ms at worst, and the other 21 files about
+0.5 ms together. So this sampler reads on its own interval
+(`[samplers.network_efa] interval`, default 1s), dispatched via
+`spawn_blocking`, and serves cached values in between. A port read that
+returns an error ends that port's read for the interval, because the RDMA core
+caches only a successful fetch and each further file would send the stats
+commands again. At start, the agent warns when a port's `lifespan` is above
+100 ms: a value fetched for another reader can then be that much older than
+the window it is published in. Mainline drivers before 5.15 fetch the device
+counters with admin commands too.
 
 ### network_interfaces
 
