@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.31.0] - 2026-11-11
+
 ### Added
 
 - AWS EFA counters. `network_efa` publishes each Elastic Fabric Adapter
@@ -11,6 +13,16 @@
   default 1s. The Network section gains an EFA group with a line per port, or
   per device for the device counters. Backported from 6.0 (#1683) in #1684.
 
+### Changed
+
+- dendro 0.3.5 carries 0.3.4's writer heartbeat: archives that `record`
+  and `hindsight` write gain two nullable `sources` columns, `heartbeat` and
+  `heartbeat_interval_ns`, updated every 5 s while the source is open. 5.30
+  and earlier ignore them; a 6.0 viewer uses them to tell a running writer
+  from a stopped one. Save as Report from a `.dendro` holds one more copy of
+  the archive in memory while it serializes, since dendro 0.3.5's
+  `Archive::serialize` copies through SQLite's backup API. In #1685.
+
 ### Security
 
 - rusqlite 0.41 (libsqlite3-sys 0.39, SQLite 3.54) and dendro 0.3.5, for
@@ -20,13 +32,6 @@
   from sqlite-wasm-rs 0.5; it opens recordings from bytes in memory, with no
   `-wal` file. 6.0 has this through dendro 0.7 (#1677); on 5.x it is in
   #1685.
-- dendro 0.3.5 also carries 0.3.4's writer heartbeat: archives that `record`
-  and `hindsight` write gain two nullable `sources` columns, `heartbeat` and
-  `heartbeat_interval_ns`, updated every 5 s while the source is open. 5.30
-  and earlier ignore them; a 6.0 viewer uses them to tell a running writer
-  from a stopped one. Save as Report from a `.dendro` holds one more copy of
-  the archive in memory while it serializes, since dendro 0.3.5's
-  `Archive::serialize` copies through SQLite's backup API. In #1685.
 
 ## [5.30.0] - 2026-11-08
 
