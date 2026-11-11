@@ -9,7 +9,7 @@
   Reading a port's counters sends admin commands to the device (1.8 ms at p50
   on an im4gn.16xlarge under load), so the sampler reads on its own interval,
   default 1s. The Network section gains an EFA group with a line per port, or
-  per device for the device counters. Backported from 6.0 (#1683).
+  per device for the device counters. Backported from 6.0 (#1683) in #1684.
 
 ## [5.30.0] - 2026-11-08
 
