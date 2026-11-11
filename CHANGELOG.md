@@ -15,7 +15,7 @@
 
 ### Changed
 
-- dendro 0.3.5 also carries 0.3.4's writer heartbeat: archives that `record`
+- dendro 0.3.5 carries 0.3.4's writer heartbeat: archives that `record`
   and `hindsight` write gain two nullable `sources` columns, `heartbeat` and
   `heartbeat_interval_ns`, updated every 5 s while the source is open. 5.30
   and earlier ignore them; a 6.0 viewer uses them to tell a running writer
