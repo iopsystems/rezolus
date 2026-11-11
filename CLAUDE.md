@@ -136,7 +136,10 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # with its version, pointing at a 5.x recorder (`unstreamable_agent`). At startup that is
 # before the archive exists (exit 1); an agent that comes up later, or is refused on a
 # reconnect, is marked Refused and left out from then on (a reconnect keeps the rows it had),
-# the rest finalize, and the run exits 1 (`Event::Refused`, then `refusal_summary`). An unreachable one (or a 5xx/408/429 /
+# the rest finalize, and the run exits 1 (`Event::Refused`, then `refusal_summary`). An
+# endpoint whose rows cannot be encoded, staged or decoded stops alone (`Event::SourceFailed`,
+# then `failure_summary`) and the run exits 1; when none is left, the recording fails
+# (`Event::Failed`). An unreachable agent (or a 5xx/408/429 /
 # handshake timeout) is retried each tick, and a stream that drops (or goes silent for the
 # interval the agent serves plus the scrape timeout) is reconnected after one interval, at least
 # a second. The stream interval is negotiated: an --interval below the agent's TTL is served,

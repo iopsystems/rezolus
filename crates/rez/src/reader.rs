@@ -684,12 +684,12 @@ mod tests {
 
     /// End-to-end check of the segmented conflict policy's escape hatch through
     /// the *front door*. `RezReader` routes every query through `columns()`
-    /// first, and `columns()` requires every filter key to be present on the
-    /// label set — so a `__run__`-qualified selector that `column_map` does not
-    /// tag is rejected as "references no metric present in this archive" long
-    /// before `query_range` sees it. A dashboard pinning `__run__="0"` for
-    /// stability across an A/B pair must keep working on the side that never
-    /// drifted.
+    /// first, and `columns()` decides a selector against the label sets it
+    /// knows, an absent key as `""` — so a `__run__`-qualified selector that
+    /// `column_map` does not tag is rejected as "references no metric present
+    /// in this archive" long before `query_range` sees it. A dashboard
+    /// pinning `__run__="0"` for stability across an A/B pair must keep
+    /// working on the side that never drifted.
     ///
     /// Segmented tables only: `__run__` is a segment-splice concept, so a
     /// single-segment table (sealed only at finalize, or a slow sampler that

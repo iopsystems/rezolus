@@ -604,6 +604,43 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   labels only, so a renamed series pairs with an older recording's. 6.0
   builds before this one show `scale` as a label on such a histogram.
 
+- **A selector compares a label a series lacks as the empty string, as
+  Prometheus does** (metriken-storage 0.12, metriken-query 0.49).
+  `x{l=""}` selects the series of `x` without `l`, `x{l=~"a|"}` those with
+  `l="a"` and those without, `x{l!=""}` only those that carry it, and
+  `x{l!~".*"}` none. Before, `x{l=""}` selected only a series carrying `l`
+  with an empty value, and `x{l!~".*"}` selected the series without `l`.
+  This applies to KPI templates, `recording check`, `mcp query` and the
+  viewers' queries. A `__run__`
+  matcher on a histogram whose configuration changed mid-recording is
+  decided against each run's number (`"0"` for one run); one that selects
+  several runs reads none.
+
+- **`rezolus record` keeps recording when one endpoint's rows cannot be
+  recorded** (metriken-recorder 0.13, 0.14). An endpoint whose rows cannot
+  be written into a segment, staged, or read or decoded from its stream
+  stops recording alone: `record` prints the reason at once, names it again
+  at the end of the run, and exits 1, as for an endpoint refused mid-run.
+  The archive keeps its rows up to the failure, except a failed table's
+  rows after its last sealed segment. When no endpoint is left recording,
+  the recording fails as before. hindsight and the live viewer record one
+  source, so such a failure still ends them.
+
+- **An exporter label named after a storage key is kept as
+  `exported_<key>`** (metriken-recorder 0.13). An exporter's label named
+  `unit`, `metric_type`, `scale` or another key the archive stores as
+  column metadata is stored as `exported_unit` and so on. Before, such a
+  label was stored under its own name, which every reader drops, so two
+  series that differed only by it read as one, and a label named `metric`
+  replaced the series' name.
+
+- **A recording with two series that read as one is refused, not read
+  interleaved** (metriken-query 0.48.1, 0.49). A query over a series that
+  two columns of an archive hold at the same times (an archive recorded
+  before the change above, from an exporter with such a label), or a series
+  whose samples step back in time, is an error naming the metric and its
+  labels.
+
 - **A Prometheus histogram's observations above its highest finite bucket
   count in its quantiles** (metriken-recorder 0.11, metriken-storage 0.10,
   metriken-query 0.47, metriken-charts 0.1.3). `rezolus record` dropped a

@@ -444,22 +444,34 @@ impl Matcher {
 /// The matchers that select each recording's series out of a combined
 /// source, from `series_labels` (the labels each recording's series carry,
 /// `__recording__` included where it applies), over the keys whose values
-/// are not the same for every recording: `k="v"` for a key the recording
-/// has, and for a key it lacks `k!="v"` for the one value the others carry,
-/// or `k!~"v1|v2"` for several, each value escaped as a regular expression
-/// (a selector may match a label once). One
-/// recording, or recordings whose series carry equal labels, get none.
+/// are not the same for every recording, an absent key counting as `""` as
+/// the query engine compares it: `k="v"` for a key the recording has with a
+/// value, and for a key it lacks or has empty `k!="v"` for the one value the
+/// others carry, or `k!~"v1|v2"` for several, each value escaped as a
+/// regular expression (a selector may match a label once). One recording,
+/// or recordings whose series carry equal labels, get none.
 pub fn scope_matchers(series_labels: &[BTreeMap<String, String>]) -> Vec<Vec<Matcher>> {
-    let keys = discriminating_keys(series_labels);
+    let value =
+        |l: &BTreeMap<String, String>, k: &str| -> String { l.get(k).cloned().unwrap_or_default() };
+    let keys: Vec<&str> = discriminating_keys(series_labels)
+        .into_iter()
+        .filter(|k| {
+            let values: HashSet<String> = series_labels.iter().map(|l| value(l, k)).collect();
+            values.len() > 1
+        })
+        .collect();
     series_labels
         .iter()
         .map(|labels| {
             keys.iter()
-                .map(|k| match labels.get(*k) {
+                .map(|k| match labels.get(*k).filter(|v| !v.is_empty()) {
                     Some(v) => Matcher::eq(k, v),
                     None => {
-                        let others: BTreeSet<&String> =
-                            series_labels.iter().filter_map(|l| l.get(*k)).collect();
+                        let others: BTreeSet<&String> = series_labels
+                            .iter()
+                            .filter_map(|l| l.get(*k))
+                            .filter(|v| !v.is_empty())
+                            .collect();
                         let values: Vec<&str> = others.into_iter().map(String::as_str).collect();
                         if values.len() == 1 {
                             Matcher::ne(k, values[0])
@@ -1917,8 +1929,12 @@ mod tests {
     }
 
     /// A recording that lacks a label another carries is told apart by the
-    /// other's value: `role!="x"` (the engine's `role=""` matches nothing and
-    /// `role!~".+"` everything). Each scope selects its recording alone.
+    /// other's value: `role!="x"`. Each scope selects its recording alone.
+    /// A label with an empty value counts as absent, as the engine compares
+    /// it: recordings whose labels are equal once an empty value is read as
+    /// absent get no matcher between them and are not told apart, since
+    /// metriken-storage gives `__recording__` only to exactly equal label
+    /// sets.
     #[test]
     fn a_recording_lacking_a_label_is_selected_by_its_absence() {
         let pair = [
@@ -1956,6 +1972,18 @@ mod tests {
                 assert_eq!(selected, [i], "{matchers:?}");
             }
         }
+        // An empty value and an absent key are one value to the engine.
+        let empty = [
+            m(&[("host", "a"), ("role", "")]),
+            m(&[("host", "a")]),
+            m(&[("host", "a"), ("role", "x")]),
+        ];
+        let scopes = scope_matchers(&empty);
+        assert_eq!(scopes[0], [Matcher::ne("role", "x")]);
+        assert_eq!(scopes[1], [Matcher::ne("role", "x")]);
+        assert_eq!(scopes[2], eqs(&[("role", "x")]));
+        let twins = [m(&[("host", "a"), ("role", "")]), m(&[("host", "a")])];
+        assert_eq!(scope_matchers(&twins), [eqs(&[]), eqs(&[])]);
         assert_eq!(
             restrict_query("cpu_cores", &scope_matchers(&pair)[0]),
             r#"cpu_cores{role!="x"}"#

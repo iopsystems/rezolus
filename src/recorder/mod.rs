@@ -58,7 +58,8 @@ pub fn command() -> Command {
              `rezolus record -o bench.dendro -- ./bench.sh && analyze bench.dendro` gates on\n\
              the benchmark exactly as it would without the wrapper. Two substitutions: the\n\
              --duration cap exits 124 if it kills the command, and a recording failure (an\n\
-             endpoint refused mid-run, a write error) exits 1 whatever the command returned.\n\n\
+             endpoint refused mid-run, an endpoint whose rows could not be recorded, a write\n\
+             error) exits 1 whatever the command returned.\n\n\
              A wrapped run is also marked in the recording: a `run_start` event when the\n\
              command spawns and a `run_end` event when it exits, so the viewer can draw the\n\
              run\'s edges and align two recordings on them. Only the program name is stored\n\
@@ -552,6 +553,30 @@ fn refusal_summary(
     Some(lines.join("\n"))
 }
 
+/// One line for each endpoint whose rows could not be recorded
+/// ([`mr::SourceState::Failed`]): it stopped recording, and the archive
+/// holds its rows up to the failure, except a failed table's rows after its
+/// last sealed segment. `None` when there is none.
+fn failure_summary(sources: &[mr::SourceSummary], output: &Path) -> Option<String> {
+    let lines: Vec<String> = sources
+        .iter()
+        .filter(|s| s.state == mr::SourceState::Failed)
+        .map(|s| failure_line(s.endpoint.as_deref(), s.name.as_deref(), output))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// [`failure_summary`]'s line for one endpoint.
+fn failure_line(endpoint: Option<&str>, name: Option<&str>, output: &Path) -> String {
+    format!(
+        "error: {} stopped recording during the run because its rows could not be recorded; \
+         {} holds its rows up to the failure, except a failed table's rows after its last \
+         sealed segment",
+        who(endpoint, name),
+        output.display()
+    )
+}
+
 /// One line for each endpoint the run ended without a recording for, other
 /// than a refused one ([`refusal_summary`] names those): one still pending,
 /// and one streamed whose metadata read had not returned, so it was never
@@ -687,6 +712,18 @@ impl Watch {
                     "warn: {}",
                     labels_not_applied(&self.label(source), &arg, self.args.len() > 1, &labels)
                 );
+            }
+            mr::Event::SourceFailed { source, reason } => {
+                // Any other endpoint records on; when none is left,
+                // `Event::Failed` follows.
+                let i = source.0 as usize;
+                let url = self.urls.get(i).map(String::as_str);
+                let name = self.names.get(i).cloned().flatten();
+                eprintln!(
+                    "error: {}: {reason}; it stopped recording",
+                    who(url, name.as_deref())
+                );
+                self.streaming.remove(&source);
             }
             mr::Event::Failed { error } => {
                 eprintln!("error: recording failed: {error}");
@@ -1147,6 +1184,10 @@ pub fn run(config: RecordingConfig) {
                     eprintln!("{summary}");
                     recording_failed = true;
                 }
+                if let Some(summary) = failure_summary(&sources, &config.output) {
+                    eprintln!("{summary}");
+                    recording_failed = true;
+                }
             }
             Err(e) => {
                 if !watch.failed {
@@ -1552,6 +1593,22 @@ mod tests {
                 "http://localhost:9090/ did not become recordable during the run and has no \
                  recording in out.dendro",
             ]
+        );
+    }
+
+    /// An endpoint that failed mid-run is named, and the line says what the
+    /// archive holds of it.
+    #[test]
+    fn a_failed_endpoint_says_what_the_archive_holds() {
+        assert_eq!(
+            failure_line(
+                Some("http://localhost:4241/"),
+                Some("svc"),
+                Path::new("out.dendro")
+            ),
+            "error: http://localhost:4241/ (svc) stopped recording during the run because its \
+             rows could not be recorded; out.dendro holds its rows up to the failure, except a \
+             failed table's rows after its last sealed segment"
         );
     }
 }
