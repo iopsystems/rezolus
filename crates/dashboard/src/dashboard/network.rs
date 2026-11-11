@@ -122,7 +122,298 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     view.group(tcp);
 
+    let mut efa = Group::new("EFA", "efa");
+    efa_charts(data, &mut efa);
+    if !efa.is_empty() {
+        view.group(efa);
+    }
+
     view
+}
+
+/// What an EFA chart plots: bits per second of a byte counter, or the rate
+/// of a counter.
+#[derive(Clone, Copy)]
+enum EfaKind {
+    Bits,
+    Rate,
+}
+
+/// One EFA chart: title, id, metric and kind.
+type EfaChart = (&'static str, &'static str, &'static str, EfaKind);
+
+/// One EFA subgroup: name, description and charts.
+type EfaSubgroup = (&'static str, &'static str, &'static [EfaChart]);
+
+/// The subgroup of the EFA device counters, which are per device and so
+/// plotted `sum by (device)`; every other EFA chart is per port.
+const EFA_DEVICE_SUBGROUP: &str = "EFA Device Errors";
+
+/// The `network_efa` subgroups: name, description, and each chart's title,
+/// id, metric and kind. Every chart is one line per EFA port,
+/// `sum by (device, port)`, or per device in [`EFA_DEVICE_SUBGROUP`].
+const EFA: &[EfaSubgroup] = &[
+    (
+        "EFA Traffic",
+        "Bits and packets per second through each EFA port, counted by the device. \
+         Retransmissions are shown in EFA Retransmits & Errors.",
+        &[
+            (
+                "EFA Transmit",
+                "efa-tx",
+                "network_efa_tx_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "EFA Receive",
+                "efa-rx",
+                "network_efa_rx_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "EFA Packets Transmit",
+                "efa-tx-packets",
+                "network_efa_tx_pkts",
+                EfaKind::Rate,
+            ),
+            (
+                "EFA Packets Receive",
+                "efa-rx-packets",
+                "network_efa_rx_pkts",
+                EfaKind::Rate,
+            ),
+        ],
+    ),
+    (
+        "EFA RDMA",
+        "One-sided RDMA on each EFA port. Read and Write are the operations this host issued; \
+         Read Responses and Write Received are the bytes moved by operations remote hosts \
+         issued against this host's memory.",
+        &[
+            (
+                "RDMA Read",
+                "efa-rdma-read",
+                "network_efa_rdma_read_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "RDMA Write",
+                "efa-rdma-write",
+                "network_efa_rdma_write_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "RDMA Read Responses",
+                "efa-rdma-read-resp",
+                "network_efa_rdma_read_resp_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "RDMA Write Received",
+                "efa-rdma-write-recv",
+                "network_efa_rdma_write_recv_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "RDMA Reads",
+                "efa-rdma-read-wrs",
+                "network_efa_rdma_read_wrs",
+                EfaKind::Rate,
+            ),
+            (
+                "RDMA Writes",
+                "efa-rdma-write-wrs",
+                "network_efa_rdma_write_wrs",
+                EfaKind::Rate,
+            ),
+        ],
+    ),
+    (
+        "EFA Messages",
+        "Two-sided send and receive work requests on each EFA port, and the bits they carried.",
+        &[
+            ("Send", "efa-send", "network_efa_send_bytes", EfaKind::Bits),
+            (
+                "Receive",
+                "efa-recv",
+                "network_efa_recv_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "Sends",
+                "efa-send-wrs",
+                "network_efa_send_wrs",
+                EfaKind::Rate,
+            ),
+            (
+                "Receives",
+                "efa-recv-wrs",
+                "network_efa_recv_wrs",
+                EfaKind::Rate,
+            ),
+        ],
+    ),
+    (
+        "EFA Retransmits & Errors",
+        "Retransmissions, receive drops, remote hosts that did not respond or whose connection \
+         the device counted as impaired, and RDMA work requests that completed with an error.",
+        &[
+            (
+                "Retransmitted",
+                "efa-retrans",
+                "network_efa_retrans_bytes",
+                EfaKind::Bits,
+            ),
+            (
+                "Retransmitted Packets",
+                "efa-retrans-packets",
+                "network_efa_retrans_pkts",
+                EfaKind::Rate,
+            ),
+            (
+                "Retransmit Timeouts",
+                "efa-retrans-timeouts",
+                "network_efa_retrans_timeout_events",
+                EfaKind::Rate,
+            ),
+            (
+                "Receive Drops",
+                "efa-rx-drops",
+                "network_efa_rx_drops",
+                EfaKind::Rate,
+            ),
+            (
+                "Unresponsive Remote",
+                "efa-unresponsive-remote",
+                "network_efa_unresponsive_remote_events",
+                EfaKind::Rate,
+            ),
+            (
+                "Impaired Connections",
+                "efa-impaired-remote",
+                "network_efa_impaired_remote_conn_events",
+                EfaKind::Rate,
+            ),
+            (
+                "RDMA Read Errors",
+                "efa-rdma-read-err",
+                "network_efa_rdma_read_wr_err",
+                EfaKind::Rate,
+            ),
+            (
+                "RDMA Write Errors",
+                "efa-rdma-write-err",
+                "network_efa_rdma_write_wr_err",
+                EfaKind::Rate,
+            ),
+        ],
+    ),
+    (
+        EFA_DEVICE_SUBGROUP,
+        "Failed admin commands and verbs setup calls (protection domain, queue pair, completion \
+         queue, memory region, address handle, user context, mmap) on each EFA device.",
+        &[
+            (
+                "Admin Command Errors",
+                "efa-cmds-err",
+                "network_efa_cmds_err",
+                EfaKind::Rate,
+            ),
+            (
+                "Admin Commands Without Completion",
+                "efa-no-completion-cmds",
+                "network_efa_no_completion_cmds",
+                EfaKind::Rate,
+            ),
+            (
+                "Protection Domain Errors",
+                "efa-alloc-pd-err",
+                "network_efa_alloc_pd_err",
+                EfaKind::Rate,
+            ),
+            (
+                "Memory Region Allocation Errors",
+                "efa-alloc-mr-err",
+                "network_efa_alloc_mr_err",
+                EfaKind::Rate,
+            ),
+            (
+                "Memory Region Registration Errors",
+                "efa-reg-mr-err",
+                "network_efa_reg_mr_err",
+                EfaKind::Rate,
+            ),
+            (
+                "DMA Memory Region Errors",
+                "efa-get-dma-mr-err",
+                "network_efa_get_dma_mr_err",
+                EfaKind::Rate,
+            ),
+            (
+                "User Context Errors",
+                "efa-alloc-ucontext-err",
+                "network_efa_alloc_ucontext_err",
+                EfaKind::Rate,
+            ),
+            (
+                "Queue Pair Errors",
+                "efa-create-qp-err",
+                "network_efa_create_qp_err",
+                EfaKind::Rate,
+            ),
+            (
+                "Completion Queue Errors",
+                "efa-create-cq-err",
+                "network_efa_create_cq_err",
+                EfaKind::Rate,
+            ),
+            (
+                "Address Handle Errors",
+                "efa-create-ah-err",
+                "network_efa_create_ah_err",
+                EfaKind::Rate,
+            ),
+            (
+                "Mapping Errors",
+                "efa-mmap-err",
+                "network_efa_mmap_err",
+                EfaKind::Rate,
+            ),
+        ],
+    ),
+];
+
+/// The `network_efa` subgroups, each chart only when the recording carries
+/// its metric and each subgroup only when it has a chart.
+fn efa_charts(data: &dyn MetricsSource, efa: &mut Group) {
+    for (name, description, charts) in EFA {
+        let present: Vec<_> = charts
+            .iter()
+            .filter(|(_, _, metric, _)| has_metric(data, metric))
+            .collect();
+        if present.is_empty() {
+            continue;
+        }
+        let subgroup = efa.subgroup(*name);
+        subgroup.describe(*description);
+        for &&(title, id, metric, kind) in &present {
+            let by = if *name == EFA_DEVICE_SUBGROUP {
+                "device"
+            } else {
+                "device, port"
+            };
+            match kind {
+                EfaKind::Bits => subgroup.plot_promql(
+                    PlotOpts::counter(title, id, Unit::Bitrate).with_unit_system("bitrate"),
+                    format!("sum by ({by}) (irate({metric}[5m])) * 8"),
+                ),
+                EfaKind::Rate => subgroup.plot_promql(
+                    PlotOpts::counter(title, id, Unit::Rate),
+                    format!("sum by ({by}) (irate({metric}[5m]))"),
+                ),
+            }
+        }
+    }
 }
 
 /// One chart of a `tcp_mib` counter or gauge.
@@ -496,5 +787,52 @@ mod tests {
         assert!(json.contains("histogram_mean(tcp_packet_latency)\""));
         // percentile plot still present
         assert!(json.contains("\"tcp_packet_latency\""));
+    }
+
+    /// A recording without `network_efa` gets no EFA group.
+    #[test]
+    fn efa_group_is_absent_without_the_sampler() {
+        let json = json_of(&generate(&store_with(&["network_bytes"]), vec![]));
+        assert!(!json.contains("\"EFA\""), "{json}");
+        assert!(!json.contains("network_efa_"), "{json}");
+    }
+
+    /// Every `network_efa` metric is plotted when present: port counters one
+    /// line per port, device counters one line per device, byte counters as
+    /// bits per second.
+    #[test]
+    fn efa_group_plots_every_metric_present() {
+        let metrics: Vec<&str> = EFA
+            .iter()
+            .flat_map(|(_, _, charts)| charts.iter().map(|(_, _, m, _)| *m))
+            .collect();
+        let json = json_of(&generate(&store_with(&metrics), vec![]));
+        assert!(json.contains("\"EFA\""), "{json}");
+        for (name, _, charts) in EFA {
+            let by = if *name == EFA_DEVICE_SUBGROUP {
+                "device"
+            } else {
+                "device, port"
+            };
+            for (_, _, metric, kind) in *charts {
+                let query = match kind {
+                    EfaKind::Bits => format!("sum by ({by}) (irate({metric}[5m])) * 8"),
+                    EfaKind::Rate => format!("sum by ({by}) (irate({metric}[5m]))"),
+                };
+                assert!(json.contains(&query), "{query} missing from {json}");
+            }
+        }
+    }
+
+    /// An EFA chart whose metric the recording lacks is not plotted.
+    #[test]
+    fn efa_group_leaves_out_metrics_absent() {
+        let json = json_of(&generate(&store_with(&["network_efa_tx_bytes"]), vec![]));
+        assert!(
+            json.contains("irate(network_efa_tx_bytes[5m])) * 8"),
+            "{json}"
+        );
+        assert!(!json.contains("network_efa_rx_bytes"), "{json}");
+        assert!(!json.contains("\"EFA Device Errors\""), "{json}");
     }
 }
