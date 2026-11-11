@@ -555,7 +555,8 @@ fn refusal_summary(
 
 /// One line for each endpoint whose rows could not be recorded
 /// ([`mr::SourceState::Failed`]): it stopped recording, and the archive
-/// holds what it recorded before. `None` when there is none.
+/// holds its rows up to the failure, except a failed table's rows after its
+/// last sealed segment. `None` when there is none.
 fn failure_summary(sources: &[mr::SourceSummary], output: &Path) -> Option<String> {
     let lines: Vec<String> = sources
         .iter()
@@ -569,7 +570,8 @@ fn failure_summary(sources: &[mr::SourceSummary], output: &Path) -> Option<Strin
 fn failure_line(endpoint: Option<&str>, name: Option<&str>, output: &Path) -> String {
     format!(
         "error: {} stopped recording during the run because its rows could not be recorded; \
-         {} holds what it recorded before",
+         {} holds its rows up to the failure, except a failed table's rows after its last \
+         sealed segment",
         who(endpoint, name),
         output.display()
     )
@@ -712,9 +714,14 @@ impl Watch {
                 );
             }
             mr::Event::SourceFailed { source, reason } => {
+                // Any other endpoint records on; when none is left,
+                // `Event::Failed` follows.
+                let i = source.0 as usize;
+                let url = self.urls.get(i).map(String::as_str);
+                let name = self.names.get(i).cloned().flatten();
                 eprintln!(
-                    "error: {}: {reason}; it stopped recording, and the other endpoints record on",
-                    self.label(source)
+                    "error: {}: {reason}; it stopped recording",
+                    who(url, name.as_deref())
                 );
                 self.streaming.remove(&source);
             }
@@ -1589,8 +1596,8 @@ mod tests {
         );
     }
 
-    /// An endpoint that failed mid-run is named, and the line says the
-    /// archive holds what it recorded before.
+    /// An endpoint that failed mid-run is named, and the line says what the
+    /// archive holds of it.
     #[test]
     fn a_failed_endpoint_says_what_the_archive_holds() {
         assert_eq!(
@@ -1600,7 +1607,8 @@ mod tests {
                 Path::new("out.dendro")
             ),
             "error: http://localhost:4241/ (svc) stopped recording during the run because its \
-             rows could not be recorded; out.dendro holds what it recorded before"
+             rows could not be recorded; out.dendro holds its rows up to the failure, except a \
+             failed table's rows after its last sealed segment"
         );
     }
 }

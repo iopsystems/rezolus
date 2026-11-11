@@ -182,8 +182,8 @@ When wrapping a command, rezolus passes its stdio straight through and exits
 with the command's own status, so `rezolus record -o bench.dendro -- ./bench.sh &&
 analyze bench.dendro` gates on the benchmark. Two substitutions: the
 `--duration` cap exits 124 if it kills the command, and a recording failure
-(an endpoint refused mid-run, a write error) exits 1 whatever the command
-returned.
+(an endpoint refused mid-run, an endpoint whose rows could not be recorded,
+a write error) exits 1 whatever the command returned.
 
 A wrapped run is also marked in the recording: a `run_start` event when the
 command spawns and a `run_end` event when its exit is observed, named by the

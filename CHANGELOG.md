@@ -598,6 +598,37 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   server viewer), and any other failure at debug. `mcp detect-anomalies` given a bare
   exporter name wraps it by the kind of the series renamed from it, where
   it passed the name through unwrapped and failed.
+- **A selector compares a label a series lacks as the empty string, as
+  Prometheus does** (metriken-storage 0.12, metriken-query 0.49).
+  `x{l=""}` selects the series of `x` without `l`, `x{l=~"a|"}` those with
+  `l="a"` and those without, `x{l!=""}` only those that carry it, and
+  `x{l!~".*"}` none. Before, `x{l=""}` selected nothing and `x{l!~".*"}`
+  selected the series without `l`. This applies to KPI templates,
+  `recording check`, `mcp query` and the viewers' queries. A `__run__`
+  matcher on a histogram whose configuration changed mid-recording is
+  decided against each run's number (`"0"` for one run); one that selects
+  several runs reads none.
+- **`rezolus record` keeps recording when one endpoint's rows cannot be
+  recorded** (metriken-recorder 0.13, 0.14). An endpoint whose rows cannot
+  be written into a segment, staged, or read or decoded from its stream
+  stops recording alone: `record` prints the reason at once, names it again
+  at the end of the run, and exits 1, as for an endpoint refused mid-run.
+  The archive keeps its rows up to the failure, except a failed table's
+  rows after its last sealed segment. When no endpoint is left recording,
+  the recording fails as before. hindsight and the live viewer record one
+  source, so such a failure still ends them.
+- **An exporter label named after a storage key is kept as
+  `exported_<key>`** (metriken-recorder 0.13). A Prometheus series with a
+  label named `unit`, `metric_type`, `scale` or another key the archive
+  stores as column metadata kept that label under its own name, where it
+  was dropped on load and two series that differed only by it read as one.
+  It is now stored as `exported_unit` and so on.
+- **A recording with two series that read as one is refused, not read
+  interleaved** (metriken-query 0.48.1, 0.49). A query over a series that
+  two columns of an archive hold at the same times (an archive recorded
+  before the change above, from an exporter with such a label), or a series
+  whose samples step back in time, is an error naming the metric and its
+  labels.
   Save as Report logs a query whose columns it cannot resolve with
   metriken-query's message, and calls only a syntax error malformed. In a
   comparison, a percentile chart's series are paired by their visible

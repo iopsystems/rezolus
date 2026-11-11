@@ -8,7 +8,10 @@ The "Where the rule is enforced" section describes the state after
 metriken-query 0.25.0 and the consumer change that followed it. The rows for
 `__prometheus_name__`, `unit`, `overflow`, `overflow_bound` and `scale`, and
 rule 1, were checked on 2026-11-09 against metriken-storage 0.11.0,
-metriken-query 0.48.0 and metriken-recorder 0.12.0.
+metriken-query 0.48.0 and metriken-recorder 0.12.0. The `exported_<key>`
+paragraph and the selector rule for an absent key were checked on
+2026-11-11 against metriken-storage 0.12.0, metriken-query 0.49.0 and
+metriken-recorder 0.14.0.
 
 ## Three kinds of key
 
@@ -64,7 +67,9 @@ series that differ only by such a label therefore stay two series.
 Everything in field metadata that is not a storage key is a label, and series
 identity is equality over the whole label map (`metriken-query/src/labels.rs:3`,
 used at `memory.rs:66`, `segmented.rs:241`, `parquet.rs:1549`). A selector
-matches on a subset and fails closed on an absent key (`labels.rs:100`).
+matches on a subset and compares an absent key as the empty string, as
+Prometheus does: `l=""` and `l!="a"` select a series without `l`, and
+`l!=""` does not (metriken-storage 0.12's `Labels::matches`).
 
 | label | origin | notes |
 |---|---|---|

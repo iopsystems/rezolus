@@ -163,6 +163,9 @@ struct Fixture {
     /// the metadata read after the stream opens asks for those; the probe of
     /// an endpoint that cannot stream yet asks for `/status`.
     on_hang: Option<std::path::PathBuf>,
+    /// Stamp every streamed row before the Unix epoch, which the recorder
+    /// cannot read.
+    before_epoch: bool,
 }
 
 /// The fake agent's accept loop; see [`spawn_fake_agent`].
@@ -376,7 +379,7 @@ fn serve_stream(
                 index_state: dendro::replicate::NO_INDEX_STATE,
                 rows: vec![dendro::archive::WalRow {
                     stream: "fake/ops".to_string(),
-                    ts: ts as i64,
+                    ts: if fixture.before_epoch { -1 } else { ts as i64 },
                     wall_offset: 0,
                     row,
                 }],
@@ -1716,6 +1719,82 @@ fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
         !stdout.contains("not cleanly finalized"),
         "a clean finalize: {stdout}"
     );
+}
+
+/// An agent whose streamed rows cannot be read (stamped before the Unix
+/// epoch) stops recording alone: `record` names it at once and at the end
+/// of the run, the exporter beside it records on, the archive is finalized,
+/// and the run exits 1.
+#[test]
+fn an_endpoint_whose_rows_cannot_be_recorded_stops_alone() {
+    use metriken_storage::Catalog;
+
+    let exporter = spawn_fake_exporter_named("http_requests_total");
+    let agent = spawn_fixture(
+        Streams::Always,
+        Some("6.0.0"),
+        Names::Metriken,
+        Fixture {
+            before_epoch: true,
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("failed.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=bad"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("2s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    let who = format!("http://127.0.0.1:{agent}/ (bad)");
+    for needle in [
+        format!("error: {who}: a streamed frame could not be read"),
+        "before the epoch; it stopped recording\n".to_string(),
+        format!(
+            "error: {who} stopped recording during the run because its rows could not be \
+             recorded; {} holds its rows up to the failure",
+            output.display()
+        ),
+    ] {
+        assert!(stderr.contains(&needle), "{needle:?} in:\n{stderr}");
+    }
+    assert!(
+        !stderr.contains("recording failed"),
+        "the recording itself did not fail:\n{stderr}"
+    );
+
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert!(
+        sources.iter().all(|s| s.complete),
+        "every recording is finalized: {sources:?}"
+    );
+    let svc = sources
+        .iter()
+        .find(|s| s.labels.values().any(|v| v == "svc"))
+        .unwrap_or_else(|| panic!("the exporter is recorded: {sources:?}"));
+    let rows = catalog
+        .segment_span(svc.id, "prometheus/scrape")
+        .unwrap()
+        .1
+        .rows
+        + catalog
+            .live_wal_span(svc.id, "prometheus/scrape")
+            .unwrap()
+            .rows;
+    assert!(rows > 2, "the exporter kept recording: {rows} rows");
 }
 
 /// An agent that streamed, then answers its reconnect with a 404, is refused
