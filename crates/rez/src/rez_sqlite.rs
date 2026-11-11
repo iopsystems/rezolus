@@ -263,7 +263,8 @@ impl RezDb {
     /// Serialize the whole database to bytes — the inverse of
     /// [`open_bytes`](Self::open_bytes). Used to hand a report `.rez` built in
     /// memory back to a caller (a browser download) without a filesystem.
-    pub fn serialize(&self) -> Result<Vec<u8>, String> {
+    /// `&mut self` because rusqlite's `Connection::serialize` takes it.
+    pub fn serialize(&mut self) -> Result<Vec<u8>, String> {
         let data = self
             .conn
             .serialize(rusqlite::MAIN_DB)
