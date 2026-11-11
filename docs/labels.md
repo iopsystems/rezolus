@@ -42,6 +42,12 @@ strip them so they never become labels (metriken-storage's `STORAGE_KEYS`). Type
 not a label in Prometheus either. There is no `__type__` and there should not
 be one.
 
+A Prometheus exporter can put a label with one of those names on a series.
+metriken-recorder (0.13.0 on) stores it as `exported_<key>` (`exported_unit`,
+`exported_scale`), adding `exported_` again while that name is taken, as
+Prometheus does for a scraped label that clashes with a target label. Two
+series that differ only by such a label therefore stay two series.
+
 | key | written by | read by | treatment |
 |---|---|---|---|
 | `metric` | agent (`src/agent/exposition/http/snapshot.rs:416`), Prometheus converter (`src/recorder/prometheus.rs:64`), parquet ingest backfill (metriken-storage `src/rez/parquet_ingest.rs`) | every loader | becomes `__name__`; column name minus `:buckets` is the fallback |
