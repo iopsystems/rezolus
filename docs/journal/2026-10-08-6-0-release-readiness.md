@@ -3,8 +3,8 @@
 **Status: OPEN.** Plan opened 2026-10-08, updated 2026-11-12. `Cargo.toml` is
 at `6.0.0-alpha.139`; no `v6.*` tag exists and the latest release is v5.31.0.
 This entry lists what has to be true before 6.0.0 is tagged and in what order,
-and records the decisions taken on 2026-10-08, 2026-10-12, 2026-11-05 and
-2026-11-06. On 2026-10-12
+and records the decisions taken on 2026-10-08, 2026-10-12, 2026-11-05,
+2026-11-06 and 2026-11-12. On 2026-10-12
 6.x became `.dendro`-only for writing, decision 1 was withdrawn (an agent
 older than 5.21.0 is refused), and 6.0.0 now waits for metriken path steps 4
 to 7, the viewer move included. On 2026-11-05 and 2026-11-06 (decisions 8
@@ -127,10 +127,10 @@ Taken with the metriken-recorder design (metriken
    recorder. At startup the run exits 1 and writes nothing; mid-run that
    endpoint is refused, the rest are recorded and finalized, and the run
    exits 1 (`refuse_mid_run`, as today for an agent that cannot stream).
-   Changed 2026-11-12 by decision 16: a mid-run refusal no longer changes
-   the exit status. This replaces decision 1. rezolus's 5.x line does not adopt
+   This replaces decision 1. rezolus's 5.x line does not adopt
    `metriken-recorder`: it keeps its own recorder and dependencies, and its
-   scrape paths keep recording every agent version.
+   scrape paths keep recording every agent version. Changed 2026-11-12 by
+   decision 16: a mid-run refusal no longer changes the exit status.
 7. **Narrowed 2026-11-05 by decision 8.** It read: **6.0.0 ships after
    metriken path steps 4 to 7 and the follow-ups listed in the plan's step
    7.** The steps: `metriken-recorder` (4), templates in the
@@ -632,7 +632,9 @@ reader.
 - An RPM upgrade keeps the units enabled and running (decision 17). Done
   2026-11-12 (#1692).
 - hindsight says why it refuses an agent at startup and creates nothing
-  first (found 2026-11-06, while writing the upgrade page).
+  first (found 2026-11-06, while writing the upgrade page). Done:
+  `tests/hindsight_dump.rs`,
+  `an_agent_older_than_the_stream_is_refused_with_a_message_and_nothing_created`.
 - `site/docs/usage.html`'s config example uses `alias =`, in the release PR
   (the site deploys from main, and 5.29.2 ignores `alias`).
 - The upgrade page and the documentation fixes above are merged.
