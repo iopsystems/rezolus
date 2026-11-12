@@ -437,8 +437,8 @@ enabled = false
 # (default 5s); Linux rediscovers sysfs capabilities every 60s, macOS finds
 # its sensors once at startup. No sysfs control or PSU register is written;
 # the Corsair dongle is sent read requests and a setup command whose effect
-# is undocumented. The agent opens the dongle's tty for exclusive use and
-# needs read-write access to it; `corsair_axi = false` leaves it alone.
+# is undocumented. The agent locks the dongle's tty (`flock`) while it uses
+# it and needs read-write access to it; `corsair_axi = false` leaves it alone.
 # On Linux, missing permissions or unavailable channels appear as absent
 # values; on macOS, a sensor not found at startup has no series, and a later
 # failed read is absent. On Linux, drive temperatures

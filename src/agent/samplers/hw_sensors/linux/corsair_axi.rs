@@ -31,9 +31,12 @@
 //! as a failed open does, and the page is not switched back.
 //!
 //! The port is refused if another process has set `TIOCEXCL` on it or holds a
-//! `flock` on it, and is then claimed with both before its settings are
-//! changed, so a second agent or another tool that claims the port cannot
-//! interleave with this one; `TIOCEXCL` is cleared again on close. A process
+//! `flock` on it, and is otherwise locked with `flock` before its settings are
+//! changed, so a second agent or another tool that locks the port cannot
+//! interleave with this one. The agent does not set `TIOCEXCL`: the kernel
+//! keeps it after a close while another process has the port open, including
+//! the close at exit. A port is closed on a separate thread, since
+//! usb-serial's close can wait up to 30 s for output to drain. A process
 //! that already has the port open without either (CyberPower's `pwrstatd`
 //! probes serial ports for a UPS) still consumes replies; reads then time out
 //! or fail to decode. Before each open
@@ -259,9 +262,24 @@ impl<P: Port> Session<P> {
 }
 
 /// A raw 115200 8N1 serial port.
-pub(crate) struct SerialPort(OwnedFd);
+pub(crate) struct SerialPort {
+    /// Taken by [`Drop`], which closes it on another thread.
+    fd: Option<OwnedFd>,
+    tty: PathBuf,
+}
+
+/// Ports whose close is still running on a `corsair-axi-close` thread.
+static CLOSING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+fn closing() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    CLOSING.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 impl SerialPort {
+    fn raw(&self) -> i32 {
+        self.fd.as_ref().expect("open until dropped").as_raw_fd()
+    }
+
     fn open_fd(path: &Path) -> io::Result<OwnedFd> {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
@@ -283,10 +301,10 @@ impl SerialPort {
 
     /// Sets the port to raw 115200 8N1 with non-blocking reads.
     fn configure_raw(&self) -> io::Result<()> {
-        let fd = &self.0;
+        let raw = self.raw();
         // SAFETY: termios is plain data; tcgetattr fills it.
         let mut tio: libc::termios = unsafe { std::mem::zeroed() };
-        if unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut tio) } != 0 {
+        if unsafe { libc::tcgetattr(raw, &mut tio) } != 0 {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: tio was initialised by tcgetattr.
@@ -298,7 +316,7 @@ impl SerialPort {
         tio.c_cflag |= libc::CLOCAL | libc::CREAD;
         tio.c_cc[libc::VMIN] = 0;
         tio.c_cc[libc::VTIME] = 0;
-        if unsafe { libc::tcsetattr(fd.as_raw_fd(), libc::TCSANOW, &tio) } != 0 {
+        if unsafe { libc::tcsetattr(raw, libc::TCSANOW, &tio) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -307,24 +325,34 @@ impl SerialPort {
     /// Opens and configures `path` without claiming it.
     #[cfg(test)]
     fn open(path: &Path) -> io::Result<Self> {
-        let port = Self(Self::open_fd(path)?);
+        let port = Self {
+            fd: Some(Self::open_fd(path)?),
+            tty: path.to_path_buf(),
+        };
         port.configure_raw()?;
         Ok(port)
     }
 
-    /// Opens `path` for exclusive use, then configures it; see [`Self::claim`].
+    /// Opens `path` for this agent's use, then configures it; see
+    /// [`Self::claim`]. A port whose previous close is still running is
+    /// refused without being opened, since the open would wait for that
+    /// close to finish.
     pub(crate) fn open_exclusive(path: &Path) -> io::Result<Self> {
-        Self::claim(Self::open_fd(path)?)
+        if closing().iter().any(|p| p == path) {
+            return Err(io::Error::new(
+                io::ErrorKind::ResourceBusy,
+                "corsair_axi: the port's last close has not finished",
+            ));
+        }
+        Self::claim(Self::open_fd(path)?, path)
     }
 
     /// Claims an open port, then configures it. The port is refused, before
     /// its termios is changed or anything is written, if another process has
     /// set `TIOCEXCL` on it (root can open such a port, so this is checked)
-    /// or holds a `flock` on it. Once claimed, `TIOCEXCL` refuses later
-    /// non-root opens and the `flock` refuses other lockers; [`Drop`] clears
-    /// `TIOCEXCL`, which otherwise outlives this fd while another process
-    /// has the port open, and closing the fd releases the lock.
-    fn claim(fd: OwnedFd) -> io::Result<Self> {
+    /// or holds a `flock` on it. Once claimed, the `flock` refuses other
+    /// lockers until the port closes.
+    fn claim(fd: OwnedFd, tty: &Path) -> io::Result<Self> {
         let raw = fd.as_raw_fd();
         let mut excl: libc::c_int = 0;
         // SAFETY: raw is open; TIOCGEXCL writes one c_int.
@@ -345,38 +373,38 @@ impl SerialPort {
                 format!("corsair_axi: port is locked by another process: {err}"),
             ));
         }
-        // From here the port is ours, and Drop undoes TIOCEXCL.
-        let port = Self(fd);
-        // SAFETY: raw is open; TIOCEXCL takes no argument.
-        if unsafe { libc::ioctl(raw, libc::TIOCEXCL) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        let port = Self {
+            fd: Some(fd),
+            tty: tty.to_path_buf(),
+        };
         port.configure_raw()?;
         Ok(port)
     }
 }
 
 impl Drop for SerialPort {
+    /// Closes the port on a detached thread. usb-serial's final close waits up
+    /// to `closing_wait` (30 s by default) for unsent output to reach a dongle
+    /// that has stopped accepting it, and holds the tty's lock meanwhile, so a
+    /// reopen would wait too; [`Self::open_exclusive`] refuses the port until
+    /// the close returns. If the thread cannot be started, the port is closed
+    /// here, on the caller's thread.
     fn drop(&mut self) {
-        let raw = self.0.as_raw_fd();
-        // SAFETY: raw is open until the fd is closed below; TIOCNXCL takes no
-        // argument. Harmless on a port that is not exclusive.
-        unsafe { libc::ioctl(raw, libc::TIOCNXCL) };
-        // usb-serial's final close waits up to `closing_wait` (30 s by
-        // default) for unsent output to reach a dongle that has stopped
-        // accepting it. Hand a duplicate to a detached thread, so that the
-        // close of `self.0` is not the final one and returns at once. The
-        // flock belongs to the open file, so it is released only when that
-        // thread's close finishes, and a reopen meanwhile is refused and
-        // backs off.
-        // SAFETY: raw is open; dup returns a new fd or -1.
-        let dup = unsafe { libc::dup(raw) };
-        if dup >= 0 {
-            // SAFETY: dup was just returned and is owned here.
-            let dup = unsafe { OwnedFd::from_raw_fd(dup) };
-            let _ = std::thread::Builder::new()
-                .name("corsair-axi-close".into())
-                .spawn(move || drop(dup));
+        let Some(fd) = self.fd.take() else {
+            return;
+        };
+        let tty = self.tty.clone();
+        closing().push(tty.clone());
+        let done = tty.clone();
+        let spawned = std::thread::Builder::new()
+            .name("corsair-axi-close".into())
+            .spawn(move || {
+                drop(fd);
+                closing().retain(|p| *p != done);
+            });
+        if spawned.is_err() {
+            // The closure, and the fd with it, was dropped by spawn.
+            closing().retain(|p| *p != tty);
         }
     }
 }
@@ -416,7 +444,7 @@ impl Port for SerialPort {
         let deadline = Instant::now() + REPLY_TIMEOUT;
         while !bytes.is_empty() {
             // SAFETY: bytes is a valid slice for its length.
-            let n = unsafe { libc::write(self.0.as_raw_fd(), bytes.as_ptr().cast(), bytes.len()) };
+            let n = unsafe { libc::write(self.raw(), bytes.as_ptr().cast(), bytes.len()) };
             if n > 0 {
                 bytes = &bytes[n as usize..];
                 continue;
@@ -427,7 +455,7 @@ impl Port for SerialPort {
                 io::ErrorKind::WouldBlock => {}
                 _ => return Err(err),
             }
-            wait(self.0.as_raw_fd(), libc::POLLOUT, deadline)?;
+            wait(self.raw(), libc::POLLOUT, deadline)?;
         }
         Ok(())
     }
@@ -436,14 +464,14 @@ impl Port for SerialPort {
         loop {
             let mut b = 0u8;
             // SAFETY: b is one writable byte.
-            let n = unsafe { libc::read(self.0.as_raw_fd(), (&mut b as *mut u8).cast(), 1) };
+            let n = unsafe { libc::read(self.raw(), (&mut b as *mut u8).cast(), 1) };
             if n == 1 {
                 return Ok(b);
             }
             if n == 0 {
                 // In raw mode with VMIN 0 an empty tty reads 0; a hangup is
                 // reported by poll.
-                wait(self.0.as_raw_fd(), libc::POLLIN, deadline)?;
+                wait(self.raw(), libc::POLLIN, deadline)?;
                 continue;
             }
             let err = io::Error::last_os_error();
@@ -452,13 +480,13 @@ impl Port for SerialPort {
                 io::ErrorKind::WouldBlock => {}
                 _ => return Err(err),
             }
-            wait(self.0.as_raw_fd(), libc::POLLIN, deadline)?;
+            wait(self.raw(), libc::POLLIN, deadline)?;
         }
     }
 
     fn discard_input(&mut self) -> io::Result<()> {
         // SAFETY: the fd is open.
-        if unsafe { libc::tcflush(self.0.as_raw_fd(), libc::TCIFLUSH) } != 0 {
+        if unsafe { libc::tcflush(self.raw(), libc::TCIFLUSH) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -1278,7 +1306,14 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .to_string();
-            (OwnedFd::from_raw_fd(master), PathBuf::from(path))
+            let path = PathBuf::from(path);
+            // Pty numbers are reused across parallel tests: wait out a close
+            // another test left pending on this path.
+            let started = Instant::now();
+            while closing().contains(&path) && started.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            (OwnedFd::from_raw_fd(master), path)
         }
     }
 
@@ -1355,7 +1390,7 @@ mod tests {
             unsafe { libc::ioctl(holder.as_raw_fd(), libc::TIOCEXCL) },
             0
         );
-        let err = SerialPort::claim(fd).err().expect("refused");
+        let err = SerialPort::claim(fd, &slave).err().expect("refused");
         assert_eq!(err.kind(), io::ErrorKind::ResourceBusy, "{err}");
     }
 
@@ -1382,12 +1417,12 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_claimed_port_clears_its_exclusive_flag() {
-        // While another process has the port open, the kernel keeps
-        // TTY_EXCLUSIVE after this fd closes unless it is cleared.
+    fn claiming_a_port_does_not_set_tiocexcl() {
+        // The kernel would keep it after this agent's close, including at exit,
+        // while another process has the port open.
         let (_master, slave) = pty();
         let holder = SerialPort::open_fd(&slave).unwrap();
-        drop(SerialPort::open_exclusive(&slave).unwrap());
+        let _port = SerialPort::open_exclusive(&slave).unwrap();
         let mut excl: libc::c_int = 1;
         // SAFETY: holder is open; TIOCGEXCL writes one c_int.
         assert_eq!(
@@ -1395,31 +1430,32 @@ mod tests {
             0
         );
         assert_eq!(excl, 0);
-        // And the port can be claimed again once the close thread finishes.
-        let started = Instant::now();
-        loop {
-            match SerialPort::open_exclusive(&slave) {
-                Ok(_) => break,
-                Err(e) if started.elapsed() < Duration::from_secs(2) => {
-                    let _ = e;
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => panic!("still refused: {e}"),
-            }
-        }
     }
 
     #[test]
-    fn a_claimed_port_is_marked_exclusive() {
+    fn a_port_whose_close_is_pending_is_refused_without_opening_it() {
+        // A path that cannot be opened: a refusal of any other kind than
+        // ResourceBusy would mean the open was attempted.
+        let tty = PathBuf::from("/nonexistent/ttyUSB-closing");
+        closing().push(tty.clone());
+        let err = SerialPort::open_exclusive(&tty).err().expect("refused");
+        closing().retain(|p| *p != tty);
+        assert_eq!(err.kind(), io::ErrorKind::ResourceBusy, "{err}");
+    }
+
+    #[test]
+    fn a_dropped_port_is_closed_off_the_callers_thread_then_claimable() {
         let (_master, slave) = pty();
-        let port = SerialPort::open_exclusive(&slave).unwrap();
-        let mut excl: libc::c_int = 0;
-        // SAFETY: the fd is open; TIOCGEXCL writes one c_int.
-        assert_eq!(
-            unsafe { libc::ioctl(port.0.as_raw_fd(), libc::TIOCGEXCL, &mut excl) },
-            0
-        );
-        assert_eq!(excl, 1);
+        drop(SerialPort::open_exclusive(&slave).unwrap());
+        let started = Instant::now();
+        while closing().contains(&slave) {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "close never finished"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(SerialPort::open_exclusive(&slave).is_ok());
     }
 
     #[test]

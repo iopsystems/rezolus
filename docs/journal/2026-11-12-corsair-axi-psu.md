@@ -54,7 +54,7 @@ and a reopen on every sweep, since each reopen succeeded. Failures are now held
 back per register (1 s, doubling to 60 s) as well as per port (60 s after a
 failed open, for readings; discovery retries on its own interval).
 
-The port is now opened with `TIOCEXCL` and a `flock`, and the tty is checked in
+The port was then opened with `TIOCEXCL` and a `flock`, and the tty is checked in
 sysfs to still be the dongle before each open, since `ttyUSBn` numbers are
 reassigned on replug. A second review found that a root process can open a port
 another process has set `TIOCEXCL` on, and the packaged agent runs as root; the
@@ -67,16 +67,25 @@ PSU on page 2) between readings without breaking a session.
 
 A third review found two problems with closing. The kernel keeps `TTY_EXCLUSIVE`
 after a close that is not the last one, so with `pwrstatd` holding the port the
-agent locked itself out on the next open; the agent now clears it with
+agent locked itself out on the next open; the head of that round cleared it with
 `TIOCNXCL` before closing. And `tcflush` does not discard usb-serial's output
 (usb-serial has no `flush_buffer`), so a final close can wait up to
-`closing_wait`, 30 s by default, for a dongle that stopped taking output. The
-agent now closes a duplicate fd on a short-lived thread, so the sweep worker's
-close is not the final one. A lost reply to the page check is charged to the
-register being read, not to the port; only a page other than 0 backs off the
-port. Not handled: two dongles whose `ttyUSBn` numbers swap between
-rediscoveries; the sysfs check confirms the USB IDs, not which dongle, so
-readings can be published under the other PSU's identity for up to 60 s.
+`closing_wait`, 30 s by default, for a dongle that stopped taking output. That
+round closed a duplicate fd on a short-lived thread. A lost reply to the page
+check is charged to the register being read, not to the port; only a page other
+than 0 backs off the port. Not handled: two dongles whose `ttyUSBn` numbers swap
+between rediscoveries; the sysfs check confirms the USB IDs, not which dongle,
+so readings can be published under the other PSU's identity for up to 60 s. A
+fourth review found both of those fixes incomplete. The flock is released before
+the tty's `release` runs, and `tty_release` holds the tty lock through the
+drain, so a reopen waited behind the close thread; and the duplicate could close
+first, leaving the final close on the worker. `TIOCEXCL` also survived the close
+at process exit, where no `TIOCNXCL` runs. The agent now does not set `TIOCEXCL`
+at all (it still refuses a port another process set it on, and still takes the
+flock), moves the fd itself to the close thread, and refuses a tty from a list
+of pending closes until its close returns, so the worker never opens a port
+whose close is draining. The close thread's effect is not tested: a pty close
+never drains.
 
 On Linux, a tty in raw mode with VMIN 0 and `O_NONBLOCK` returns 0 from `read`
 when no byte is waiting, not `EAGAIN`; a hangup is visible only as `POLLHUP`.
