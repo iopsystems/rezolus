@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+### Fixed
+
+- **An RPM upgrade keeps the units enabled and running.** Every `rpm -U`
+  left `rezolus` and `rezolus-exporter` stopped and disabled at boot: the
+  outgoing package's `%preun` stopped and disabled them after the incoming
+  package's `%post` had enabled them. The package now records each unit's
+  state in `%pre` on an upgrade and restores it in `%posttrans`, which runs
+  after the outgoing package's scriptlets, so an upgrade from 5.31.0 or
+  earlier keeps the units too: an enabled unit stays enabled, a running one
+  is restarted on the new binary, and a unit the operator disabled stays
+  disabled. `%post` enables and starts the agent and the exporter on a first
+  install only, `%preun` stops and disables the units on removal only, and
+  `%postun` reloads systemd. A `systemctl` call no longer fails the
+  scriptlet where systemd is not running, such as a container image build.
+  Backported from 6.0 (#1692). (#1464)
+
 ## [5.31.0] - 2026-11-11
 
 ### Added
