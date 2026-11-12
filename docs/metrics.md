@@ -1915,6 +1915,36 @@ takes about 300 ms, and the rest about 30 µs; its NIC's MAC temperature adds
 about 18 ms. About 2.8 ms of each sweep is CPU; the
 rest is the worker waiting.
 
+A Corsair AXi power supply is read through its Corsair Link USB dongle, USB ID
+`1b1c:1c02`, which the `cp210x` driver exposes as `/dev/ttyUSBn`. Only an
+AX1500i has been tested; another AXi model whose dongle has a different USB ID
+is not found. Each PSU publishes input power, input voltage and input current
+(the AC side, RMS), two temperatures and its fan speed, with
+`source=corsair_axi`, `chip` set to the model the PSU reports (`AX1500i`) and
+`device` the USB port (`1-13`). To leave the dongle alone:
+
+```toml
+[samplers.hw_sensors]
+corsair_axi = false
+```
+
+The agent needs read-write access to the tty. Before opening it, the agent
+checks in sysfs that the tty still belongs to the dongle, then takes it with
+`TIOCEXCL` and an exclusive `flock`. The dongle is sent read requests and its
+setup command; no PSU register is written. The PSU's PMBus page is read when
+the port is opened and again before a reading at most once a second, and a
+page other than 0 is an error. A process that already has the port open, such
+as CyberPower's `pwrstatd` probing serial ports for a UPS, takes the PSU's
+replies, and discovery reports an error (`no reply`, or a reply that does not
+decode). A reading does not reopen a port for 60 seconds after a failed open;
+discovery tries again every 60 seconds. A failed reading closes the port, and
+that register is not read for 1 second, doubling on each consecutive failure
+up to 60 seconds. On an AX1500i the six readings and the page check add about
+35 ms to each sweep (two serial exchanges per register), and a discovery that
+opens the port about 46 ms. The fan read 0 rpm in every capture, up to 371 W input. Corsair
+HXi/RMi power supplies use other USB IDs and are read by the kernel's
+`corsair-psu` hwmon driver.
+
 `asusec` reports -40 °C for a temperature header with nothing connected.
 Such a channel gets no slot and is not read on each sweep; discovery reads it
 every 60 seconds and adds it once it reports another value.
@@ -1940,9 +1970,9 @@ each family supports at most 256 lifetime identities, reporting overflow.
 | Metric | Type | Stored unit / interpretation |
 | --- | --- | --- |
 | `sensor_temperature` | Gauge | Millidegrees Celsius per temperature channel; signed |
-| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading or checked INA3221 voltage × current |
-| `sensor_voltage` | Gauge | Millivolts per bus-voltage channel; excludes INA3221 shunt-voltage channels |
-| `sensor_current` | Gauge | Milliamps per current channel |
+| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading, checked INA3221 voltage × current, or Corsair AXi input power |
+| `sensor_voltage` | Gauge | Millivolts per bus-voltage channel, or Corsair AXi AC input (RMS); excludes INA3221 shunt-voltage channels |
+| `sensor_current` | Gauge | Milliamps per current channel, or Corsair AXi AC input (RMS) |
 | `sensor_fan_speed` | Gauge | Measured revolutions per minute, including NVIDIA `pwm_tach/rpm` |
 | `sensor_fan_pwm` | Gauge | Fan command on a 0–255 scale, not measured rotation |
 | `sensor_cooling_state` | Gauge | Driver-defined cooling-state index, not a throttling percentage |
