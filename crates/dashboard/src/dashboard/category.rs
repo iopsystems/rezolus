@@ -115,6 +115,14 @@ pub fn generate(
             _ => Plot::counter(&kpi.title, &plot_id, Unit::Count),
         };
         let opts = opts.maybe_unit_system(kpi.unit_system.as_deref());
+        // One unit for both arms' series: set only when the two members'
+        // queries read series stored in the same unit.
+        let unit_of =
+            |query: &str| crate::dashboard::service::stored_unit(data, &kpi.metric_type, query);
+        let opts = match (unit_of(&baseline_kpi.query), unit_of(&experiment_kpi.query)) {
+            (Some(a), Some(b)) if a == b => opts.with_stored_unit(a),
+            _ => opts,
+        };
         let opts = match &kpi.percentiles {
             Some(p) => opts.with_percentiles(p.clone()),
             None => opts,

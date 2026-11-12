@@ -81,7 +81,14 @@ pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -
                 .zip(labels)
                 .map(|(s, label)| Series {
                     label,
-                    points: s.values,
+                    points: if def.factor == 1.0 {
+                        s.values
+                    } else {
+                        s.values
+                            .into_iter()
+                            .map(|(t, v)| (t, v * def.factor))
+                            .collect()
+                    },
                 })
                 .filter(|s| !s.points.is_empty())
                 .collect();
@@ -238,6 +245,7 @@ mod tests {
             kind,
             percentiles: pcts,
             unit_system: None,
+            factor: 1.0,
             scope: None,
         }
     }
@@ -275,6 +283,43 @@ mod tests {
         }
         assert!((busy[0] - 0.25).abs() < 1e-9, "{busy:?}");
         assert!((busy[1] - 0.75).abs() < 1e-9, "{busy:?}");
+    }
+
+    /// Each loaded value is multiplied by the plot's factor (the stored
+    /// unit's, from `format.unit`) before the chart formats it.
+    #[test]
+    fn a_plots_factor_scales_its_points() {
+        use std::time::{Duration, SystemTime};
+        let store = metriken_query::MemoryStore::builder()
+            .sampling_interval_ms(1000)
+            .build();
+        for (i, value) in [2_i64, 3].into_iter().enumerate() {
+            store.ingest_snapshot(metriken_exposition::Snapshot::V2(
+                metriken_exposition::SnapshotV2 {
+                    systemtime: SystemTime::UNIX_EPOCH
+                        + Duration::from_secs(1_700_000_000 + i as u64),
+                    duration: Duration::from_secs(0),
+                    metadata: HashMap::new(),
+                    counters: vec![],
+                    gauges: vec![metriken_exposition::Gauge::new(
+                        "m".to_string(),
+                        value,
+                        HashMap::new(),
+                    )],
+                    histograms: vec![],
+                    gauge_histograms: Vec::new(),
+                },
+            ));
+        }
+        let mut scaled = def(PlotKind::Line, vec![]);
+        scaled.factor = 1e9;
+        match load_chart(&store, &scaled, TimeWindow::All) {
+            ChartData::Lines(series) => {
+                let values: Vec<f64> = series[0].points.iter().map(|p| p.1).collect();
+                assert_eq!(values, [2e9, 3e9]);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -357,26 +402,25 @@ mod tests {
         assert_eq!(series_labels(&[&a]), vec!["h"]);
     }
 
-    /// A Prometheus series stored under a normalized name carries the
-    /// exporter's name in `__prometheus_name__`, which sorts before every
-    /// visible key; the legend is what it would be without it.
+    /// An internal label (`__uid__`) sorts before every visible key; the
+    /// legend is what it would be without it.
     #[test]
-    fn a_renamed_series_is_not_named_by_its_exporter_name() {
+    fn a_series_is_not_named_by_an_internal_label() {
         let a = labels(&[
-            ("__name__", "rpc_nanoseconds"),
-            ("__prometheus_name__", "rpc_seconds"),
+            ("__name__", "rpc_seconds"),
+            ("__uid__", "7"),
             ("alias", "svc"),
         ]);
         assert_eq!(series_labels(&[&a]), vec!["svc"]);
         let b = labels(&[
-            ("__name__", "rpc_nanoseconds"),
-            ("__prometheus_name__", "rpc_seconds"),
+            ("__name__", "rpc_seconds"),
+            ("__uid__", "7"),
             ("alias", "svc"),
             ("op", "get"),
         ]);
         let c = labels(&[
-            ("__name__", "rpc_nanoseconds"),
-            ("__prometheus_name__", "rpc_ms"),
+            ("__name__", "rpc_seconds"),
+            ("__uid__", "8"),
             ("alias", "svc"),
             ("op", "put"),
         ]);

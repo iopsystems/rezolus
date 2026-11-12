@@ -1636,7 +1636,8 @@ fn the_interval_the_dendro_command_exited_in_is_recorded() {
 
 /// An agent that comes up after the recording started, and cannot serve its
 /// stream, is refused on its own: the other endpoints keep recording and the
-/// archive is finalized, and the run exits 1 so a pipeline notices.
+/// archive is finalized, and the run exits 0: the archive was saved, and
+/// the end-of-run lines name the endpoint left out.
 ///
 /// Regression: the refusal ended the whole run and left the archive
 /// unfinalized.
@@ -1668,7 +1669,7 @@ fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
         .output()
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
     for needle in [
         "Rezolus 5.20.0",
         "predates",
@@ -1724,7 +1725,7 @@ fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
 /// An agent whose streamed rows cannot be read (stamped before the Unix
 /// epoch) stops recording alone: `record` names it at once and at the end
 /// of the run, the exporter beside it records on, the archive is finalized,
-/// and the run exits 1.
+/// and the run exits 0.
 #[test]
 fn an_endpoint_whose_rows_cannot_be_recorded_stops_alone() {
     use metriken_storage::Catalog;
@@ -1757,7 +1758,7 @@ fn an_endpoint_whose_rows_cannot_be_recorded_stops_alone() {
         .output()
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
     let who = format!("http://127.0.0.1:{agent}/ (bad)");
     // rezolus's own line, which starts with `error:`, from the reason to
     // its end; metriken-recorder logs the reason too.
@@ -1804,7 +1805,7 @@ fn an_endpoint_whose_rows_cannot_be_recorded_stops_alone() {
 
 /// An agent that streamed, then answers its reconnect with a 404, is refused
 /// on its own as a late agent is: its recording stops with the rows it had
-/// and is finalized, the other endpoint keeps recording, and the run exits 1.
+/// and is finalized, the other endpoint keeps recording, and the run exits 0.
 ///
 /// Regression: a refusal on a reconnect ended the whole run.
 #[test]
@@ -1831,7 +1832,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
         .output()
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
     let dropped = format!(
         "error: http://127.0.0.1:{agent}/ (agent) was refused mid-run and has no rows in {} after ",
         output.display()
@@ -1883,7 +1884,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
 /// A run whose every endpoint has been refused mid-run ends on its own: with
 /// no `--duration` it would otherwise record nothing until ctrl-c. The
 /// archive is finalized with the rows the agent streamed before its
-/// reconnect was refused, and the run exits 1.
+/// reconnect was refused, and the run exits 0.
 #[test]
 fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
     use metriken_storage::Catalog;
@@ -1926,7 +1927,11 @@ fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
         .unwrap()
         .read_to_string(&mut stderr)
         .unwrap();
-    assert_eq!(status.code(), Some(1), "exits 1:\n{stderr}");
+    assert_eq!(status.code(), Some(0), "exits 0:\n{stderr}");
+    assert!(
+        stderr.contains("no endpoint is left recording; finalizing the recording"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("1 of 1 endpoints refused; the archive holds the rest and is finalized"),
         "{stderr}"
@@ -1940,6 +1945,93 @@ fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
     let rows = catalog.segment_span(id, "fake/ops").unwrap().1.rows
         + catalog.live_wal_span(id, "fake/ops").unwrap().rows;
     assert!((1..=3).contains(&rows), "the rows it streamed: {rows}");
+}
+
+/// A `--duration` run outlives its only endpoint: the agent's reconnect is
+/// refused about two seconds in, the run records on to its duration, and it
+/// exits 0.
+#[test]
+fn a_duration_run_runs_on_after_its_only_endpoint_is_refused() {
+    let agent = spawn_fake_agent_that_stops_streaming(3);
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("duration.dendro");
+
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("5s")
+        .output()
+        .expect("failed to run rezolus record");
+    let elapsed = started.elapsed();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
+    assert!(
+        elapsed >= Duration::from_secs(5),
+        "the run was not cut short: {elapsed:?}\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("no endpoint is left recording"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 1 endpoints refused; the archive holds the rest and is finalized"),
+        "{stderr}"
+    );
+}
+
+/// A wrapped command outlives its only endpoint: the agent's reconnect is
+/// refused about two seconds in, the command runs on to its own exit, and
+/// the run exits with the command's status, not 1.
+#[test]
+fn a_wrapped_command_runs_on_after_its_only_endpoint_is_refused() {
+    use metriken_storage::Catalog;
+
+    let agent = spawn_fake_agent_that_stops_streaming(3);
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("wrapped.dendro");
+
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg("sleep 4; exit 3")
+        .output()
+        .expect("failed to run rezolus record");
+    let elapsed = started.elapsed();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the command's status:\n{stderr}"
+    );
+    assert!(
+        elapsed >= Duration::from_secs(4),
+        "the command was not cut short: {elapsed:?}\n{stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 1 endpoints refused; the archive holds the rest and is finalized"),
+        "{stderr}"
+    );
+
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    assert!(sources[0].complete, "the archive is finalized");
 }
 
 /// A Prometheus exporter that serves `/metrics` and answers 404 to every

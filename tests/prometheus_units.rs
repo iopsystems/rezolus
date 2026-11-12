@@ -1,27 +1,19 @@
 //! Prometheus series whose names carry a unit token, recorded by
 //! `rezolus record` and read back through `mcp describe-metrics`,
-//! `mcp query`, the MCP server's `query` tool, the server viewer's
-//! `/api/v1/metrics` and `/api/v1/query_range`, and the WASM viewer's
-//! `metrics` and `query_range` (built natively).
+//! `mcp query`, `mcp detect-anomalies`, the MCP server's `query` tool, the
+//! server viewer's `/api/v1/metrics` and `/api/v1/query_range`, and the
+//! WASM viewer's `metrics` and `query_range` (built natively).
 //!
-//! metriken-recorder 0.12 stores such a series in nanoseconds or bytes
-//! under its name with the token replaced (`queue_wait_ms` as
-//! `queue_wait_nanoseconds`, ×1e6), with the exporter's name in the internal
-//! label `__prometheus_name__`. metriken-query 0.48 reads a selector naming
-//! the exporter's name, when no series is stored under it, from the series
-//! renamed from it: in the stored unit, under the stored name. Each check
-//! below reads a value by the stored name and by the exporter's name and
-//! expects the same number in the stored unit.
+//! metriken-storage 0.13 stores each series as the exporter serves it:
+//! under the exporter's name, in the exporter's unit, with the `unit` key
+//! set from the name's unit token or the `# UNIT` line (`queue_wait_ms` is
+//! `milliseconds`). Each check reads a value by the exporter's name and
+//! expects the served value; each catalog lists the exporter's names with
+//! their units.
 //!
 //! A second endpoint serves `jobs_total` with a different `# UNIT` line
-//! (`seconds` on one, `kilobytes` on the other), so `jobs_total` is stored
-//! as `jobs_nanoseconds_total` and as `jobs_bytes_total`; a query naming
-//! `jobs_total` over both is an error, whose message must reach the user
-//! as metriken-query wrote it.
-//!
-//! `__prometheus_name__` is an internal label: the metric catalogs' label
-//! keys (the viewer's label pickers) and `describe-metrics` must not list
-//! it.
+//! (`seconds` on one, `kilobytes` on the other). Both are stored as
+//! `jobs_total`, each in its own unit, and a selector reads both.
 
 #![cfg(unix)]
 
@@ -33,20 +25,17 @@ use std::time::Duration;
 /// `queue_wait_ms`'s value on every scrape, in milliseconds.
 const QUEUE_WAIT_MS: f64 = 2.5;
 
-/// `queue_wait_ms` in the stored unit, nanoseconds.
-const QUEUE_WAIT_NS: f64 = QUEUE_WAIT_MS * 1e6;
+/// `cpu_busy_seconds_total`'s increase per scrape over `requests_total`'s:
+/// 0.5 s per request.
+const BUSY_PER_REQUEST_S: f64 = 0.5;
 
-/// `cpu_busy_seconds_total`'s increase per scrape over `requests_total`'s
-/// (0.5 s per request), in nanoseconds.
-const BUSY_PER_REQUEST_NS: f64 = 0.5e9;
-
-/// The mean of `rpc_latency_seconds` (its `_sum` over its `_count`), 4 ms
-/// per observation, in nanoseconds.
-const MEAN_LATENCY_NS: f64 = 4e6;
+/// The mean of `rpc_latency_seconds` (its `_sum` over its `_count`): 4 ms
+/// per observation, in seconds.
+const MEAN_LATENCY_S: f64 = 0.004;
 
 /// The bucket every `rpc_latency_seconds` observation falls in, 10 ms, in
-/// nanoseconds: the median reads its end, within 1% at grouping power 7.
-const LATENCY_BUCKET_NS: f64 = 1e7;
+/// seconds: the median reads its end, within 1% at grouping power 7.
+const LATENCY_BUCKET_S: f64 = 0.01;
 
 /// The service endpoint's body on the `tick`th request: a `_seconds`
 /// histogram (10 observations of 4 ms per request), a `_ms` gauge, a
@@ -111,12 +100,15 @@ fn spawn_exporter(body: fn(u64) -> String) -> u16 {
 }
 
 /// The recording every test reads: both endpoints recorded for 11 seconds
-/// at 200 ms (`mcp detect-anomalies` refuses less than 10 seconds) into one archive, made once per test run under
-/// `CARGO_TARGET_TMPDIR`. Its two recordings are read combined.
+/// at 200 ms (`mcp detect-anomalies` refuses less than 10 seconds) into one
+/// archive, made once per test process under `CARGO_TARGET_TMPDIR`, in a
+/// directory of the process's own: nextest runs each test in a process. Its
+/// two recordings are read combined.
 fn recording() -> &'static std::path::Path {
     static ARCHIVE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     ARCHIVE.get_or_init(|| {
-        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("prometheus_units");
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("prometheus_units-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let output = dir.join("units.dendro");
@@ -145,93 +137,72 @@ fn recording() -> &'static std::path::Path {
     })
 }
 
-/// Each check: a query by the stored name, the same query by the
-/// exporter's name, and what every value of both reads in the stored unit.
+/// Each check: a query by the exporter's name, and what every value of it
+/// reads in the exporter's unit.
 struct Check {
-    stored: &'static str,
-    exporter: &'static str,
+    query: &'static str,
     want: fn(f64) -> bool,
     what: &'static str,
 }
 
 const CHECKS: &[Check] = &[
     Check {
-        stored: "queue_wait_nanoseconds",
-        exporter: "queue_wait_ms",
-        want: |v| v == QUEUE_WAIT_NS,
-        what: "2.5 ms in nanoseconds",
+        query: "queue_wait_ms",
+        want: |v| v == QUEUE_WAIT_MS,
+        what: "2.5 ms",
     },
     Check {
-        stored: "sum(irate(cpu_busy_nanoseconds_total[1s])) / sum(irate(requests_total[1s]))",
-        exporter: "sum(irate(cpu_busy_seconds_total[1s])) / sum(irate(requests_total[1s]))",
-        want: |v| (v - BUSY_PER_REQUEST_NS).abs() < 1e-3,
-        what: "0.5 s per request in nanoseconds",
+        query: "sum(irate(cpu_busy_seconds_total[1s])) / sum(irate(requests_total[1s]))",
+        want: |v| (v - BUSY_PER_REQUEST_S).abs() < 1e-9,
+        what: "0.5 s per request",
     },
     Check {
-        stored: "sum(irate(rpc_latency_nanoseconds_sum[1s])) / \
-                 sum(irate(rpc_latency_nanoseconds_count[1s]))",
-        exporter: "sum(irate(rpc_latency_seconds_sum[1s])) / \
-                   sum(irate(rpc_latency_seconds_count[1s]))",
-        want: |v| (v - MEAN_LATENCY_NS).abs() < 1e-3,
-        what: "a 4 ms mean in nanoseconds",
+        query: "sum(irate(rpc_latency_seconds_sum[1s])) / \
+                sum(irate(rpc_latency_seconds_count[1s]))",
+        want: |v| (v - MEAN_LATENCY_S).abs() < 1e-12,
+        what: "a 4 ms mean, in seconds",
     },
     Check {
-        stored: "histogram_quantile(0.5, rpc_latency_nanoseconds)",
-        exporter: "histogram_quantile(0.5, rpc_latency_seconds)",
-        want: |v| (LATENCY_BUCKET_NS..LATENCY_BUCKET_NS * 1.01).contains(&v),
-        what: "the end of the 10 ms bucket in nanoseconds",
+        query: "histogram_quantile(0.5, rpc_latency_seconds)",
+        want: |v| (LATENCY_BUCKET_S..LATENCY_BUCKET_S * 1.01).contains(&v),
+        what: "the end of the 10 ms bucket, in seconds",
     },
-    // The form a KPI percentile chart queries; the shipped KPI templates
-    // name `_seconds` histograms by the exporter's name.
+    // The form a KPI percentile chart queries.
     Check {
-        stored: "histogram_quantiles([0.5], rpc_latency_nanoseconds)",
-        exporter: "histogram_quantiles([0.5], rpc_latency_seconds)",
-        want: |v| (LATENCY_BUCKET_NS..LATENCY_BUCKET_NS * 1.01).contains(&v),
-        what: "the end of the 10 ms bucket in nanoseconds",
+        query: "histogram_quantiles([0.5], rpc_latency_seconds)",
+        want: |v| (LATENCY_BUCKET_S..LATENCY_BUCKET_S * 1.01).contains(&v),
+        what: "the end of the 10 ms bucket, in seconds",
+    },
+    // Both endpoints' `jobs_total`, one per 200 ms scrape each, summed as
+    // served. The rate is over the scrapes' real spacing, so it varies.
+    Check {
+        query: "sum(irate(jobs_total[1s]))",
+        want: |v| (8.0..12.0).contains(&v),
+        what: "about 10 per second",
     },
 ];
 
-/// The query naming `jobs_total`, which both endpoints' series were renamed
-/// from, under two names.
-const AMBIGUOUS: &str = "sum(irate(jobs_total[1s]))";
-
-/// What the ambiguity error must carry, as metriken-query writes it: both
-/// stored names and the matcher that picks one.
-fn check_ambiguity_message(message: &str, who: &str) {
-    for part in [
-        "jobs_nanoseconds_total",
-        "jobs_bytes_total",
-        "{__prometheus_name__=\"jobs_total\"}",
-    ] {
-        assert!(message.contains(part), "{who}: no {part} in {message:?}");
-    }
-    assert!(!message.contains("malformed"), "{who}: {message:?}");
-}
-
-/// The stored names, and none of the exporter names, are listed.
+/// The exporter's names, and no name a unit was rewritten into.
 fn check_names(names: &[String], who: &str) {
     for name in [
-        "queue_wait_nanoseconds",
-        "cpu_busy_nanoseconds_total",
-        "rpc_latency_nanoseconds",
-        "rpc_latency_nanoseconds_sum",
-        "rpc_latency_nanoseconds_count",
-        "jobs_nanoseconds_total",
-        "jobs_bytes_total",
+        "queue_wait_ms",
+        "cpu_busy_seconds_total",
+        "rpc_latency_seconds",
+        "rpc_latency_seconds_sum",
+        "rpc_latency_seconds_count",
+        "jobs_total",
     ] {
         assert!(
             names.iter().any(|n| n == name),
             "{who}: no {name}: {names:?}"
         );
     }
-    for name in [
-        "queue_wait_ms",
-        "cpu_busy_seconds_total",
-        "rpc_latency_seconds",
-        "jobs_total",
-    ] {
-        assert!(!names.iter().any(|n| n == name), "{who}: {name}: {names:?}");
-    }
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("nanoseconds") || n.contains("_bytes")),
+        "{who}: {names:?}"
+    );
 }
 
 /// `rezolus mcp <args>`'s exit status, stdout and stderr.
@@ -292,11 +263,11 @@ fn section(stdout: &str, heading: &str) -> Vec<String> {
 }
 
 #[test]
-fn renamed_series_read_back_through_mcp() {
+fn served_series_read_back_through_mcp() {
     let output = recording();
     let file = output.to_str().unwrap();
 
-    // Listed by the stored names; no `__` label among the listed labels.
+    // Listed by the exporter's names; no `__` label among the listed labels.
     let described = mcp(&["describe-metrics", file]);
     let mut names = section(&described, "COUNTERS");
     names.extend(section(&described, "GAUGES"));
@@ -304,39 +275,29 @@ fn renamed_series_read_back_through_mcp() {
     check_names(&names, "describe-metrics");
     assert!(!described.contains("__"), "{described}");
 
-    // Each value by the stored name and by the exporter's, in the stored
-    // unit.
     for check in CHECKS {
-        for query in [check.stored, check.exporter] {
-            let stdout = mcp(&["query", file, query]);
-            let values = printed_values(&stdout);
-            assert_eq!(values.len(), 5, "{query}:\n{stdout}");
-            for (key, v) in &values {
-                assert!(
-                    (check.want)(*v),
-                    "{key} of {query} is {v}, not {}",
-                    check.what
-                );
-            }
+        let stdout = mcp(&["query", file, check.query]);
+        let values = printed_values(&stdout);
+        assert_eq!(values.len(), 5, "{}:\n{stdout}", check.query);
+        for (key, v) in &values {
+            assert!(
+                (check.want)(*v),
+                "{key} of {} is {v}, not {}",
+                check.query,
+                check.what
+            );
         }
     }
 
-    // The ambiguity error, as metriken-query wrote it.
-    let (ok, stdout, stderr) = mcp_output(&["query", file, AMBIGUOUS]);
-    assert!(!ok, "{stdout}");
-    check_ambiguity_message(&stderr, "mcp query");
-    // In a rezolus recording the recording label is `alias`, not the
-    // `source` the error's example names; it picks one recording.
+    // One endpoint's `jobs_total`, picked by its recording label.
     let by_alias = mcp(&["query", file, "sum(irate(jobs_total{alias=\"other\"}[1s]))"]);
     let values = printed_values(&by_alias);
     assert_eq!(values.len(), 5, "{by_alias}");
     for (key, v) in &values {
-        // 5 kilobytes per second, in bytes per second.
-        assert!((1e3..1e5).contains(v), "{key} by alias is {v}:\n{by_alias}");
+        assert!((4.0..6.0).contains(v), "{key} by alias is {v}:\n{by_alias}");
     }
 
-    // detect-anomalies wraps a bare exporter name by the kind of the
-    // series renamed from it, and reads it through the fallback.
+    // detect-anomalies wraps a bare exporter name by its kind.
     for (name, query) in [
         (
             "cpu_busy_seconds_total",
@@ -355,19 +316,7 @@ fn renamed_series_read_back_through_mcp() {
         );
     }
 
-    // The form the error names reads one of them: `jobs_total` from the
-    // `# UNIT jobs seconds` endpoint, 5 per second, in nanoseconds per
-    // second (the other reads 5000 bytes per second).
-    let escape = "sum(irate(jobs_nanoseconds_total{__prometheus_name__=\"jobs_total\"}[1s]))";
-    let stdout = mcp(&["query", file, escape]);
-    let values = printed_values(&stdout);
-    assert_eq!(values.len(), 5, "{stdout}");
-    for (key, v) in &values {
-        assert!(*v > 1e9, "{key} of {escape} is {v}:\n{stdout}");
-    }
-
-    // The MCP server's `query` tool: the fallback's result names the series
-    // by the stored name, and the ambiguity error reaches the reply.
+    // The MCP server's `query` tool names the series by the exporter's name.
     let call = |id: u64, query: &str| {
         serde_json::json!({
             "jsonrpc": "2.0", "id": id, "method": "tools/call",
@@ -378,7 +327,6 @@ fn renamed_series_read_back_through_mcp() {
         serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
         serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
         call(2, "queue_wait_ms"),
-        call(3, AMBIGUOUS),
     ];
     let mut child = Command::new(env!("CARGO_BIN_EXE_rezolus"))
         .arg("mcp")
@@ -397,46 +345,38 @@ fn renamed_series_read_back_through_mcp() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "{out:?}");
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let response = |id: u64| -> serde_json::Value {
-        stdout
-            .lines()
-            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-            .find(|r| r["id"] == id)
-            .unwrap_or_else(|| panic!("no response {id}:\n{stdout}"))
-    };
-    let fallback = response(2);
-    let text = fallback["result"]["content"][0]["text"]
+    let response = stdout
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|r| r["id"] == 2)
+        .unwrap_or_else(|| panic!("no response:\n{stdout}"));
+    let text = response["result"]["content"][0]["text"]
         .as_str()
-        .unwrap_or_else(|| panic!("{fallback}"));
+        .unwrap_or_else(|| panic!("{response}"));
     let body: serde_json::Value = serde_json::from_str(text).unwrap();
-    check_fallback_series(&body["result"], "MCP query tool");
-    let error = response(3);
-    let message = error["error"]["message"]
-        .as_str()
-        .unwrap_or_else(|| panic!("{error}"));
-    check_ambiguity_message(message, "MCP query tool");
+    check_served_series(&body["result"], "MCP query tool");
 }
 
-/// A result of `queue_wait_ms` read through the fallback: one series, named
-/// by the stored name, its exporter's name in `__prometheus_name__`, every
-/// value in nanoseconds.
-fn check_fallback_series(result: &serde_json::Value, who: &str) {
+/// A result of `queue_wait_ms`: one series, named by the exporter's name,
+/// with no internal label beside `__name__`, every value as served.
+fn check_served_series(result: &serde_json::Value, who: &str) {
     let series = result
         .as_array()
         .unwrap_or_else(|| panic!("{who}: {result}"));
     assert_eq!(series.len(), 1, "{who}: {result}");
-    let metric = &series[0]["metric"];
-    assert_eq!(
-        metric["__name__"], "queue_wait_nanoseconds",
-        "{who}: {metric}"
-    );
-    assert_eq!(
-        metric["__prometheus_name__"], "queue_wait_ms",
-        "{who}: {metric}"
+    let metric = series[0]["metric"]
+        .as_object()
+        .unwrap_or_else(|| panic!("{who}: {result}"));
+    assert_eq!(metric["__name__"], "queue_wait_ms", "{who}: {metric:?}");
+    assert!(
+        metric
+            .keys()
+            .all(|k| k == "__name__" || !k.starts_with("__")),
+        "{who}: {metric:?}"
     );
     let values = range_values(result);
     assert!(
-        values.iter().all(|v| *v == QUEUE_WAIT_NS),
+        values.iter().all(|v| *v == QUEUE_WAIT_MS),
         "{who}: {values:?}"
     );
 }
@@ -516,7 +456,8 @@ fn url_encode(q: &str) -> String {
 }
 
 /// A `/api/v1/metrics` body's metric names, asserting that no metric's
-/// label keys (what the viewer's label pickers offer) include a `__` label.
+/// label keys (what the viewer's label pickers offer) include a `__` label
+/// and that each served name carries the unit its token names.
 fn catalog_names(body: &serde_json::Value, who: &str) -> Vec<String> {
     let metrics = body["metrics"]
         .as_array()
@@ -529,6 +470,21 @@ fn catalog_names(body: &serde_json::Value, who: &str) -> Vec<String> {
             "{who}: {m}"
         );
     }
+    let unit = |name: &str| {
+        metrics
+            .iter()
+            .find(|m| m["name"] == name)
+            .and_then(|m| m["unit"].as_str())
+    };
+    for (name, want) in [
+        ("queue_wait_ms", "milliseconds"),
+        ("cpu_busy_seconds_total", "seconds"),
+        ("rpc_latency_seconds", "seconds"),
+        ("rpc_latency_seconds_sum", "seconds"),
+    ] {
+        assert_eq!(unit(name), Some(want), "{who}: {name}");
+    }
+    assert_eq!(unit("requests_total"), None, "{who}: no unit token");
     metrics
         .iter()
         .map(|m| m["name"].as_str().unwrap().to_string())
@@ -551,29 +507,25 @@ fn range_values(result: &serde_json::Value) -> Vec<f64> {
         .collect()
 }
 
-/// Every check, the fallback's series and the ambiguity error, through one
-/// viewer's range query: `range(q)` is its response body.
+/// Every check and the served series, through one viewer's range query:
+/// `range(q)` is its response body.
 fn check_viewer(range: impl Fn(&str) -> serde_json::Value, who: &str) {
     for check in CHECKS {
-        for query in [check.stored, check.exporter] {
-            let body = range(query);
-            assert_eq!(body["status"], "success", "{who}: {query}: {body}");
-            let values = range_values(&body["data"]["result"]);
-            assert!(
-                values.iter().all(|v| (check.want)(*v)),
-                "{who}: {query} is {values:?}, not {}",
-                check.what
-            );
-        }
+        let body = range(check.query);
+        assert_eq!(body["status"], "success", "{who}: {}: {body}", check.query);
+        let values = range_values(&body["data"]["result"]);
+        assert!(
+            values.iter().all(|v| (check.want)(*v)),
+            "{who}: {} is {values:?}, not {}",
+            check.query,
+            check.what
+        );
     }
-    check_fallback_series(&range("queue_wait_ms")["data"]["result"], who);
-    let body = range(AMBIGUOUS);
-    assert_eq!(body["status"], "error", "{who}: {body}");
-    check_ambiguity_message(body["error"].as_str().unwrap(), who);
+    check_served_series(&range("queue_wait_ms")["data"]["result"], who);
 }
 
 #[test]
-fn renamed_series_read_back_through_both_viewers() {
+fn served_series_read_back_through_both_viewers() {
     let output = recording();
 
     // The server viewer.

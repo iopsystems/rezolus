@@ -16,10 +16,10 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.4"
-metriken-charts = "0.1.4"
+metriken-charts = "0.1.5"
 metriken-exposition = "0.27.0"
-metriken-query = { version = "0.49.0", default-features = false }
-metriken-storage = { version = "0.12.0", default-features = false }
+metriken-query = { version = "0.50.0", default-features = false }
+metriken-storage = { version = "0.13.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -116,7 +116,7 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # docs/journal/2026-10-12-metriken-recorder.md). It writes each recording's
 # identity layers and no `source` of its own; the readers take a recording's
 # producer from its layers (`dashboard::identity`).
-metriken-recorder = "0.14.0"
+metriken-recorder = "0.15.0"
 # The archive writer behind the `recording` copies (`write`), the
 # raw-msgpack-to-dendro conversion behind `recording convert` (`convert`), and
 # the `.rez` and parquet to dendro converters (`to_dendro`, `rez`). `record`,

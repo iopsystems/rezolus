@@ -85,6 +85,64 @@ fn scales(unit_system: &str) -> Option<&'static [Scale]> {
     }
 }
 
+/// Each stored unit metriken-charts knows (`STORED_UNITS` in
+/// `assets/charts/util/units.js`): its dimension and the factor that takes a
+/// value in it to the dimension's base unit.
+static STORED_UNITS: &[(&str, &str, f64)] = &[
+    ("nanoseconds", "time", 1.0),
+    ("microseconds", "time", 1e3),
+    ("milliseconds", "time", 1e6),
+    ("seconds", "time", 1e9),
+    ("bytes", "bytes", 1.0),
+    ("kilobytes", "bytes", 1e3),
+    ("kibibytes", "bytes", 1024.0),
+    ("megabytes", "bytes", 1e6),
+    ("mebibytes", "bytes", 1_048_576.0),
+    ("gigabytes", "bytes", 1e9),
+    ("gibibytes", "bytes", 1_073_741_824.0),
+    ("bits", "bits", 1.0),
+    ("percent", "ratio", 0.01),
+    ("percentage", "ratio", 0.01),
+    ("ratio", "ratio", 1.0),
+    ("celsius", "temperature", 1.0),
+    ("hertz", "frequency", 1.0),
+    ("cores", "cores", 1.0),
+];
+
+/// The unit systems whose base is each dimension's base; the first is the
+/// one a plot with a stored unit and no system uses.
+fn dimension_systems(dimension: &str) -> &'static [&'static str] {
+    match dimension {
+        "time" => &["time"],
+        "bytes" => &["bytes", "datarate"],
+        "bits" => &["bitrate"],
+        "ratio" => &["percentage"],
+        "temperature" => &["temperature"],
+        "frequency" => &["frequency"],
+        "cores" => &["cores"],
+        _ => &[],
+    }
+}
+
+/// The unit system a plot is formatted with, and the factor its values are
+/// multiplied by to be in that system's base, from its `format.unit_system`
+/// and `format.unit` (the unit the series is stored in), as metriken-charts'
+/// `resolveUnit` decides them: a unit of the system's dimension (or with no
+/// system) applies its factor; a unit of another dimension, or one not in
+/// [`STORED_UNITS`], is ignored.
+pub fn resolve(unit_system: Option<&str>, unit: Option<&str>) -> (Option<String>, f64) {
+    let stored = unit.and_then(|u| STORED_UNITS.iter().find(|(name, ..)| *name == u));
+    let Some(&(_, dimension, factor)) = stored else {
+        return (unit_system.map(str::to_string), 1.0);
+    };
+    let systems = dimension_systems(dimension);
+    match unit_system {
+        Some(sys) if !systems.contains(&sys) => (Some(sys.to_string()), 1.0),
+        Some(sys) => (Some(sys.to_string()), factor),
+        None => (systems.first().map(|s| s.to_string()), factor),
+    }
+}
+
 /// Format `value` (in the unit system's base unit) with auto-scaling and a
 /// suffix. An unknown or absent unit system falls back to a plain, trimmed
 /// number. Two decimals, trailing zeros removed (`100.50%` -> `100.5%`,
@@ -125,6 +183,43 @@ mod tests {
         assert_eq!(format_value(Some("percentage"), 1.005), "100.5%");
         assert_eq!(format_value(Some("percentage"), 0.152), "15.2%");
         assert_eq!(format_value(Some("percentage"), 0.0), "0%");
+    }
+
+    #[test]
+    fn a_stored_unit_of_the_systems_dimension_applies_its_factor() {
+        assert_eq!(
+            resolve(Some("time"), Some("seconds")),
+            (Some("time".into()), 1e9)
+        );
+        // A p99 of 0.25 s, as a `_seconds` histogram stored as served reads.
+        let (sys, factor) = resolve(Some("time"), Some("seconds"));
+        assert_eq!(format_value(sys.as_deref(), 0.25 * factor), "250ms");
+        assert_eq!(
+            resolve(Some("datarate"), Some("kibibytes")),
+            (Some("datarate".into()), 1024.0)
+        );
+        assert_eq!(
+            resolve(None, Some("milliseconds")),
+            (Some("time".into()), 1e6)
+        );
+        assert_eq!(
+            resolve(Some("percentage"), Some("percent")),
+            (Some("percentage".into()), 0.01)
+        );
+    }
+
+    #[test]
+    fn another_dimension_or_an_unknown_unit_is_ignored() {
+        assert_eq!(
+            resolve(Some("count"), Some("seconds")),
+            (Some("count".into()), 1.0)
+        );
+        assert_eq!(
+            resolve(Some("time"), Some("faults")),
+            (Some("time".into()), 1.0)
+        );
+        assert_eq!(resolve(Some("time"), None), (Some("time".into()), 1.0));
+        assert_eq!(resolve(None, None), (None, 1.0));
     }
 
     #[test]

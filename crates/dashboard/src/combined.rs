@@ -160,6 +160,9 @@ impl MetricsSource for Routed {
     fn file_metadata(&self) -> HashMap<String, String> {
         self.primary.file_metadata()
     }
+    fn metric_unit(&self, name: &str) -> Option<String> {
+        self.primary.metric_unit(name)
+    }
     fn counter_names(&self) -> Vec<String> {
         self.primary.counter_names()
     }
@@ -1617,6 +1620,9 @@ impl MetricsSource for Scoped<'_> {
     }
     fn file_metadata(&self) -> HashMap<String, String> {
         self.scope.metadata.clone()
+    }
+    fn metric_unit(&self, name: &str) -> Option<String> {
+        self.inner.metric_unit(name)
     }
     fn counter_names(&self) -> Vec<String> {
         self.names(Kind::Counter)
