@@ -77,21 +77,28 @@ const TABLE: &str = "fake/ops";
 /// the optional metadata routes, which hindsight treats as absent. Returns the
 /// bound port; the accept loop is detached and dies with the test process.
 fn spawn_fake_agent(width: usize) -> u16 {
-    spawn_agent(width, None, false)
+    spawn_agent(width, None, false, None)
 }
 
 /// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
 /// and is then closed, and every later one gets a 404: an agent replaced by
 /// one that cannot stream, or a proxy that stopped routing the path.
 fn spawn_fake_agent_that_stops(width: usize, frames: u64) -> u16 {
-    spawn_agent(width, Some(frames), false)
+    spawn_agent(width, Some(frames), false, None)
 }
 
 /// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
 /// and is then closed, as when the agent restarts; every later one streams
 /// under [`RESTARTED_EPOCH`].
 fn spawn_fake_agent_that_restarts(width: usize, frames: u64) -> u16 {
-    spawn_agent(width, Some(frames), true)
+    spawn_agent(width, Some(frames), true, None)
+}
+
+/// As [`spawn_fake_agent`], but its `good + 1`th frame is stamped before the
+/// Unix epoch, which the recorder cannot read: the agent's rows cannot be
+/// recorded from then on.
+fn spawn_fake_agent_with_an_unreadable_frame(width: usize, good: u64) -> u16 {
+    spawn_agent(width, None, false, Some(good))
 }
 
 /// The producer epoch the stand-in agent streams under, before and after a
@@ -99,7 +106,7 @@ fn spawn_fake_agent_that_restarts(width: usize, frames: u64) -> u16 {
 const EPOCH: &str = "fake-epoch";
 const RESTARTED_EPOCH: &str = "fake-epoch-2";
 
-fn spawn_agent(width: usize, frames: Option<u64>, restarts: bool) -> u16 {
+fn spawn_agent(width: usize, frames: Option<u64>, restarts: bool, unreadable: Option<u64>) -> u16 {
     let subscriptions = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
@@ -122,14 +129,14 @@ fn spawn_agent(width: usize, frames: Option<u64>, restarts: bool) -> u16 {
                 let first = || subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
                 if path.starts_with("/metrics/stream") && restarts {
                     if first() {
-                        serve_stream(stream, &path, width, frames, EPOCH);
+                        serve_stream(stream, &path, width, frames, EPOCH, unreadable);
                     } else {
-                        serve_stream(stream, &path, width, None, RESTARTED_EPOCH);
+                        serve_stream(stream, &path, width, None, RESTARTED_EPOCH, unreadable);
                     }
                     return;
                 }
                 if path.starts_with("/metrics/stream") && (frames.is_none() || first()) {
-                    serve_stream(stream, &path, width, frames, EPOCH);
+                    serve_stream(stream, &path, width, frames, EPOCH, unreadable);
                     return;
                 }
                 let _ = stream.write_all(
@@ -153,13 +160,15 @@ fn wall_ns() -> u64 {
 /// preamble and a handshake, then one rows frame per requested interval
 /// carrying `width` counters (`fake_ops_0`..) in the `fake/ops` acquisition
 /// group, the schema on the first row only, until hindsight hangs up. Each
-/// frame's values differ, so consecutive rows are not deduped.
+/// frame's values differ, so consecutive rows are not deduped. Frame
+/// `unreadable` (counting from 0), if given, is stamped before the epoch.
 fn serve_stream(
     mut stream: std::net::TcpStream,
     path: &str,
     width: usize,
     frames: Option<u64>,
     epoch: &str,
+    unreadable: Option<u64>,
 ) {
     use dendro::replicate::{wire, Frame};
     use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
@@ -238,7 +247,11 @@ fn serve_stream(
                 index_state: dendro::replicate::NO_INDEX_STATE,
                 rows: vec![dendro::archive::WalRow {
                     stream: TABLE.to_string(),
-                    ts: ts as i64,
+                    ts: if unreadable == Some(seq) {
+                        -1
+                    } else {
+                        ts as i64
+                    },
                     wall_offset: 0,
                     row,
                 }],
@@ -1593,6 +1606,30 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
         })
         .unwrap_or_else(|| panic!("no {TABLE} table in the capture:\n{stdout}"));
     assert!(rows >= 10, "the capture holds the recorded rows:\n{stdout}");
+}
+
+/// An agent whose rows cannot be recorded (a frame stamped before the epoch)
+/// ends the daemon as a refused reconnect does: hindsight writes the buffer
+/// to a timestamped file beside `output` and exits with status 1.
+#[test]
+fn an_agent_whose_rows_cannot_be_recorded_captures_the_buffer_then_exits() {
+    let agent = spawn_fake_agent_with_an_unreadable_frame(1, 20);
+    let mut h = Hindsight::try_start(agent, 8)
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    let status = h.wait_for_exit(Duration::from_secs(60));
+    assert_eq!(status.code(), Some(1), "{}", h.log_text());
+    assert!(h.log_has("rows could not be recorded"), "{}", h.log_text());
+    let dir = h.output.parent().unwrap();
+    let captures: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("snapshot-") && n.ends_with(".dendro"))
+        })
+        .collect();
+    assert_eq!(captures.len(), 1, "one capture beside output: {captures:?}");
 }
 
 /// An agent that restarts while hindsight runs is recorded in the buffer's

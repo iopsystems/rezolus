@@ -264,7 +264,8 @@ struct Recording {
 impl Recording {
     /// Reread the archive after each commit, until the channel closes (the
     /// session was dropped, which stops the recorder and closes its writer
-    /// first), a write fails, or the agent refuses a reconnect.
+    /// first), a write fails, the agent refuses a reconnect, or the agent's
+    /// rows cannot be recorded.
     fn run(self, mut events: tokio::sync::mpsc::Receiver<mr::Event>) {
         let label = self.label.clone();
         while let Some(event) = events.blocking_recv() {
@@ -288,6 +289,12 @@ impl Recording {
                     self.stop(format!(
                         "the agent can no longer serve /metrics/stream: {reason}"
                     ));
+                    break;
+                }
+                // The live view records one agent, so it stops with it.
+                mr::Event::SourceFailed { reason, .. } => {
+                    error!("{label}: the agent's rows could not be recorded: {reason}");
+                    self.stop(format!("the agent's rows could not be recorded: {reason}"));
                     break;
                 }
                 mr::Event::LabelsNotApplied { labels, .. } => {
@@ -716,6 +723,28 @@ mod tests {
         std::thread::spawn(move || rec.run(rx)).join().unwrap();
         let why = stopped.lock().unwrap().clone().expect("a reason");
         assert!(why.contains("HTTP 404"), "{why}");
+    }
+
+    /// An agent whose rows cannot be recorded stops the recording and
+    /// records why: the live view records one agent, and no `Failed`
+    /// follows a source's failure.
+    #[test]
+    fn a_source_failure_records_why_the_recording_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = Arc::new(Mutex::new(None));
+        let rec = recording(&dir.path().join("live.dendro"), &stopped);
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.try_send(mr::Event::SourceFailed {
+            source: mr::SourceId(0),
+            reason: "a streamed frame could not be read".to_string(),
+        })
+        .unwrap();
+        tx.try_send(mr::Event::NoneRecording).unwrap();
+        // A closed channel also ends the thread, without a reason.
+        drop(tx);
+        std::thread::spawn(move || rec.run(rx)).join().unwrap();
+        let why = stopped.lock().unwrap().clone().expect("a reason");
+        assert!(why.contains("could not be read"), "{why}");
     }
 
     /// A session that is dropped closes the channel; that is not a failure.

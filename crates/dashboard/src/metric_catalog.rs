@@ -11,6 +11,11 @@ pub struct MetricInfo {
     pub label_keys: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The unit the series is stored in (`MetricsSource::metric_unit`): a
+    /// Rezolus agent's metadata `unit`, or the unit a Prometheus exporter
+    /// serves (`seconds`, `bytes`). Absent when the source does not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -24,6 +29,7 @@ fn info_for(
     metric_type: &str,
     labels: Vec<std::collections::BTreeMap<String, String>>,
     descriptions: &serde_json::Map<String, serde_json::Value>,
+    unit: Option<String>,
 ) -> MetricInfo {
     // The keys a person can filter on. Internal labels (`__name__`,
     // `__run__`, `__incarnation__`) are identity, not something to list, and
@@ -44,6 +50,7 @@ fn info_for(
             .get(name)
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        unit,
     }
 }
 
@@ -81,22 +88,46 @@ pub fn assemble_catalog(
     let mut out = Vec::new();
     for name in data.counter_names() {
         let labels = data.counter_labels(&name);
-        out.push(info_for(&name, "counter", labels, descriptions));
+        out.push(info_for(
+            &name,
+            "counter",
+            labels,
+            descriptions,
+            data.metric_unit(&name),
+        ));
     }
     for name in data.gauge_names() {
         let labels = data.gauge_labels(&name);
-        out.push(info_for(&name, "gauge", labels, descriptions));
+        out.push(info_for(
+            &name,
+            "gauge",
+            labels,
+            descriptions,
+            data.metric_unit(&name),
+        ));
     }
     for name in data.histogram_names() {
         let labels = data.histogram_labels(&name);
-        out.push(info_for(&name, "histogram", labels, descriptions));
+        out.push(info_for(
+            &name,
+            "histogram",
+            labels,
+            descriptions,
+            data.metric_unit(&name),
+        ));
     }
     // A gauge histogram (a distribution read as it is at each sample, never
     // differenced) is listed as a histogram: the viewer charts both through
     // the histogram functions, which take either kind.
     for name in data.gauge_histogram_names() {
         let labels = data.gauge_histogram_labels(&name);
-        out.push(info_for(&name, "histogram", labels, descriptions));
+        out.push(info_for(
+            &name,
+            "histogram",
+            labels,
+            descriptions,
+            data.metric_unit(&name),
+        ));
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
@@ -155,7 +186,7 @@ mod tests {
                 ("mode", "user"),
             ],
         ]);
-        let info = info_for("cpu_usage", "counter", labels, &desc(&[]));
+        let info = info_for("cpu_usage", "counter", labels, &desc(&[]), None);
         assert_eq!(info.label_keys, vec!["cpu".to_string(), "mode".to_string()]);
         assert_eq!(
             info.series_count, 3,
@@ -175,13 +206,13 @@ mod tests {
     #[test]
     fn metric_type_passes_through() {
         let no_desc = desc(&[]);
-        let info = info_for("m", "counter", vec![], &no_desc);
+        let info = info_for("m", "counter", vec![], &no_desc, None);
         assert_eq!(info.metric_type, "counter");
 
-        let info = info_for("m", "gauge", vec![], &no_desc);
+        let info = info_for("m", "gauge", vec![], &no_desc, None);
         assert_eq!(info.metric_type, "gauge");
 
-        let info = info_for("m", "histogram", vec![], &no_desc);
+        let info = info_for("m", "histogram", vec![], &no_desc, None);
         assert_eq!(info.metric_type, "histogram");
     }
 
@@ -191,10 +222,10 @@ mod tests {
     fn series_count_equals_label_set_count() {
         let no_desc = desc(&[]);
         let two_series = labels_from(&[&[("cpu", "0")], &[("cpu", "1")]]);
-        let info = info_for("cpu_cycles", "counter", two_series, &no_desc);
+        let info = info_for("cpu_cycles", "counter", two_series, &no_desc, None);
         assert_eq!(info.series_count, 2);
 
-        let info = info_for("load", "gauge", vec![], &no_desc);
+        let info = info_for("load", "gauge", vec![], &no_desc, None);
         assert_eq!(info.series_count, 0);
     }
 
@@ -206,7 +237,7 @@ mod tests {
         // Series 0 has keys "cpu"; series 1 has keys "cpu" and "mode".
         // Union should be ["cpu", "mode"].
         let sets = labels_from(&[&[("cpu", "0")], &[("cpu", "1"), ("mode", "user")]]);
-        let info = info_for("metric", "counter", sets, &no_desc);
+        let info = info_for("metric", "counter", sets, &no_desc, None);
         assert_eq!(info.label_keys, vec!["cpu", "mode"]);
     }
 
@@ -219,7 +250,7 @@ mod tests {
             &[("a_key", "b"), ("z_key", "c")],
             &[("m_key", "d")],
         ]);
-        let info = info_for("m", "histogram", sets, &no_desc);
+        let info = info_for("m", "histogram", sets, &no_desc, None);
         assert_eq!(info.label_keys, vec!["a_key", "m_key", "z_key"]);
     }
 
@@ -228,20 +259,20 @@ mod tests {
     #[test]
     fn description_from_map_when_present() {
         let descriptions = desc(&[("cpu_cycles", "CPU cycle counter")]);
-        let info = info_for("cpu_cycles", "counter", vec![], &descriptions);
+        let info = info_for("cpu_cycles", "counter", vec![], &descriptions, None);
         assert_eq!(info.description.as_deref(), Some("CPU cycle counter"));
     }
 
     #[test]
     fn description_is_none_when_absent() {
         let descriptions = desc(&[("other_metric", "something")]);
-        let info = info_for("cpu_cycles", "counter", vec![], &descriptions);
+        let info = info_for("cpu_cycles", "counter", vec![], &descriptions, None);
         assert!(info.description.is_none());
     }
 
     #[test]
     fn description_is_none_for_empty_map() {
-        let info = info_for("m", "gauge", vec![], &desc(&[]));
+        let info = info_for("m", "gauge", vec![], &desc(&[]), None);
         assert!(info.description.is_none());
     }
 

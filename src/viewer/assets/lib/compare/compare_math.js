@@ -210,10 +210,8 @@ export const canonicalQuantileLabel = (input) => {
 // disjoint key sets. See tests for examples.
 export const composeScatterLabel = (metric, { excludeValues } = {}) => {
     if (!metric || typeof metric !== 'object') return null;
-    // Internal labels (`__name__`, `__prometheus_name__`, ...) are identity,
-    // never a dimension: a series read through metriken-query's fallback
-    // carries `__prometheus_name__` where an older recording's does not,
-    // and the two must pair.
+    // Internal labels (`__name__`, `__uid__`, ...) are identity, never a
+    // dimension: a series that carries one must pair with one that does not.
     const dims = Object.fromEntries(
         Object.entries(metric).filter(([k]) => !isInternalLabel(k)));
 

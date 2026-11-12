@@ -136,17 +136,19 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # with its version, pointing at a 5.x recorder (`unstreamable_agent`). At startup that is
 # before the archive exists (exit 1); an agent that comes up later, or is refused on a
 # reconnect, is marked Refused and left out from then on (a reconnect keeps the rows it had),
-# the rest finalize, and the run exits 1 (`Event::Refused`, then `refusal_summary`). An
+# the rest finalize, and the exit status does not change (`Event::Refused`, then `refusal_summary`). An
 # endpoint whose rows cannot be encoded, staged or decoded stops alone (`Event::SourceFailed`,
-# then `failure_summary`) and the run exits 1; when none is left, the recording fails
-# (`Event::Failed`). An unreachable agent (or a 5xx/408/429 /
+# then `failure_summary`), likewise. Exit 1 is for a run that could not start, an
+# archive that could not be written or saved (`Event::Failed`, a `finish` error), or nothing
+# recorded (`Summary::discarded`). An unreachable agent (or a 5xx/408/429 /
 # handshake timeout) is retried each tick, and a stream that drops (or goes silent for the
 # interval the agent serves plus the scrape timeout) is reconnected after one interval, at least
 # a second. The stream interval is negotiated: an --interval below the agent's TTL is served,
 # and recorded, at the TTL. A wrapped command that
 # exits on its own waits for each agent's frame stamped at or after the exit (bounded by
-# interval + scrape timeout). When every endpoint has been refused the run ends; each refused
-# endpoint gets a line.
+# interval + scrape timeout). When no endpoint is left recording (`Event::NoneRecording`), a run
+# with neither --duration nor a wrapped command ends; the others run to their own end. Each
+# refused or failed endpoint gets a line.
 # Groups of slots arrive in the long layout (/metrics/stream?layout=long: values keyed by
 # occupant, each occupant's labels once on <group>/occupants; metriken_storage::StreamDecoder
 # and SourceRecorder::stage_streamed); other groups carry their schema when it changes. An

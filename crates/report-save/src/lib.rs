@@ -443,17 +443,19 @@ mod tests {
         assert!(warning.contains("malformed"), "{warning}");
         assert!(warning.contains("unexpected `)`"), "{warning}");
 
-        let ambiguous = QueryError::EvaluationError(
-            "series an exporter served as x_total are stored under x_nanoseconds_total and \
-             x_bytes_total, in different units; name one of them with \
-             x_nanoseconds_total{__prometheus_name__=\"x_total\"}"
+        let mixed = QueryError::EvaluationError(
+            "histogram_quantiles pools rows of x_seconds whose buckets are stored at \
+             different scales (1000000000 and 1000; the `scale` key, the factor a histogram's \
+             bounds are stored multiplied by), which cannot be added; select series of one \
+             scale with a label matcher"
                 .to_string(),
         );
-        let warning = unresolved_query_warning("rate(x_total[1m])", &ambiguous);
+        let query = "histogram_quantiles([0.5], x_seconds)";
+        let warning = unresolved_query_warning(query, &mixed);
         assert!(!warning.contains("malformed"), "{warning}");
-        assert!(warning.contains("rate(x_total[1m])"), "{warning}");
+        assert!(warning.contains(query), "{warning}");
         assert!(
-            warning.contains(&ambiguous.to_string()),
+            warning.contains(&mixed.to_string()),
             "the message is quoted whole: {warning}"
         );
     }

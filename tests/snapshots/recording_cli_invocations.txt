@@ -514,7 +514,7 @@ error: --filter dropped a parquet file's columns its KPIs do not need; name what
 --- exit 1
 --- stdout
 --- stderr
-error: bad-unit.json: KPI "Depth": unknown unit_system "furlongs"; expected one of time, bytes, bitrate, datarate, percentage, frequency, power, count, rate
+error: bad-unit.json: KPI "Depth": unknown unit_system "furlongs"; expected one of time, bytes, bitrate, datarate, percentage, frequency, power, count, rate, temperature, cores
 
 === rezolus recording annotate simple.dendro --queries not-json.json
 --- exit 1

@@ -20,6 +20,10 @@ pub struct PlotDef {
     pub kind: PlotKind,
     pub percentiles: Vec<f64>,
     pub unit_system: Option<String>,
+    /// What each value is multiplied by before it is formatted in
+    /// `unit_system`: the factor of the unit the series is stored in
+    /// (`format.unit`, [`super::units::resolve`]), 1 when there is none.
+    pub factor: f64,
     /// The uuids of the sources the plot reads (the plot's `scope` in the
     /// section View), as the browser sends them with each query; `None`
     /// reads every source.
@@ -60,11 +64,9 @@ pub fn parse_plot(plot: &serde_json::Value) -> Option<PlotDef> {
         .and_then(|t| t.as_str())
         .unwrap_or("gauge");
     let subtype = opts.and_then(|o| o.get("subtype")).and_then(|s| s.as_str());
-    let unit_system = opts
-        .and_then(|o| o.get("format"))
-        .and_then(|f| f.get("unit_system"))
-        .and_then(|u| u.as_str())
-        .map(|s| s.to_string());
+    let format = opts.and_then(|o| o.get("format"));
+    let field = |key: &str| format.and_then(|f| f.get(key)).and_then(|u| u.as_str());
+    let (unit_system, factor) = super::units::resolve(field("unit_system"), field("unit"));
 
     let kind = match type_ {
         "histogram" => match subtype {
@@ -94,6 +96,7 @@ pub fn parse_plot(plot: &serde_json::Value) -> Option<PlotDef> {
         kind,
         percentiles,
         unit_system,
+        factor,
         scope,
     })
 }
@@ -145,6 +148,22 @@ mod tests {
         assert_eq!(def.base_query, "cpu_usage");
         assert_eq!(def.title, "CPU");
         assert_eq!(def.unit_system.as_deref(), Some("percentage"));
+    }
+
+    /// A KPI of a Prometheus `_seconds` histogram stored as served carries
+    /// `format.unit`, and its values are taken to nanoseconds for `time`.
+    #[test]
+    fn a_stored_unit_sets_the_factor() {
+        let p = json!({
+            "promql_query": "rpc_seconds",
+            "opts": { "title": "RPC", "type": "histogram",
+                      "format": { "unit_system": "time", "unit": "seconds" } }
+        });
+        let def = parse_plot(&p).unwrap();
+        assert_eq!(def.unit_system.as_deref(), Some("time"));
+        assert_eq!(def.factor, 1e9);
+        let p = json!({ "promql_query": "x", "opts": { "type": "gauge" } });
+        assert_eq!(parse_plot(&p).unwrap().factor, 1.0);
     }
 
     #[test]

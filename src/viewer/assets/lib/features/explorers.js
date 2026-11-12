@@ -43,6 +43,24 @@ const buildFormatOverride = (unit) => {
 };
 
 /**
+ * The format a chart is drawn with when the unit selector reads `unitOverride`
+ * (`''` for none). The chart's own unit system keeps its whole format.
+ * Another system keeps `unit`, the unit the series is stored in, which the
+ * charts apply within its own dimension and ignore in any other. With a
+ * stored unit the override's `range` is dropped: the charts apply `range`
+ * to the stored values, and `percentage`'s 0 to 1 would cut a series stored
+ * in `percent` (0 to 100) at 1%.
+ */
+export const chartFormat = (format, unitOverride) => {
+    if (format && unitOverride === (format.unit_system || '')) return format;
+    const override = buildFormatOverride(unitOverride);
+    if (!override) return format;
+    if (!(format && format.unit)) return override;
+    const { range, ...rest } = override;
+    return { ...rest, unit: format.unit };
+};
+
+/**
  * Build a human-readable series label from a PromQL metric map: `id` first,
  * then the other labels in `keys` (the labels that differ between the
  * result's series), or every visible label when `keys` is empty.
@@ -380,7 +398,7 @@ export const SingleChartView = {
 
         const st = vnode.state;
 
-        const formatOverride = buildFormatOverride(st.unitOverride);
+        const format = chartFormat(plot.opts.format, st.unitOverride);
         // The spec describes the data the chart draws: the scope of the last
         // query that succeeded, which the chart's own fetches (the Total
         // toggle, spectra) read. The Total toggle sums the chart's own total
@@ -391,7 +409,7 @@ export const SingleChartView = {
             ...plot,
             scope: st.ranScope ?? undefined,
             promql_query_total: own ? plot.promql_query_total : undefined,
-            opts: { ...plot.opts, title: st.title, description: st.description, format: formatOverride || plot.opts.format },
+            opts: { ...plot.opts, title: st.title, description: st.description, format },
         };
 
         // The queries run with the section's cgroup, node, GPU and instance

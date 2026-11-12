@@ -268,12 +268,13 @@ pub fn run(config: Config) {
         });
     }
 
-    let (refused, capture_failed) = rt.block_on(async move {
+    let (agent_lost, capture_failed) = rt.block_on(async move {
         // The stop's capture failed: exit 1 rather than 0, so a supervisor
         // can tell the buffer was not saved.
         let mut capture_failed = false;
-        // The agent refused a reconnect: capture the buffer, then exit.
-        let mut refused = false;
+        // The agent stopped recording (refused on a reconnect, or its rows could
+        // not be recorded): capture the buffer, then exit.
+        let mut agent_lost = false;
         // Whether the capture that ends the run has started. A capture
         // already in flight when the refusal arrives was snapshotted before
         // it, so the refusal starts one of its own after that.
@@ -335,7 +336,7 @@ pub fn run(config: Config) {
                     // The run ends after this capture if a stop was asked for,
                     // or if it is the capture a refusal started.
                     let stop = signals::STATE.load(Ordering::SeqCst) == signals::TERMINATING
-                        || (refused && refusal_capture_started);
+                        || (agent_lost && refusal_capture_started);
                     // Otherwise back to RUNNING BEFORE the log line, so a
                     // signal sent on seeing that line is acted on as a new
                     // request rather than as one made during the capture.
@@ -344,7 +345,7 @@ pub fn run(config: Config) {
                     // the signal task runs on another thread, and a stop it
                     // stored since must not be overwritten.
                     let terminating = stop || {
-                        let next = if refused { signals::CAPTURING } else { signals::RUNNING };
+                        let next = if agent_lost { signals::CAPTURING } else { signals::RUNNING };
                         signals::STATE
                             .compare_exchange(
                                 signals::CAPTURING,
@@ -386,12 +387,24 @@ pub fn run(config: Config) {
                          in its recorder layer; version {})",
                         version.as_deref().unwrap_or("not reported")
                     ),
-                    Some(mr::Event::Refused { reason, .. }) if !refused => {
-                        error!(
-                            "the agent at {url} can no longer serve /metrics/stream ({reason}); \
-                             capturing the buffer and exiting"
-                        );
-                        refused = true;
+                    // Hindsight records one agent, so when it stops
+                    // recording (refused on a reconnect, or its rows cannot
+                    // be recorded) hindsight captures the buffer and exits.
+                    Some(
+                        event @ (mr::Event::Refused { .. } | mr::Event::SourceFailed { .. }),
+                    ) if !agent_lost => {
+                        match event {
+                            mr::Event::Refused { reason, .. } => error!(
+                                "the agent at {url} can no longer serve /metrics/stream \
+                                 ({reason}); capturing the buffer and exiting"
+                            ),
+                            mr::Event::SourceFailed { reason, .. } => error!(
+                                "the agent at {url}'s rows could not be recorded ({reason}); \
+                                 capturing the buffer and exiting"
+                            ),
+                            _ => {}
+                        }
+                        agent_lost = true;
                         // A capture already asked for (or a stop's) serves;
                         // otherwise ask for one. A compare-and-swap, as the
                         // signal task may change the state meanwhile.
@@ -441,7 +454,7 @@ pub fn run(config: Config) {
                         );
                     }
                     capturing = true;
-                    if refused {
+                    if agent_lost {
                         refusal_capture_started = true;
                     }
                     info!("capture in progress; the recording continues");
@@ -480,14 +493,14 @@ pub fn run(config: Config) {
         }
         // The buffer is temporary: stop recording and remove it.
         recorder.discard().await;
-        (refused, capture_failed)
+        (agent_lost, capture_failed)
     });
 
     // Reached once the loop has stopped. Dropping `staging` deletes the buffer
     // directory. It has to happen here because `std::process::exit`, which
     // `exit` calls, runs no destructors; `exit` drops the log drain first.
     drop(staging);
-    if refused || capture_failed {
+    if agent_lost || capture_failed {
         exit(1);
     }
     // The runtime first, so a line logged while it shuts down still reaches

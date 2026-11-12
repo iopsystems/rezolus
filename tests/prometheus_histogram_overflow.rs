@@ -10,10 +10,9 @@
 //! is `+Inf`, with the band `(highest finite bound, +Inf)`. The query JSON
 //! writes it as the string "+Inf", where serde_json wrote `null`.
 //!
-//! metriken-recorder 0.12 stores a `_seconds` histogram's family in
-//! nanoseconds under the name with `seconds` replaced by `nanoseconds`, so
-//! the histogram is `request_duration_nanoseconds` and its overflow
-//! `request_duration_nanoseconds_overflow`; the queries name it so.
+//! The histogram is stored as the exporter serves it, under its own name and
+//! in seconds (metriken-storage 0.13), so the queries name
+//! `request_duration_seconds` and read seconds.
 //!
 //! Each scrape adds 9 observations at or below 0.1 s and 1 above 1 s, the
 //! highest finite bucket. Over each row-to-row delta (F 9, O 1) the 0.99
@@ -27,11 +26,11 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-const P99: &str = "histogram_quantile(0.99, request_duration_nanoseconds)";
-const P50: &str = "histogram_quantile(0.5, request_duration_nanoseconds)";
+const P99: &str = "histogram_quantile(0.99, request_duration_seconds)";
+const P50: &str = "histogram_quantile(0.5, request_duration_seconds)";
 
-/// The highest finite bucket, 1 s, in the stored unit (nanoseconds).
-const TOP_BOUND: f64 = 1e9;
+/// The highest finite bucket, 1 s.
+const TOP_BOUND: f64 = 1.0;
 
 /// A stand-in Prometheus exporter serving the histogram
 /// `request_duration_seconds`, 10 observations per request: 9 in the 0.1 s
@@ -74,12 +73,15 @@ fn spawn_exporter() -> u16 {
 }
 
 /// The recording every test reads: the exporter recorded for 3 seconds at
-/// 200 ms, made once per test run under `CARGO_TARGET_TMPDIR`.
+/// 200 ms, made once per test process under `CARGO_TARGET_TMPDIR`, in a
+/// directory of the process's own: nextest runs each test in a process.
 fn recording() -> &'static std::path::Path {
     static ARCHIVE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     ARCHIVE.get_or_init(|| {
-        let dir =
-            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("prometheus_histogram_overflow");
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+            "prometheus_histogram_overflow-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let output = dir.join("overflow.dendro");
@@ -177,10 +179,7 @@ fn check_p99_and_p50(p99: &serde_json::Value, p50: &serde_json::Value, who: &str
     }
     for v in written_values(p50) {
         let n = number(&v);
-        assert!(
-            n.is_finite() && (1e8..1.01e8).contains(&n),
-            "{who}: p50 {v}"
-        );
+        assert!(n.is_finite() && (0.1..0.101).contains(&n), "{who}: p50 {v}");
     }
 }
 
@@ -196,15 +195,15 @@ fn the_overflow_reads_back_through_mcp() {
     assert_eq!(
         counters,
         [
-            "request_duration_nanoseconds_count",
-            "request_duration_nanoseconds_overflow",
-            "request_duration_nanoseconds_sum",
+            "request_duration_seconds_count",
+            "request_duration_seconds_overflow",
+            "request_duration_seconds_sum",
         ],
         "{described}"
     );
     assert_eq!(
         section(&described, "HISTOGRAMS"),
-        ["request_duration_nanoseconds"],
+        ["request_duration_seconds"],
         "{described}"
     );
 
@@ -357,7 +356,7 @@ fn catalog(body: &serde_json::Value) -> std::collections::BTreeMap<String, Strin
 fn the_overflow_reads_back_through_both_viewers() {
     let output = recording();
     let overflow = (
-        "request_duration_nanoseconds_overflow".to_string(),
+        "request_duration_seconds_overflow".to_string(),
         "counter".to_string(),
     );
 

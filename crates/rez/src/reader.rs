@@ -196,6 +196,9 @@ impl MetricsSource for RezReader {
     fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
         self.0.columns(query)
     }
+    fn metric_unit(&self, name: &str) -> Option<String> {
+        self.0.metric_unit(name)
+    }
     fn counter_names(&self) -> Vec<String> {
         self.0.counter_names()
     }

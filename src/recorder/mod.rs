@@ -57,9 +57,10 @@ pub fn command() -> Command {
              through, and rezolus exits with the command\'s own exit status, so\n\
              `rezolus record -o bench.dendro -- ./bench.sh && analyze bench.dendro` gates on\n\
              the benchmark exactly as it would without the wrapper. Two substitutions: the\n\
-             --duration cap exits 124 if it kills the command, and a recording failure (an\n\
-             endpoint refused mid-run, an endpoint whose rows could not be recorded, a write\n\
-             error) exits 1 whatever the command returned.\n\n\
+             --duration cap exits 124 if it kills the command, and a recording failure (a\n\
+             write error, an archive that could not be saved, or nothing recorded) exits 1\n\
+             whatever the command returned. An endpoint lost during the run (refused, or its rows could\n\
+             not be recorded) is named at the end and does not change the exit status.\n\n\
              A wrapped run is also marked in the recording: a `run_start` event when the\n\
              command spawns and a `run_end` event when it exits, so the viewer can draw the\n\
              run\'s edges and align two recordings on them. Only the program name is stored\n\
@@ -206,8 +207,11 @@ pub fn command() -> Command {
              5.x recorder ({RELEASE_5X} or later) records such an agent by scraping it.\n\
              An agent that comes up later and is refused, or is refused on a\n\
              reconnect, is left out of the recording from then on (a reconnect keeps the\n\
-             rows it had), the other endpoints keep recording, and the run exits 1 once\n\
-             the archive is finalized. When every endpoint has been refused, the run ends.\n\n\
+             rows it had), and the other endpoints keep recording. An endpoint whose rows\n\
+             cannot be recorded stops recording alone. Neither fails the run or changes\n\
+             its exit status; the end of the run names each endpoint it lost. When no endpoint\n\
+             is left recording, a run with neither --duration nor a wrapped command ends;\n\
+             a --duration run or a wrapped command runs on to its own end.\n\n\
              An agent that is not reachable yet, or whose stream fails with an error that\n\
              can change (a 5xx, 408 or 429, a handshake timeout), is retried each tick. A\n\
              stream that drops mid-run is reconnected after one interval (at least a\n\
@@ -648,7 +652,9 @@ struct Watch {
     args: Vec<String>,
     names: Vec<Option<String>>,
     streaming: BTreeSet<mr::SourceId>,
-    refused: BTreeSet<mr::SourceId>,
+    /// No endpoint is left recording (`Event::NoneRecording`): each was
+    /// refused or failed.
+    none_recording: bool,
     failed: bool,
     output: std::path::PathBuf,
 }
@@ -694,7 +700,6 @@ impl Watch {
             }
             mr::Event::Refused { source, reason } => {
                 eprintln!("error: {reason}");
-                self.refused.insert(source);
                 self.streaming.remove(&source);
             }
             mr::Event::Restarted {
@@ -715,7 +720,7 @@ impl Watch {
             }
             mr::Event::SourceFailed { source, reason } => {
                 // Any other endpoint records on; when none is left,
-                // `Event::Failed` follows.
+                // `Event::NoneRecording` follows.
                 let i = source.0 as usize;
                 let url = self.urls.get(i).map(String::as_str);
                 let name = self.names.get(i).cloned().flatten();
@@ -725,6 +730,7 @@ impl Watch {
                 );
                 self.streaming.remove(&source);
             }
+            mr::Event::NoneRecording => self.none_recording = true,
             mr::Event::Failed { error } => {
                 eprintln!("error: recording failed: {error}");
                 eprintln!(
@@ -925,11 +931,10 @@ pub fn run(config: RecordingConfig) {
             })
             .collect(),
         streaming: BTreeSet::new(),
-        refused: BTreeSet::new(),
+        none_recording: false,
         failed: false,
         output: config.output.clone(),
     };
-    let endpoints = detected.len();
 
     let mut recorder_cfg = mr::RecorderConfig::new(config.output.clone(), interval_dur);
     recorder_cfg.timeout = timeout;
@@ -1060,11 +1065,14 @@ pub fn run(config: RecordingConfig) {
                     if watch.failed {
                         break;
                     }
-                    // Every endpoint refused: nothing is left to record and
-                    // a refused endpoint is never retried, so the run ends
-                    // here instead of waiting for `--duration` or ctrl-c.
-                    if watch.refused.len() == endpoints {
-                        warn!("every endpoint has been refused; finalizing the recording");
+                    // No endpoint is left recording, and a refused or failed
+                    // endpoint is never retried. A run with no other end
+                    // finishes here instead of waiting for ctrl-c; a
+                    // `--duration` run and a wrapped command run to their
+                    // own end, so a lost endpoint never cuts the workload
+                    // short.
+                    if watch.none_recording && !wrapped && deadline.is_none() {
+                        warn!("no endpoint is left recording; finalizing the recording");
                         break;
                     }
                 }
@@ -1159,11 +1167,7 @@ pub fn run(config: RecordingConfig) {
             Ok(summary) if summary.discarded => {
                 // Nothing was captured, so the archive was removed rather
                 // than left as a stub.
-                if wrapped {
-                    warn!("command exited before any metrics were recorded");
-                } else {
-                    eprintln!("error: no data was recorded from any endpoint");
-                }
+                eprintln!("error: no data was recorded from any endpoint");
                 recording_failed = true;
             }
             Ok(summary) => {
@@ -1180,13 +1184,13 @@ pub fn run(config: RecordingConfig) {
                 for line in unrecorded_summary(&sources, &config.output) {
                     warn!("{line}");
                 }
+                // An endpoint lost during the run does not fail it: the
+                // archive was saved, with every other endpoint's rows.
                 if let Some(summary) = refusal_summary(&sources, &config.output, true) {
                     eprintln!("{summary}");
-                    recording_failed = true;
                 }
                 if let Some(summary) = failure_summary(&sources, &config.output) {
                     eprintln!("{summary}");
-                    recording_failed = true;
                 }
             }
             Err(e) => {

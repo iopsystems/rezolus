@@ -71,8 +71,9 @@ Hindsight reads the agent named by `source` over its replication stream
 `"v3"` (the default). An agent that cannot serve it is refused at startup.
 If the stream drops, hindsight reconnects after one interval and keeps its
 buffer. If the agent answers a reconnect but can no longer serve the stream,
-hindsight writes the buffer to a timestamped file beside `output`, where a
-SIGHUP capture goes, and exits with status 1.
+or its rows cannot be recorded (a frame that cannot be read or decoded, rows
+that cannot be encoded), hindsight writes the buffer to a timestamped file
+beside `output`, where a SIGHUP capture goes, and exits with status 1.
 
 Hindsight is **disabled by default**. Review the config before enabling it.
 
@@ -138,32 +139,28 @@ are streamed (5.21.0 or later) and Prometheus endpoints scraped, and one archive
 can hold both; a Prometheus scrape gets an acquisition window spanning the HTTP
 request and response. See [Streaming and scraping](#streaming-and-scraping).
 
-A Prometheus series whose name ends in a time or size unit (`_seconds`,
-`_ms`, `_us`, `_bytes`, `_kib`, `_bits` and the rest of metriken-recorder's
-list, before any `_bucket`, `_sum`, `_count` or `_total`), or whose metric's
-OpenMetrics `# UNIT` line names one, is stored in nanoseconds or bytes under its
-name with that unit replaced: `rpc_seconds_sum` as `rpc_nanoseconds_sum`,
-`rx_bits_total` as `rx_bytes_total` (divided by 8). The exporter's name is
-kept in the label `__prometheus_name__`, which listings and legends leave
-out. A query naming the exporter's name reads the stored series, in the
-stored unit and under the stored name, when the recording holds no series of
-that name. When two exporter names would be stored under one name
-(`rpc_seconds` and `rpc_ms`), both keep their own names and the exporter's
-units, with their whole families, from the scrape the collision appears in:
-a kept `_seconds` histogram is stored in seconds times the generic `scale`,
-so a chart of it in time units (nanoseconds) is mis-scaled, and a
-collision that starts mid-run splits the series between the two names.
-When two endpoints' `# UNIT` lines store one exporter name under two
-names, a query naming it is an error naming both and the matcher that
-picks one, `<stored name>{__prometheus_name__="<exporter name>"}`. Its
-other suggestion, a recording-label matcher, is written `{source="..."}`;
-in a rezolus recording the recording label is `alias`, so write
-`jobs_total{alias="b"}`. Earlier
-recorders wrote the exporter's names and units, except that a `_seconds`
-histogram's buckets were already in nanoseconds. A histogram whose smallest
-bucket bound is below 1 has its bounds multiplied by a power of 10, by
-earlier recorders too; the recorder now writes that factor as the `scale`
-key.
+A Prometheus series is stored as the exporter serves it: under its own name
+(with any `:` replaced by `_`), with its own values, as floating-point numbers.
+Its unit is written as the series' `unit` key: the unit its metric's
+OpenMetrics `# UNIT` line names, or else the unit token its name ends in
+before any `_bucket`, `_sum`, `_count` or `_total` (`_seconds` is
+`seconds`, `_ms` is `milliseconds`, `_bytes` is `bytes`, `_kib` is
+`kibibytes`, `_bits` is `bits`, and the rest of metriken-storage's
+`prometheus_units::UNITS`). A `_count` or `_bucket` sample has no unit. The
+metric catalogs (`/api/v1/metrics`, the WASM viewer's `metrics`) list it as
+`unit`, and the viewer's charts scale by it: a `_seconds` histogram's
+quantiles read seconds and are drawn as times. A histogram's bucket bounds
+are stored as integers times a `scale` key, fixed by the unit for a time
+(1e9 for seconds, 1e6 for milliseconds, 1e3 for microseconds, 1 for
+nanoseconds) and otherwise the smallest power of 10, up to 1e9, that makes
+every bound an integer (1e9, with the bounds rounded, when none up to 1e9
+does); queries divide by it, so a quantile reads in the exporter's unit. A histogram query over series stored at different scales
+is an error that says so. A recording whose Prometheus series are named
+`..._nanoseconds` or `..._bytes` and carry `__prometheus_name__` holds them
+in nanoseconds or bytes under that name, and a query by the exporter's name
+does not find them. 5.x recorders stored a `_seconds` histogram's buckets in
+nanoseconds under the exporter's name, with no `unit` key, and a chart reads
+them as nanoseconds.
 
 With no `-o` the recording goes to `rezolus.dendro`. The output path must end in
 `.dendro`. rezolus 6.x writes no other format: an output ending in `.rez`,
@@ -182,8 +179,10 @@ When wrapping a command, rezolus passes its stdio straight through and exits
 with the command's own status, so `rezolus record -o bench.dendro -- ./bench.sh &&
 analyze bench.dendro` gates on the benchmark. Two substitutions: the
 `--duration` cap exits 124 if it kills the command, and a recording failure
-(an endpoint refused mid-run, an endpoint whose rows could not be recorded,
-a write error) exits 1 whatever the command returned.
+(a write error, an archive that could not be saved, or nothing recorded)
+exits 1 whatever the command returned. An endpoint lost during the run (refused, or one whose rows
+could not be recorded) is named at the end and does not change the exit
+status.
 
 A wrapped run is also marked in the recording: a `run_start` event when the
 command spawns and a `run_end` event when its exit is observed, named by the
@@ -429,8 +428,11 @@ the path, or answers 401 or 403), or one whose handshake does not decode (a
 replication protocol version mismatch names both versions) — is refused with
 its version. At startup the run is refused (exit 1) before the archive is
 created. An agent that comes up later and is refused is left out: the other
-endpoints keep recording, the archive is finalized, and the run exits 1. When
-every endpoint has been refused, the run ends there. At the end each refused
+endpoints keep recording, the archive is finalized, and the exit status does
+not change. When
+no endpoint is left recording, a run with neither `--duration` nor a wrapped
+command ends there; a `--duration` run or a wrapped command runs on to its
+own end. At the end each refused
 endpoint gets its own line, saying from when the archive has no rows for it.
 Every refusal points at a rezolus 5.x recorder, which scrapes such an agent;
 convert its `.rez` afterwards if you want a `.dendro`, or upgrade the agent:
@@ -461,8 +463,8 @@ produces no frame for the interval the agent serves plus the scrape timeout
 are lost, as a failed scrape's are. An agent that comes back unable to serve
 the stream (a 404, a wrong content type, a handshake that does not decode) is
 refused as a late agent is: its recording stops with the rows it had and is
-finalized, it is not retried, the other endpoints keep recording, and the run
-exits 1. A streamed endpoint is never switched to scraping.
+finalized, it is not retried, the other endpoints keep recording, and the exit
+status does not change. A streamed endpoint is never switched to scraping.
 
 A wrapped command (`-- <command>`) that exits on its own is followed by a wait
 for each agent's frame stamped at or after the exit, at most one interval plus
@@ -762,7 +764,7 @@ embeds, so the recording carries what it is judged against. A complete file:
       "query": "request_latency_seconds",
       "type": "histogram",
       "unit_system": "time",
-      "check": {"above": 250000000, "quantile": 0.99, "for": "10s", "severity": "fail"}
+      "check": {"above": 0.25, "quantile": 0.99, "for": "10s", "severity": "fail"}
     },
     {
       "role": "throughput",
@@ -801,19 +803,20 @@ evaluated as written. `description`, `unit_system`, `subtype`, `percentiles`,
 `subgroup`, `subgroup_description`, `full_width`, `denominator` and `check`
 are optional. A KPI without `check` is a chart only. `unit_system` is one of
 `time`, `bytes`, `bitrate`, `datarate`, `percentage`, `frequency`, `power`,
-`count` or `rate`; `recording annotate` refuses any other.
+`count`, `rate`, `temperature` or `cores`; `recording annotate` refuses
+any other. A `gauge` or `histogram` KPI whose `query` is a bare selector
+(`name` or `name{...}`) is charted in the unit its series are stored in, so
+a Prometheus `_seconds` histogram with `unit_system: time` reads as
+seconds.
 
 The check:
 
 - Exactly one of `above` / `below` is the threshold, compared in the query's
-  own unit (nanoseconds for the histogram above, requests per second for the
+  own unit (seconds for the histogram above, requests per second for the
   rate). The comparison is strict: a value equal to the threshold passes.
-  A Prometheus `_seconds` histogram's buckets are stored in nanoseconds, so
-  0.25 s is `250000000`. In a recording made with metriken-recorder 0.12
-  (rezolus 6.0.0-alpha.136) or later the histogram is stored as
-  `request_latency_nanoseconds`, and `request_latency_seconds` reads it
-  through the exporter-name fallback; in an older recording it is stored
-  under `request_latency_seconds`. The exporter's name reads both.
+  A Prometheus `_seconds` histogram is stored in seconds, so 0.25 s is
+  `0.25`. A 5.x recording stored its buckets in nanoseconds, where 0.25 s is
+  `250000000`.
 - `for` is the shortest run that counts (default `0s`, so one point is
   enough). Accepted forms: `500ms`, `10s`, `1m30s`, `2h`, `1d`, `1.5s`, or a
   bare number of seconds.
@@ -831,7 +834,7 @@ one line per check followed by a summary:
 
 ```
 PASS          Queue depth low  above 10
-FAIL          p99 request latency  p99 above 250000000 for 10s  [2026-09-28T14:03:11Z..2026-09-28T14:03:41Z, 3 windows]
+FAIL          p99 request latency  p99 above 0.25 for 10s  [2026-09-28T14:03:11Z..2026-09-28T14:03:41Z, 3 windows]
 2 checks: 1 passed, 1 failed, 0 warned, 0 indeterminate, 0 errors
 ```
 

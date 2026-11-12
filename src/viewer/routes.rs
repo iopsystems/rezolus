@@ -1062,6 +1062,10 @@ mod query_slot_tests {
             self.wait();
             MetricsSource::sample_timestamps(&self.inner)
         }
+        fn metric_unit(&self, name: &str) -> Option<String> {
+            self.wait();
+            MetricsSource::metric_unit(&self.inner, name)
+        }
         fn counter_names(&self) -> Vec<String> {
             self.wait();
             MetricsSource::counter_names(&self.inner)

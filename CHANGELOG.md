@@ -505,7 +505,7 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
   foreign content type is refused at startup (exit 1, nothing written) or,
   if it comes up later or fails on a reconnect, left out of the recording
-  while the rest is recorded (exit 1). The refusal points at a 5.x recorder,
+  while the rest is recorded. The refusal points at a 5.x recorder,
   which scrapes such an agent. A 5xx or a handshake timeout is still retried
   each tick. Before, this applied to `.dendro` output only, and `.rez` and
   parquet output scraped the agent.
@@ -549,60 +549,47 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
-- **A Prometheus series whose name ends in a unit is stored in nanoseconds
-  or bytes, under a normalized name** (metriken-recorder 0.12,
-  metriken-storage 0.11, metriken-query 0.48, metriken-charts 0.1.4).
-  `rezolus record` stores a series whose name ends in a time or size unit
-  (`_seconds`, `_ms`, `_us`, `_bytes`, `_kib`, `_bits`, ... before any
-  `_bucket`, `_sum`, `_count` or `_total`), or whose OpenMetrics `# UNIT`
-  line names one, in nanoseconds or bytes, with the `unit` key set, under
-  the name with its unit replaced: `rpc_seconds_sum` is
-  `rpc_nanoseconds_sum` (×1e9), `queue_ms` is `queue_nanoseconds` (×1e6),
-  `rx_bits_total` is `rx_bytes_total` (÷8). A histogram's buckets, `_sum`
-  and overflow bound, a summary's quantiles and `_sum`, and scalars are
-  scaled by one factor; a `_count` is renamed and not scaled. A `_seconds`
-  histogram's buckets read as before (they were already in nanoseconds), and
-  its `_sum` now does too: `rate(x_seconds_sum) / rate(x_seconds_count)`
-  over a new recording reads nanoseconds where it read seconds. The
-  exporter's name, with any `:` replaced by `_` as the recorder already
-  did, is kept in the internal label `__prometheus_name__`, which
-  `mcp describe-metrics`, the viewers' metric catalogs and label pickers,
-  and chart legends leave out. A selector's result carries it beside
-  `__name__` (in `mcp query` and the query JSON); a `histogram_quantiles`
-  result does not. A query naming the exporter's name reads, when
-  no series it reaches has that name, the renamed series: in the stored
-  unit, under the stored name. When two endpoints' `# UNIT` lines store one
-  exporter name under two names, such a query is an error that names both
-  and the matcher that picks one (`<stored name>{__prometheus_name__="<exporter
-  name>"}`); `mcp query`, the MCP `query` tool and the viewers' query API
-  return that message as written. The error's example of a recording-label
-  matcher is `{source="..."}`; in a rezolus recording the recording label
-  is `alias` (`jobs_total{alias="b"}`), and `{source="..."}` returns the
-  same error. Two exporter names that would be stored under one name
-  (`rpc_seconds` and `rpc_ms`) both keep their names, with their whole
-  family, in the exporter's units, for the rest of the recording: a kept
-  `_seconds` histogram is stored in seconds times the generic `scale`
-  (metriken-recorder 0.11 stored it ×1e9), so a chart of it with
-  `unit_system: time` reads about 1e9 low, and a collision that first
-  appears mid-run stores one series under two names in one recording. A histogram whose smallest bound
-  is below 1 is still stored ×10^k, now with that factor in the `scale`
-  key, which, like `overflow` and `overflow_bound`, is not a label in any
-  recording. Recordings made before this release keep their names and
-  units, and a query by the exporter's name reads them as before. The
-  shipped KPI templates name their 46 `_seconds` histograms by the
-  exporter's name, which reads the same nanosecond values in recordings
-  made before and after this release; the KPI check example in
-  `docs/usage.md` does the same and states its threshold in nanoseconds.
-  A KPI query that fails with an evaluation or unsupported error is logged
-  at warn when a viewer marks the KPI unavailable (once per process in the
-  server viewer), and any other failure at debug. `mcp detect-anomalies` given a bare
-  exporter name wraps it by the kind of the series renamed from it, where
-  it passed the name through unwrapped and failed.
-  Save as Report logs a query whose columns it cannot resolve with
-  metriken-query's message, and calls only a syntax error malformed. In a
-  comparison, a percentile chart's series are paired by their visible
-  labels only, so a renamed series pairs with an older recording's. 6.0
-  builds before this one show `scale` as a label on such a histogram.
+- **A Prometheus series is stored as the exporter serves it, with its
+  unit** (metriken-recorder 0.15, metriken-storage 0.13, metriken-query
+  0.50, metriken-charts 0.1.5). `rezolus record` stores each series under
+  the exporter's name, with the exporter's values, and writes the unit
+  its metric's `# UNIT` line or its name's unit token names (`_seconds` is
+  `seconds`, `_ms` is `milliseconds`, `_kib` is `kibibytes`; none on a
+  `_count` or `_bucket`) as the series' `unit` key. A histogram's bounds are
+  stored as integers times a `scale` key (1e9 for `seconds`, 1e6 for
+  `milliseconds`, 1e3 for `microseconds`, otherwise the smallest power of
+  10 up to 1e9 that makes every bound an integer, or 1e9 with the bounds
+  rounded when none does), and the histogram
+  functions divide by it, so `histogram_quantile(0.99, rpc_seconds)` reads
+  seconds. A histogram query that pools series stored at different scales
+  is an error that names both. The viewers' metric catalogs list each
+  series' `unit`; the metric browser charts a series by it, and a gauge or
+  histogram KPI whose query is a bare selector is charted in its stored
+  unit, so the shipped templates' 46 `_seconds` histograms
+  (`unit_system: time`) draw times from 5.x recordings (nanoseconds) and
+  6.0 ones (seconds). A comparison or combined archive holding a 5.x and a
+  6.0 recording of one `_seconds` histogram reads one in nanoseconds and
+  the other in seconds, so its charts and ratios are off by 1e9; compare
+  recordings made by the same major version. A KPI check's threshold is
+  in the stored unit: seconds for a `_seconds` histogram recorded by 6.0,
+  nanoseconds for one recorded by 5.x. The metric browser also charts a
+  Rezolus agent's metrics by their unit: a `nanoseconds` counter as a
+  percentage of a core, a `nanoseconds` histogram as times, a `bytes`
+  counter as a data rate. A KPI query that fails with an evaluation or
+  unsupported error is logged at warn when a viewer marks the KPI
+  unavailable (once per process in the server viewer), and any other
+  failure at debug. Save as Report logs a query whose columns it cannot
+  resolve with metriken-query's message, and calls only a syntax error
+  malformed. In a comparison, a percentile chart's series are paired by
+  their visible labels only.
+
+- **An endpoint lost mid-run does not fail `record`** (metriken-recorder
+  0.15). An endpoint refused mid-run, or whose rows cannot be recorded,
+  stops recording alone; `record` names it at the end of the run and the
+  exit status does not change, since the archive was saved with every
+  other endpoint's rows. `record` exits 1 when the recording cannot start,
+  when the archive cannot be written or saved, or when nothing was
+  recorded.
 
 - **A selector compares a label a series lacks as the empty string, as
   Prometheus does** (metriken-storage 0.12, metriken-query 0.49).
@@ -619,11 +606,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 - **`rezolus record` keeps recording when one endpoint's rows cannot be
   recorded** (metriken-recorder 0.13, 0.14). An endpoint whose rows cannot
   be written into a segment, staged, or read or decoded from its stream
-  stops recording alone: `record` prints the reason at once, names it again
-  at the end of the run, and exits 1, as for an endpoint refused mid-run.
-  The archive keeps its rows up to the failure, except a failed table's
-  rows after its last sealed segment. When no endpoint is left recording,
-  the recording fails as before. hindsight and the live viewer record one
+  stops recording alone: `record` prints the reason at once and names it
+  again at the end of the run, as for an endpoint refused mid-run. The
+  archive keeps its rows up to the failure, except a failed table's rows
+  after its last sealed segment. hindsight and the live viewer record one
   source, so such a failure still ends them.
 
 - **An exporter label named after a storage key is kept as
@@ -1784,14 +1770,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   at startup the run is refused before the archive is created, and an agent
   that comes up later, or that answers a reconnect with such a refusal, is
   left out from then on (a reconnecting agent's recording keeps the rows it
-  had and is finalized) while the other endpoints keep recording, the
-  archive is finalized, and the run exits 1. Record such an agent with a
+  had and is finalized) while the other endpoints keep recording, and the
+  archive is finalized. Record such an agent with a
   5.x recorder, which scrapes. An agent that answers but whose stream
   fails with an error that can change (a 5xx, a handshake timeout) is retried
   each tick. A wrapped command that exits on its own waits for each agent's
   frame covering the exit, at most one interval plus the scrape timeout
-  (twice the interval, between 2 s and 10 s). A run whose every endpoint has
-  been refused ends there, and each refused endpoint is named at the end.
+  (twice the interval, between 2 s and 10 s). When no endpoint is left
+  recording (each refused or failed), a run with neither `--duration` nor a
+  wrapped command ends there; a `--duration` run or a wrapped command runs
+  to its own end. Each refused endpoint is named at the end.
   `record --stream` is removed: `record` writes `.dendro`, which records
   agents by stream, and passing `--stream` is an unknown-argument error
   (exit 2). The identity index that a 5.x `.rez --stream` stored beside its
