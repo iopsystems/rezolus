@@ -111,17 +111,22 @@ static STORED_UNITS: &[(&str, &str, f64)] = &[
 
 /// The unit systems whose base is each dimension's base; the first is the
 /// one a plot with a stored unit and no system uses.
+static DIMENSION_SYSTEMS: &[(&str, &[&str])] = &[
+    ("time", &["time"]),
+    ("bytes", &["bytes", "datarate"]),
+    ("bits", &["bitrate"]),
+    ("ratio", &["percentage"]),
+    ("temperature", &["temperature"]),
+    ("frequency", &["frequency"]),
+    ("cores", &["cores"]),
+];
+
+/// [`DIMENSION_SYSTEMS`]' systems for `dimension`, none for an unknown one.
 fn dimension_systems(dimension: &str) -> &'static [&'static str] {
-    match dimension {
-        "time" => &["time"],
-        "bytes" => &["bytes", "datarate"],
-        "bits" => &["bitrate"],
-        "ratio" => &["percentage"],
-        "temperature" => &["temperature"],
-        "frequency" => &["frequency"],
-        "cores" => &["cores"],
-        _ => &[],
-    }
+    DIMENSION_SYSTEMS
+        .iter()
+        .find(|(d, _)| *d == dimension)
+        .map_or(&[], |(_, systems)| systems)
 }
 
 /// The unit system a plot is formatted with, and the factor its values are
@@ -220,6 +225,65 @@ mod tests {
         );
         assert_eq!(resolve(Some("time"), None), (Some("time".into()), 1.0));
         assert_eq!(resolve(None, None), (None, 1.0));
+    }
+
+    /// The body of `const <name> = { ... };` in metriken-charts' `units.js`:
+    /// its lines up to the closing `};`.
+    fn js_table<'a>(js: &'a str, name: &str) -> Vec<&'a str> {
+        js.lines()
+            .skip_while(|l| !l.starts_with(&format!("const {name} = {{")))
+            .skip(1)
+            .take_while(|l| !l.starts_with("};"))
+            .map(str::trim)
+            .collect()
+    }
+
+    /// [`STORED_UNITS`] and [`DIMENSION_SYSTEMS`] are copies of the tables
+    /// metriken-charts' `resolveUnit` reads, so `view --tui` scales a series
+    /// as the browser charts do.
+    #[test]
+    fn the_unit_tables_match_metriken_charts() {
+        let js = metriken_charts::ASSETS
+            .get_file("charts/util/units.js")
+            .and_then(|f| f.contents_utf8())
+            .expect("metriken-charts ships charts/util/units.js");
+
+        // `name: { dimension: 'd', factor: f },`
+        let mut stored: Vec<(String, String, f64)> = js_table(js, "STORED_UNITS")
+            .into_iter()
+            .map(|line| {
+                let (name, rest) = line.split_once(':').expect(line);
+                let dimension = rest.split('\'').nth(1).expect(line);
+                let factor = rest
+                    .split("factor:")
+                    .nth(1)
+                    .and_then(|f| f.trim().trim_end_matches(['}', ',', ' ']).parse().ok())
+                    .unwrap_or_else(|| panic!("no factor in {line}"));
+                (name.trim().to_string(), dimension.to_string(), factor)
+            })
+            .collect();
+        let mut ours: Vec<(String, String, f64)> = STORED_UNITS
+            .iter()
+            .map(|(n, d, f)| (n.to_string(), d.to_string(), *f))
+            .collect();
+        stored.sort_by(|a, b| a.0.cmp(&b.0));
+        ours.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(ours, stored);
+
+        // `dimension: ['system', ...],`, each JS dimension's systems as ours
+        // lists them, and no dimension of ours that the JS lacks.
+        let systems = js_table(js, "DIMENSION_SYSTEMS");
+        assert!(!systems.is_empty());
+        let mut js_dimensions = Vec::new();
+        for line in systems {
+            let (dimension, rest) = line.split_once(':').expect(line);
+            let listed: Vec<&str> = rest.split('\'').skip(1).step_by(2).collect();
+            assert_eq!(dimension_systems(dimension.trim()), listed, "{line}");
+            js_dimensions.push(dimension.trim());
+        }
+        for (dimension, _) in DIMENSION_SYSTEMS {
+            assert!(js_dimensions.contains(dimension), "{dimension}");
+        }
     }
 
     #[test]
