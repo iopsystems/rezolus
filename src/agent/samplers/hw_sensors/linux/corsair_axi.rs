@@ -33,9 +33,10 @@
 //! The port is refused if another process has set `TIOCEXCL` on it or holds a
 //! `flock` on it, and is then claimed with both before its settings are
 //! changed, so a second agent or another tool that claims the port cannot
-//! interleave with this one. A process that already has the port open without
-//! either (CyberPower's `pwrstatd` probes serial ports for a UPS) still
-//! consumes replies; reads then time out or fail to decode. Before each open
+//! interleave with this one; `TIOCEXCL` is cleared again on close. A process
+//! that already has the port open without either (CyberPower's `pwrstatd`
+//! probes serial ports for a UPS) still consumes replies; reads then time out
+//! or fail to decode. Before each open
 //! the tty is checked to still belong to a device with one of [`USB_IDS`],
 //! since `ttyUSBn` numbers are reassigned when USB devices come and go.
 //!
@@ -118,6 +119,16 @@ pub(crate) fn decode(frame: &[u8]) -> io::Result<Vec<u8>> {
         .collect()
 }
 
+fn page_is_zero(page: &[u8]) -> io::Result<()> {
+    if page != [0] {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("corsair_axi: PMBus page is {page:?}, not 0; not switching it"),
+        ));
+    }
+    Ok(())
+}
+
 /// A PMBus LINEAR11 value: a 5-bit signed exponent over an 11-bit signed mantissa.
 pub(crate) fn linear11(lo: u8, hi: u8) -> f64 {
     let raw = u16::from(lo) | u16::from(hi) << 8;
@@ -172,13 +183,7 @@ impl<P: Port> Session<P> {
     /// another page between readings; this session never switches it.
     fn check_page(&mut self) -> io::Result<()> {
         let page = self.read_register(PAGE, 1)?;
-        if page != [0] {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("corsair_axi: PMBus page is {page:?}, not 0; not switching it"),
-            ));
-        }
-        Ok(())
+        page_is_zero(&page)
     }
 
     pub(crate) fn model(&self) -> &str {
@@ -277,7 +282,8 @@ impl SerialPort {
     }
 
     /// Sets the port to raw 115200 8N1 with non-blocking reads.
-    fn configure(fd: OwnedFd) -> io::Result<Self> {
+    fn configure_raw(&self) -> io::Result<()> {
+        let fd = &self.0;
         // SAFETY: termios is plain data; tcgetattr fills it.
         let mut tio: libc::termios = unsafe { std::mem::zeroed() };
         if unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut tio) } != 0 {
@@ -295,23 +301,30 @@ impl SerialPort {
         if unsafe { libc::tcsetattr(fd.as_raw_fd(), libc::TCSANOW, &tio) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self(fd))
+        Ok(())
     }
 
     /// Opens and configures `path` without claiming it.
     #[cfg(test)]
     fn open(path: &Path) -> io::Result<Self> {
-        Self::configure(Self::open_fd(path)?)
+        let port = Self(Self::open_fd(path)?);
+        port.configure_raw()?;
+        Ok(port)
     }
 
-    /// Opens `path` for exclusive use, then configures it. The port is
-    /// refused, before its settings are touched, if another process has set
-    /// `TIOCEXCL` on it (root can open such a port, so this is checked) or
-    /// holds a `flock` on it. Once claimed, `TIOCEXCL` refuses later non-root
-    /// opens and the `flock` refuses other lockers; both end when the port
-    /// closes.
+    /// Opens `path` for exclusive use, then configures it; see [`Self::claim`].
     pub(crate) fn open_exclusive(path: &Path) -> io::Result<Self> {
-        let fd = Self::open_fd(path)?;
+        Self::claim(Self::open_fd(path)?)
+    }
+
+    /// Claims an open port, then configures it. The port is refused, before
+    /// its termios is changed or anything is written, if another process has
+    /// set `TIOCEXCL` on it (root can open such a port, so this is checked)
+    /// or holds a `flock` on it. Once claimed, `TIOCEXCL` refuses later
+    /// non-root opens and the `flock` refuses other lockers; [`Drop`] clears
+    /// `TIOCEXCL`, which otherwise outlives this fd while another process
+    /// has the port open, and closing the fd releases the lock.
+    fn claim(fd: OwnedFd) -> io::Result<Self> {
         let raw = fd.as_raw_fd();
         let mut excl: libc::c_int = 0;
         // SAFETY: raw is open; TIOCGEXCL writes one c_int.
@@ -332,20 +345,39 @@ impl SerialPort {
                 format!("corsair_axi: port is locked by another process: {err}"),
             ));
         }
+        // From here the port is ours, and Drop undoes TIOCEXCL.
+        let port = Self(fd);
         // SAFETY: raw is open; TIOCEXCL takes no argument.
         if unsafe { libc::ioctl(raw, libc::TIOCEXCL) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        Self::configure(fd)
+        port.configure_raw()?;
+        Ok(port)
     }
 }
 
 impl Drop for SerialPort {
     fn drop(&mut self) {
-        // usb-serial's close waits for unsent output to drain (30 s by
-        // default); discard it so a wedged dongle cannot stall the worker.
-        // SAFETY: the fd is open until OwnedFd drops after this.
-        unsafe { libc::tcflush(self.0.as_raw_fd(), libc::TCIOFLUSH) };
+        let raw = self.0.as_raw_fd();
+        // SAFETY: raw is open until the fd is closed below; TIOCNXCL takes no
+        // argument. Harmless on a port that is not exclusive.
+        unsafe { libc::ioctl(raw, libc::TIOCNXCL) };
+        // usb-serial's final close waits up to `closing_wait` (30 s by
+        // default) for unsent output to reach a dongle that has stopped
+        // accepting it. Hand a duplicate to a detached thread, so that the
+        // close of `self.0` is not the final one and returns at once. The
+        // flock belongs to the open file, so it is released only when that
+        // thread's close finishes, and a reopen meanwhile is refused and
+        // backs off.
+        // SAFETY: raw is open; dup returns a new fd or -1.
+        let dup = unsafe { libc::dup(raw) };
+        if dup >= 0 {
+            // SAFETY: dup was just returned and is owned here.
+            let dup = unsafe { OwnedFd::from_raw_fd(dup) };
+            let _ = std::thread::Builder::new()
+                .name("corsair-axi-close".into())
+                .spawn(move || drop(dup));
+        }
     }
 }
 
@@ -578,17 +610,27 @@ impl<P: Port> Sessions<P> {
             }
         }
         let session = self.open(sysfs, tty, now)?;
-        if now.saturating_duration_since(session.page_checked) >= PAGE_RECHECK {
-            if let Err(e) = session.check_page() {
-                // The port, not this register, is at fault: back off as for
-                // a failed open.
-                self.sessions.remove(tty);
-                self.open_failed.insert(tty.to_path_buf(), now);
-                return Err(e);
+        let page_due = now.saturating_duration_since(session.page_checked) >= PAGE_RECHECK;
+        let result = if page_due {
+            match session.read_register(PAGE, 1) {
+                Ok(page) => {
+                    if let Err(e) = page_is_zero(&page) {
+                        // The PSU is on another page: back off the port as for
+                        // a failed open, without blaming this register.
+                        self.sessions.remove(tty);
+                        self.open_failed.insert(tty.to_path_buf(), now);
+                        return Err(e);
+                    }
+                    session.page_checked = now;
+                    session.read_linear11(register)
+                }
+                // A lost or garbled reply: handled below like a failed reading.
+                Err(e) => Err(e),
             }
-            session.page_checked = now;
-        }
-        match session.read_linear11(register) {
+        } else {
+            session.read_linear11(register)
+        };
+        match result {
             Ok(value) => {
                 self.register_failed.remove(&key);
                 Ok(value)
@@ -853,6 +895,8 @@ mod tests {
         page: u8,
         /// Registers whose read request gets no reply.
         silent: Vec<u8>,
+        /// Registers whose next read request only gets no reply.
+        silent_once: Vec<u8>,
         /// Registers whose acknowledgement arrives just after the reader has
         /// timed out: a late reply left on the line.
         late: Vec<u8>,
@@ -895,7 +939,10 @@ mod tests {
                 [17, ..] | [0] => reply(&mut psu, &[0, 9]),
                 [19, 3, 6, 1, 7, len, register] => {
                     *psu.reads.entry(*register).or_default() += 1;
-                    if psu.late.contains(register) {
+                    let once = psu.silent_once.iter().position(|r| r == register);
+                    if let Some(at) = once {
+                        psu.silent_once.remove(at);
+                    } else if psu.late.contains(register) {
                         psu.held = frame(&[]);
                     } else if !psu.silent.contains(register) {
                         self.pending = Some((*register, *len));
@@ -1091,6 +1138,24 @@ mod tests {
             .is_err());
         assert_eq!(psu.lock().unwrap().opens, opens);
         assert!(sessions.register_failed.is_empty());
+        assert!(sessions.sessions.is_empty(), "the port is closed");
+    }
+
+    #[test]
+    fn a_lost_page_reply_costs_one_register_not_the_port() {
+        let (psu, mut sessions) = scripted(Psu::default());
+        let t0 = Instant::now();
+        let tty = Path::new(TTY);
+        sessions.model(Path::new(SYS), tty, t0).unwrap();
+        psu.lock().unwrap().silent_once.push(PAGE);
+        let t1 = t0 + PAGE_RECHECK;
+        assert!(sessions.read(Path::new(SYS), tty, READ_PIN, t1).is_err());
+        assert!(sessions.open_failed.is_empty(), "no port backoff");
+        // The next register reopens and reads.
+        assert_eq!(
+            sessions.read(Path::new(SYS), tty, READ_VIN, t1).unwrap(),
+            187.0
+        );
     }
 
     #[test]
@@ -1155,8 +1220,18 @@ mod tests {
         sessions.model(Path::new(SYS), tty, t0).unwrap();
         sessions.retain(&[PathBuf::from(TTY)]);
         assert_eq!(sessions.sessions.len(), 1);
+        // Failures for a vanished port go too.
+        sessions
+            .open_failed
+            .insert(PathBuf::from("/dev/ttyUSB9"), t0);
+        sessions.register_failed.insert(
+            (PathBuf::from("/dev/ttyUSB9"), READ_PIN),
+            Failure { at: t0, count: 1 },
+        );
         sessions.retain(&[]);
         assert!(sessions.sessions.is_empty());
+        assert!(sessions.open_failed.is_empty());
+        assert!(sessions.register_failed.is_empty());
         // A device that later appears at the same number is asked its model.
         sessions.model(Path::new(SYS), tty, t0).unwrap();
         assert_eq!(psu.lock().unwrap().opens, 2);
@@ -1267,6 +1342,71 @@ mod tests {
         let _holder = unsafe { OwnedFd::from_raw_fd(fd) };
         assert_eq!(unsafe { libc::ioctl(fd, libc::TIOCEXCL) }, 0);
         assert!(SerialPort::open_exclusive(&slave).is_err());
+    }
+
+    #[test]
+    fn a_port_set_exclusive_after_it_was_opened_is_refused() {
+        // Opened before the holder set TIOCEXCL, so the open succeeds even as
+        // non-root and only the TIOCGEXCL check can refuse it.
+        let (_master, slave) = pty();
+        let fd = SerialPort::open_fd(&slave).unwrap();
+        let holder = SerialPort::open_fd(&slave).unwrap();
+        assert_eq!(
+            unsafe { libc::ioctl(holder.as_raw_fd(), libc::TIOCEXCL) },
+            0
+        );
+        let err = SerialPort::claim(fd).err().expect("refused");
+        assert_eq!(err.kind(), io::ErrorKind::ResourceBusy, "{err}");
+    }
+
+    #[test]
+    fn a_refused_port_keeps_its_settings() {
+        let (_master, slave) = pty();
+        let holder = SerialPort::open_fd(&slave).unwrap();
+        // SAFETY: plain termios calls on an open fd.
+        let speed = unsafe {
+            let mut tio: libc::termios = std::mem::zeroed();
+            assert_eq!(libc::tcgetattr(holder.as_raw_fd(), &mut tio), 0);
+            libc::cfsetispeed(&mut tio, libc::B9600);
+            libc::cfsetospeed(&mut tio, libc::B9600);
+            assert_eq!(libc::tcsetattr(holder.as_raw_fd(), libc::TCSANOW, &tio), 0);
+            assert_eq!(
+                libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB),
+                0
+            );
+            assert!(SerialPort::open_exclusive(&slave).is_err());
+            assert_eq!(libc::tcgetattr(holder.as_raw_fd(), &mut tio), 0);
+            libc::cfgetispeed(&tio)
+        };
+        assert_eq!(speed, libc::B9600);
+    }
+
+    #[test]
+    fn closing_a_claimed_port_clears_its_exclusive_flag() {
+        // While another process has the port open, the kernel keeps
+        // TTY_EXCLUSIVE after this fd closes unless it is cleared.
+        let (_master, slave) = pty();
+        let holder = SerialPort::open_fd(&slave).unwrap();
+        drop(SerialPort::open_exclusive(&slave).unwrap());
+        let mut excl: libc::c_int = 1;
+        // SAFETY: holder is open; TIOCGEXCL writes one c_int.
+        assert_eq!(
+            unsafe { libc::ioctl(holder.as_raw_fd(), libc::TIOCGEXCL, &mut excl) },
+            0
+        );
+        assert_eq!(excl, 0);
+        // And the port can be claimed again once the close thread finishes.
+        let started = Instant::now();
+        loop {
+            match SerialPort::open_exclusive(&slave) {
+                Ok(_) => break,
+                Err(e) if started.elapsed() < Duration::from_secs(2) => {
+                    let _ = e;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("still refused: {e}"),
+            }
+        }
     }
 
     #[test]
