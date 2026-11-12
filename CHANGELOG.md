@@ -158,6 +158,20 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **An RPM upgrade keeps the units enabled and running.** Every `rpm -U`
+  left `rezolus` and `rezolus-exporter` stopped and disabled at boot: the
+  outgoing package's `%preun` stopped and disabled them after the incoming
+  package's `%post` had enabled them. The package now records each unit's
+  state in `%pre` on an upgrade and restores it in `%posttrans`, which runs
+  after the outgoing package's scriptlets, so upgrading from a 5.x package
+  keeps the units too: an enabled unit stays enabled, a running one is
+  restarted on the new binary, and a unit the operator disabled stays
+  disabled. `%post` enables and starts the agent and the exporter on a first
+  install only, `%preun` stops and disables the units on removal only, and
+  `%postun` reloads systemd. A `systemctl` call no longer fails the
+  scriptlet where systemd is not running, such as a container image build.
+  (#1464)
+
 - **hindsight says why it refuses an agent at startup, and leaves nothing
   behind.** An agent older than 5.21.0, or one whose stream it cannot
   subscribe to, ended hindsight with exit code 1 and often no message: the
