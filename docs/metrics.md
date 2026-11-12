@@ -1929,19 +1929,23 @@ corsair_axi = false
 ```
 
 The agent needs read-write access to the tty. Before opening it, the agent
-checks in sysfs that the tty still belongs to the dongle, then takes it with
-`TIOCEXCL` and an exclusive `flock`. The dongle is sent read requests and its
-setup command; no PSU register is written. The PSU's PMBus page is read when
-the port is opened and again before a reading at most once a second, and a
-page other than 0 is an error. A process that already has the port open, such
-as CyberPower's `pwrstatd` probing serial ports for a UPS, takes the PSU's
-replies, and discovery reports an error (`no reply`, or a reply that does not
-decode). A reading does not reopen a port for 60 seconds after a failed open;
+checks in sysfs that the tty still belongs to a device with the dongle's USB
+ID. It refuses the port if another process has set `TIOCEXCL` on it or holds a
+`flock` on it, and otherwise takes both before changing the port's settings.
+The dongle is sent read requests and a setup command whose effect is
+undocumented; no PSU register is written. The PSU's PMBus page is read when
+the port is opened and again before a reading at most once a second. A page
+other than 0 (`cpsumon` leaves the PSU on page 2) fails the port, and the
+agent does not switch it back: the PSU's readings stay absent until a tool
+sets page 0. Whether a power cycle resets the page is not known. A process
+that already has the port open without claiming it, such as CyberPower's
+`pwrstatd` probing serial ports for a UPS, takes the PSU's replies, and
+discovery reports an error (`no reply`, or a reply that does not decode). A reading does not reopen a port for 60 seconds after a failed open;
 discovery tries again every 60 seconds. A failed reading closes the port, and
 that register is not read for 1 second, doubling on each consecutive failure
 up to 60 seconds. On an AX1500i the six readings and the page check add about
 35 ms to each sweep (two serial exchanges per register), and a discovery that
-opens the port about 46 ms. The fan read 0 rpm in every capture, up to 371 W input. Corsair
+opens the port about 46 ms. On the tested AX1500i the fan reported 0 rpm up to 371 W input. Corsair
 HXi/RMi power supplies use other USB IDs and are read by the kernel's
 `corsair-psu` hwmon driver.
 

@@ -33,13 +33,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   current as `sensor_power`, `sensor_voltage` and `sensor_current`, two
   `sensor_temperature` channels and `sensor_fan_speed`, with
   `source=corsair_axi` and `chip` the PSU's model. Input power is the machine's
-  draw at the wall, which RAPL (package and DRAM only) does not cover. On a
-  host with that dongle the agent now opens its tty for exclusive use and
-  sends it read requests; `[samplers.hw_sensors] corsair_axi = false` leaves
-  it alone. On an AX1500i the readings add about 35 ms to each sweep, on the
-  blocking worker. A process that already has the port open, such as
-  CyberPower's `pwrstatd`, takes the replies, and discovery reports an
-  error.
+  draw at the wall, which RAPL (CPU package, cores, GPU, DRAM and, on some
+  Intel parts, platform) does not measure. On a host with that dongle the
+  agent now opens its tty for exclusive use and sends it read requests;
+  `[samplers.hw_sensors] corsair_axi = false` leaves it alone. On an AX1500i
+  the readings add about 35 ms to each sweep, on the blocking worker. A
+  process that already has the port open, such as CyberPower's `pwrstatd`,
+  takes the replies, and discovery reports an error.
 
 - **AWS EFA counters.** `network_efa` publishes each Elastic Fabric Adapter
   port's traffic, RDMA, retransmit and error counters

@@ -156,7 +156,7 @@ impl Sampler {
         parts
     }
 
-    /// The switch for one part of a merged sampler, if the section sets it.
+    /// The switch for one part of a sampler, if the section sets it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn part(&self, part: &str) -> Option<bool> {
         match part {

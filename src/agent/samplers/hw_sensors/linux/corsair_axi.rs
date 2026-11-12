@@ -25,17 +25,19 @@
 //! capture, up to 371 W input.
 //!
 //! The dongle is sent its setup command (`[17, 2, 100, 0, 0, 0, 0]`) and PMBus
-//! read requests; no PMBus register is written. The PSU's PMBus page is read
-//! when a session opens and again before a reading at most once a second; a
-//! page other than 0 is an error, not switched back.
+//! read requests; no PMBus register is written. What the setup command does is
+//! undocumented. The PSU's PMBus page is read when a session opens and again
+//! before a reading at most once a second; a page other than 0 fails the port
+//! as a failed open does, and the page is not switched back.
 //!
-//! The port is opened with `TIOCEXCL` and an exclusive `flock`, so a second
-//! agent or another tool that locks the port cannot interleave with this one.
-//! A process that already has the port open without either (CyberPower's
-//! `pwrstatd` probes serial ports for a UPS) still consumes replies; reads
-//! then time out or fail to decode. Before each open the tty is checked to
-//! still belong to a dongle with one of [`USB_IDS`], since `ttyUSBn` numbers
-//! are reassigned when USB devices come and go.
+//! The port is refused if another process has set `TIOCEXCL` on it or holds a
+//! `flock` on it, and is then claimed with both before its settings are
+//! changed, so a second agent or another tool that claims the port cannot
+//! interleave with this one. A process that already has the port open without
+//! either (CyberPower's `pwrstatd` probes serial ports for a UPS) still
+//! consumes replies; reads then time out or fail to decode. Before each open
+//! the tty is checked to still belong to a device with one of [`USB_IDS`],
+//! since `ttyUSBn` numbers are reassigned when USB devices come and go.
 //!
 //! Failures back off. A failed open is not retried by a reading for
 //! [`OPEN_BACKOFF`] (discovery retries on its own interval). A failed reading
@@ -50,7 +52,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// USB IDs of the dongle, with the PSU it was captured on. The dongle's product
+/// USB vendor and product IDs of the dongle. The dongle's product
 /// string is generic, so the model published is the one the PSU reports.
 pub(crate) const USB_IDS: &[(&str, &str)] = &[("1b1c", "1c02")];
 
@@ -255,7 +257,7 @@ impl<P: Port> Session<P> {
 pub(crate) struct SerialPort(OwnedFd);
 
 impl SerialPort {
-    pub(crate) fn open(path: &Path) -> io::Result<Self> {
+    fn open_fd(path: &Path) -> io::Result<OwnedFd> {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
         let c = CString::new(path.as_os_str().as_bytes())
@@ -271,7 +273,11 @@ impl SerialPort {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: fd was just returned by open and is owned here.
-        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// Sets the port to raw 115200 8N1 with non-blocking reads.
+    fn configure(fd: OwnedFd) -> io::Result<Self> {
         // SAFETY: termios is plain data; tcgetattr fills it.
         let mut tio: libc::termios = unsafe { std::mem::zeroed() };
         if unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut tio) } != 0 {
@@ -292,25 +298,54 @@ impl SerialPort {
         Ok(Self(fd))
     }
 
-    /// Opens `path` for exclusive use: `TIOCEXCL` refuses later non-root
-    /// opens, and the `flock` refuses any other process that locks the port.
-    /// Both are released when the port closes.
+    /// Opens and configures `path` without claiming it.
+    #[cfg(test)]
+    fn open(path: &Path) -> io::Result<Self> {
+        Self::configure(Self::open_fd(path)?)
+    }
+
+    /// Opens `path` for exclusive use, then configures it. The port is
+    /// refused, before its settings are touched, if another process has set
+    /// `TIOCEXCL` on it (root can open such a port, so this is checked) or
+    /// holds a `flock` on it. Once claimed, `TIOCEXCL` refuses later non-root
+    /// opens and the `flock` refuses other lockers; both end when the port
+    /// closes.
     pub(crate) fn open_exclusive(path: &Path) -> io::Result<Self> {
-        let port = Self::open(path)?;
-        let fd = port.0.as_raw_fd();
-        // SAFETY: fd is open; flock takes no pointers.
-        if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let fd = Self::open_fd(path)?;
+        let raw = fd.as_raw_fd();
+        let mut excl: libc::c_int = 0;
+        // SAFETY: raw is open; TIOCGEXCL writes one c_int.
+        if unsafe { libc::ioctl(raw, libc::TIOCGEXCL, &mut excl) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if excl != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::ResourceBusy,
+                "corsair_axi: another process has the port open exclusively",
+            ));
+        }
+        // SAFETY: raw is open; flock takes no pointers.
+        if unsafe { libc::flock(raw, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let err = io::Error::last_os_error();
             return Err(io::Error::new(
                 err.kind(),
                 format!("corsair_axi: port is locked by another process: {err}"),
             ));
         }
-        // SAFETY: fd is open; TIOCEXCL takes no argument.
-        if unsafe { libc::ioctl(fd, libc::TIOCEXCL) } != 0 {
+        // SAFETY: raw is open; TIOCEXCL takes no argument.
+        if unsafe { libc::ioctl(raw, libc::TIOCEXCL) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(port)
+        Self::configure(fd)
+    }
+}
+
+impl Drop for SerialPort {
+    fn drop(&mut self) {
+        // usb-serial's close waits for unsent output to drain (30 s by
+        // default); discard it so a wedged dongle cannot stall the worker.
+        // SAFETY: the fd is open until OwnedFd drops after this.
+        unsafe { libc::tcflush(self.0.as_raw_fd(), libc::TCIOFLUSH) };
     }
 }
 
@@ -495,6 +530,17 @@ impl<P: Port> Sessions<P> {
         Ok(self.sessions.get_mut(tty).expect("inserted above"))
     }
 
+    /// Forgets every port not in `ttys`: its session (closing the port) and
+    /// its failures. Discovery calls this with the ports it found, so a
+    /// dongle that was unplugged does not keep an open session whose cached
+    /// model a later device at the same `ttyUSBn` would inherit.
+    pub(crate) fn retain(&mut self, ttys: &[PathBuf]) {
+        self.sessions.retain(|tty, _| ttys.contains(tty));
+        self.open_failed.retain(|tty, _| ttys.contains(tty));
+        self.register_failed
+            .retain(|(tty, _), _| ttys.contains(tty));
+    }
+
     /// The model of the PSU on `tty`. Opens a session if none is open,
     /// whatever the open backoff: discovery runs on its own interval.
     pub(crate) fn model(&mut self, sysfs: &Path, tty: &Path, now: Instant) -> io::Result<String> {
@@ -532,13 +578,17 @@ impl<P: Port> Sessions<P> {
             }
         }
         let session = self.open(sysfs, tty, now)?;
-        let result = if now.saturating_duration_since(session.page_checked) >= PAGE_RECHECK {
-            session.check_page().map(|()| session.page_checked = now)
-        } else {
-            Ok(())
+        if now.saturating_duration_since(session.page_checked) >= PAGE_RECHECK {
+            if let Err(e) = session.check_page() {
+                // The port, not this register, is at fault: back off as for
+                // a failed open.
+                self.sessions.remove(tty);
+                self.open_failed.insert(tty.to_path_buf(), now);
+                return Err(e);
+            }
+            session.page_checked = now;
         }
-        .and_then(|()| session.read_linear11(register));
-        match result {
+        match session.read_linear11(register) {
             Ok(value) => {
                 self.register_failed.remove(&key);
                 Ok(value)
@@ -580,6 +630,11 @@ fn sessions<T>(f: impl FnOnce(&mut Sessions<SerialPort>) -> T) -> T {
 /// is where the tty is checked to still be a dongle before it is opened.
 pub(crate) fn model(sysfs: &Path, tty: &Path) -> io::Result<String> {
     sessions(|s| s.model(sysfs, tty, Instant::now()))
+}
+
+/// Closes and forgets every port not in `ttys`.
+pub(crate) fn retain(ttys: &[PathBuf]) {
+    sessions(|s| s.retain(ttys))
 }
 
 /// A LINEAR11 register of the PSU on `tty`, in its PMBus unit.
@@ -710,10 +765,11 @@ mod tests {
 
     #[test]
     fn input_power_agrees_with_voltage_times_current_across_a_load_step() {
-        // Pair each poll's READ_PIN, READ_VIN and READ_IIN replies. The first
-        // seconds of this capture read replies by count and lost alignment
-        // with the dongle's long name; frames that do not decode to two bytes
-        // are skipped, as a session would drop them.
+        // Pair each poll's READ_PIN, READ_VIN and READ_IIN replies. This
+        // capture read replies by count and lost alignment after the dongle's
+        // long name, and it lacks the acknowledgement of the first PAGE
+        // request; frames that do not decode to two bytes are skipped, as a
+        // session would drop them.
         let mut poll: HashMap<&str, f64> = HashMap::new();
         let mut checked = 0;
         let (mut lo, mut hi) = (f64::MAX, 0f64);
@@ -795,27 +851,33 @@ mod tests {
     #[derive(Default)]
     struct Psu {
         page: u8,
+        /// Registers whose read request gets no reply.
         silent: Vec<u8>,
+        /// Registers whose acknowledgement arrives just after the reader has
+        /// timed out: a late reply left on the line.
+        late: Vec<u8>,
         refuse_open: bool,
         opens: usize,
         reads: HashMap<u8, usize>,
+        /// Bytes on the line, shared across opens of the port: what one
+        /// session leaves unread, the next open sees unless it discards it.
+        rx: VecDeque<u8>,
+        held: Vec<u8>,
     }
 
     struct Scripted {
         psu: std::sync::Arc<std::sync::Mutex<Psu>>,
         pending: Option<(u8, u8)>,
-        rx: VecDeque<u8>,
     }
 
-    impl Scripted {
-        fn reply(&mut self, payload: &[u8]) {
-            self.rx.push_back(REPLY_START);
-            for &b in payload {
-                self.rx.push_back(CODES[(b & 0xf) as usize]);
-                self.rx.push_back(CODES[(b >> 4) as usize]);
-            }
-            self.rx.push_back(TERMINATOR);
+    fn frame(payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![REPLY_START];
+        for &b in payload {
+            f.push(CODES[(b & 0xf) as usize]);
+            f.push(CODES[(b >> 4) as usize]);
         }
+        f.push(TERMINATOR);
+        f
     }
 
     impl Port for Scripted {
@@ -827,14 +889,17 @@ mod tests {
                 .collect();
             let psu = self.psu.clone();
             let mut psu = psu.lock().unwrap();
+            let reply = |psu: &mut Psu, payload: &[u8]| psu.rx.extend(frame(payload));
             match request.as_slice() {
-                [2] => self.reply(b"USB to SMB Bridge (Firmware by Ross Fosler)\0"),
-                [17, ..] | [0] => self.reply(&[0, 9]),
+                [2] => reply(&mut psu, b"USB to SMB Bridge (Firmware by Ross Fosler)\0"),
+                [17, ..] | [0] => reply(&mut psu, &[0, 9]),
                 [19, 3, 6, 1, 7, len, register] => {
                     *psu.reads.entry(*register).or_default() += 1;
-                    if !psu.silent.contains(register) {
+                    if psu.late.contains(register) {
+                        psu.held = frame(&[]);
+                    } else if !psu.silent.contains(register) {
                         self.pending = Some((*register, *len));
-                        self.reply(&[]);
+                        reply(&mut psu, &[]);
                     }
                 }
                 [8, 7, len] => {
@@ -845,19 +910,22 @@ mod tests {
                         _ => vec![0xbb, 0x00], // LINEAR11 187
                     };
                     assert_eq!(data.len(), usize::from(*len));
-                    self.reply(&data);
+                    reply(&mut psu, &data);
                 }
                 other => panic!("unexpected request {other:?}"),
             }
             Ok(())
         }
         fn read_byte(&mut self, _deadline: Instant) -> io::Result<u8> {
-            self.rx
-                .pop_front()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "timed out"))
+            let mut psu = self.psu.lock().unwrap();
+            psu.rx.pop_front().ok_or_else(|| {
+                let held = std::mem::take(&mut psu.held);
+                psu.rx.extend(held);
+                io::Error::new(io::ErrorKind::TimedOut, "timed out")
+            })
         }
         fn discard_input(&mut self) -> io::Result<()> {
-            self.rx.clear();
+            self.psu.lock().unwrap().rx.clear();
             Ok(())
         }
     }
@@ -874,7 +942,6 @@ mod tests {
             Ok(Scripted {
                 psu: shared.clone(),
                 pending: None,
-                rx: VecDeque::new(),
             })
         });
         (psu, sessions)
@@ -931,8 +998,8 @@ mod tests {
         let psu = psu.lock().unwrap();
         let tries = psu.reads[&READ_TEMPERATURE_2];
         // 1, 2, 4, 8, 16, 32 s, then every 60 s: 0, 5, 10, 15, 25, 45, 80, 140, 200, 260 s.
-        assert!(
-            tries <= 10,
+        assert_eq!(
+            tries, 10,
             "the silent register was tried {tries} times in {sweeps} sweeps"
         );
         assert_eq!(psu.reads[&READ_FAN_SPEED_1], sweeps as usize);
@@ -1017,6 +1084,82 @@ mod tests {
         assert!(err.to_string().contains("page"), "{err}");
         // Nothing switched it back.
         assert_eq!(psu.lock().unwrap().page, 2);
+        // The port backs off as after a failed open; no register is blamed.
+        let opens = psu.lock().unwrap().opens;
+        assert!(sessions
+            .read(Path::new(SYS), tty, READ_IIN, t0 + Duration::from_secs(30))
+            .is_err());
+        assert_eq!(psu.lock().unwrap().opens, opens);
+        assert!(sessions.register_failed.is_empty());
+    }
+
+    #[test]
+    fn a_late_reply_after_a_failure_is_not_read_as_the_next_one() {
+        // READ_VIN's acknowledgement arrives as the session gives up on it.
+        // Dropping the session and discarding input at the next open keep
+        // that frame from pairing with the next request.
+        let (psu, mut sessions) = scripted(Psu {
+            late: vec![READ_VIN],
+            ..Default::default()
+        });
+        let t0 = Instant::now();
+        let tty = Path::new(TTY);
+        sessions.model(Path::new(SYS), tty, t0).unwrap();
+        assert!(sessions.read(Path::new(SYS), tty, READ_VIN, t0).is_err());
+        psu.lock().unwrap().late.clear();
+        for register in [READ_PIN, READ_IIN, READ_FAN_SPEED_1] {
+            assert_eq!(
+                sessions.read(Path::new(SYS), tty, register, t0).unwrap(),
+                187.0,
+                "{register:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn register_backoff_doubles_to_the_cap_without_overflow() {
+        let at = Instant::now();
+        let wait = |count| Failure { at, count }.register_wait();
+        assert_eq!(wait(1), Duration::from_secs(1));
+        assert_eq!(wait(2), Duration::from_secs(2));
+        assert_eq!(wait(6), Duration::from_secs(32));
+        assert_eq!(wait(7), MAX_REGISTER_BACKOFF);
+        assert_eq!(wait(40), MAX_REGISTER_BACKOFF);
+        assert_eq!(wait(u32::MAX), MAX_REGISTER_BACKOFF);
+    }
+
+    #[test]
+    fn a_frame_without_a_terminator_is_cut_off() {
+        /// Sends code bytes forever and never a terminator.
+        struct Endless;
+        impl Port for Endless {
+            fn write_all(&mut self, _: &[u8]) -> io::Result<()> {
+                Ok(())
+            }
+            fn read_byte(&mut self, _: Instant) -> io::Result<u8> {
+                Ok(0x55)
+            }
+            fn discard_input(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let err = Session::open(Endless).err().expect("refused");
+        assert!(err.to_string().contains("too long"), "{err}");
+    }
+
+    #[test]
+    fn sessions_for_ports_discovery_no_longer_finds_are_closed() {
+        let (psu, mut sessions) = scripted(Psu::default());
+        let t0 = Instant::now();
+        let tty = Path::new(TTY);
+        sessions.model(Path::new(SYS), tty, t0).unwrap();
+        sessions.retain(&[PathBuf::from(TTY)]);
+        assert_eq!(sessions.sessions.len(), 1);
+        sessions.retain(&[]);
+        assert!(sessions.sessions.is_empty());
+        // A device that later appears at the same number is asked its model.
+        sessions.model(Path::new(SYS), tty, t0).unwrap();
+        assert_eq!(psu.lock().unwrap().opens, 2);
     }
 
     #[test]
@@ -1096,8 +1239,8 @@ mod tests {
 
     #[test]
     fn a_port_another_process_has_locked_is_refused() {
-        // A holder that takes only the flock, as cpsumon-like tools may: no
-        // TIOCEXCL, so only the lock can refuse the open.
+        // A holder that takes only the flock, with no TIOCEXCL, so only the
+        // lock can refuse the open.
         let (_master, slave) = pty();
         let c = std::ffi::CString::new(slave.to_str().unwrap()).unwrap();
         // SAFETY: c is a valid path; the fd is owned below.
@@ -1108,6 +1251,35 @@ mod tests {
         assert_eq!(unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) }, 0);
         let err = SerialPort::open_exclusive(&slave).err().expect("refused");
         assert!(err.to_string().contains("locked"), "{err}");
+    }
+
+    #[test]
+    fn a_port_another_process_has_set_exclusive_is_refused() {
+        // A holder that sets TIOCEXCL and takes no lock. As non-root the open
+        // itself fails with EBUSY; as root (the packaged agent) it succeeds,
+        // and the TIOCGEXCL check refuses the port.
+        let (_master, slave) = pty();
+        let c = std::ffi::CString::new(slave.to_str().unwrap()).unwrap();
+        // SAFETY: c is a valid path; the fd is owned below.
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+        assert!(fd >= 0);
+        // SAFETY: fd was just opened.
+        let _holder = unsafe { OwnedFd::from_raw_fd(fd) };
+        assert_eq!(unsafe { libc::ioctl(fd, libc::TIOCEXCL) }, 0);
+        assert!(SerialPort::open_exclusive(&slave).is_err());
+    }
+
+    #[test]
+    fn a_claimed_port_is_marked_exclusive() {
+        let (_master, slave) = pty();
+        let port = SerialPort::open_exclusive(&slave).unwrap();
+        let mut excl: libc::c_int = 0;
+        // SAFETY: the fd is open; TIOCGEXCL writes one c_int.
+        assert_eq!(
+            unsafe { libc::ioctl(port.0.as_raw_fd(), libc::TIOCGEXCL, &mut excl) },
+            0
+        );
+        assert_eq!(excl, 1);
     }
 
     #[test]

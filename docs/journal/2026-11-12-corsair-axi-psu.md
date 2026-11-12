@@ -4,8 +4,9 @@ Status: implemented, tested on one AX1500i (hv02, Threadripper 1950X host).
 
 ## Goal
 
-Record wall power for hosts with a Corsair AXi PSU. RAPL reports package and
-DRAM power only; the PSU's `READ_PIN` is the whole machine at the wall. The
+Record wall power for hosts with a Corsair AXi PSU. RAPL measures CPU package,
+cores, GPU, DRAM and, on some Intel parts, the platform, not the machine at the
+wall; the PSU's `READ_PIN` is the whole machine at the wall. The
 kernel's `corsair-psu` hwmon driver covers HXi/RMi (USB IDs `1c03`–`1c27`), not
 the AXi line, whose Corsair Link dongle is a CP210x USB-serial bridge
 (`1b1c:1c02`) bound to `cp210x`.
@@ -21,11 +22,14 @@ AX1500i, committed as `src/agent/samplers/hw_sensors/linux/fixtures/corsair-axi-
 Findings from the captures:
 
 - Replies vary in length: the dongle's name reply is 90 bytes, a two-byte
-  register reply 6. The first capture read replies by expected length and lost
-  alignment after the name reply. Frames are read to their `0x00` terminator,
+  register reply 6. The load capture read replies by expected length and lost
+  alignment after the name reply. Reassembled into frames, it holds 734
+  replies for 735 requests; the missing one is the acknowledgement of the first
+  PAGE request. I don't know whether the capture lost it or the dongle sent
+  none. A missing reply fails the open, and discovery retries 60 s later. Frames are read to their `0x00` terminator,
   which cannot occur inside a frame (code bytes are `0x55`–`0xaa`).
-- `READ_VIN` × `READ_IIN` agrees with `READ_PIN` within 3.1% on all 65 polls
-  of the two captures, with `READ_PIN` from 184 W idle to 371 W under load.
+- `READ_VIN` × `READ_IIN` agrees with `READ_PIN` within 3.1% on each of the
+  65 polls in the two captures where all three replies decoded, with `READ_PIN` from 184 W idle to 371 W under load.
 - Register `0xee`, which `cpsumon` labels output power, read 0 on most polls
   of the load capture and 346–348 W on a few, while `READ_PIN` read a value on
   every poll. NO-GO: not published. Reopen
@@ -50,10 +54,18 @@ after a failed open, for readings; discovery retries on its own interval).
 
 The port is now opened with `TIOCEXCL` and a `flock`, and the tty is checked in
 sysfs to still be the dongle before each open, since `ttyUSBn` numbers are
-reassigned on replug. The PMBus page is reread before a reading at most once a
+reassigned on replug. A second review found that a root process can open a
+port another process has set `TIOCEXCL` on, and the packaged agent runs as
+root; the agent now reads `TIOCGEXCL` and the lock before changing the port's
+settings, so it refuses such a port without disturbing it. Discovery closes
+sessions for ports it no longer finds, and closing a port discards unsent
+output first (usb-serial otherwise waits up to 30 s for it to drain). Not
+handled: two dongles whose `ttyUSBn` numbers swap between rediscoveries; the
+sysfs check confirms the USB IDs, not which dongle, so readings can be
+published under the other PSU's identity for up to 60 s. The PMBus page is reread before a reading at most once a
 second, because another tool could change it (cpsumon's `read_psu_railmisc`
-leaves the PSU on page 2)
-between readings without breaking a session.
+leaves the PSU on page 2) between readings without breaking a session. A page
+other than 0 counts as a failed open, not as a failed register.
 
 On Linux, a tty in raw mode with VMIN 0 and `O_NONBLOCK` returns 0 from
 `read` when no byte is waiting, not `EAGAIN`; a hangup is visible only as

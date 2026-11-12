@@ -436,8 +436,8 @@ enabled = false
 # cooling state). Reads run on the blocking pool at most once per `interval`
 # (default 5s); Linux rediscovers sysfs capabilities every 60s, macOS finds
 # its sensors once at startup. No hardware controls are written: the Corsair
-# dongle is sent read requests and its setup command, and no PSU register is
-# written. The agent opens the dongle's tty for exclusive use and needs
+# dongle is sent read requests and a setup command whose effect is
+# undocumented, and no PSU register is written. The agent opens the dongle's tty for exclusive use and needs
 # read-write access to it; `corsair_axi = false` leaves it alone.
 # On Linux, missing permissions or unavailable channels appear as absent
 # values; on macOS, a sensor not found at startup has no series, and a later

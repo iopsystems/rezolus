@@ -1,7 +1,8 @@
 //! Linux thermal, hwmon and cooling-device discovery, and Corsair AXi PSUs.
 //!
 //! Discovery reads only identity and capability files, except that a Corsair
-//! AXi PSU is asked for its model (see [`super::corsair_axi`]). Values stay
+//! AXi PSU with no open session is asked for its model (see
+//! [`super::corsair_axi`]). Values stay
 //! behind [`Descriptor::read`] so callers can cache descriptors between
 //! discovery passes without coupling decoding to metric publication.
 
@@ -188,11 +189,13 @@ pub fn discover(sysfs: &Path, corsair_axi: bool) -> Discovery {
     discover_thermal(sysfs, &mut found);
     discover_cooling(sysfs, &mut found);
     discover_hwmon(sysfs, &board, &mut found);
+    let mut ttys = Vec::new();
     if corsair_axi {
-        discover_corsair_axi(sysfs, &mut found, &|tty: &Path| {
+        ttys = discover_corsair_axi(sysfs, &mut found, &|tty: &Path| {
             corsair_axi::model(sysfs, tty)
         });
     }
+    corsair_axi::retain(&ttys);
     for descriptor in &mut found.descriptors {
         descriptor.board_model.clone_from(&board.model);
         descriptor.soc_compatible.clone_from(&board.compatible);
@@ -672,14 +675,16 @@ const CORSAIR_AXI_CHANNELS: &[(Family, u8, &str, &str)] = &[
 /// Corsair AXi dongles by USB ID, each with its `ttyUSB` port. `probe` returns
 /// the PSU's model; a dongle whose PSU cannot be read (the port held by another
 /// process, no reply) is reported as a discovery error and gets no descriptors.
+/// Returns every dongle port found, read or not.
 pub(crate) fn discover_corsair_axi(
     sysfs: &Path,
     found: &mut Discovery,
     probe: &dyn Fn(&Path) -> io::Result<String>,
-) {
+) -> Vec<PathBuf> {
+    let mut ttys = Vec::new();
     let devices = sysfs.join("bus/usb/devices");
     let Ok(entries) = std::fs::read_dir(&devices) else {
-        return;
+        return ttys;
     };
     let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
@@ -705,6 +710,7 @@ pub(crate) fn discover_corsair_axi(
             ));
             continue;
         };
+        ttys.push(tty.clone());
         let model = match probe(&tty) {
             Ok(model) => model,
             Err(e) => {
@@ -734,6 +740,7 @@ pub(crate) fn discover_corsair_axi(
             );
         }
     }
+    ttys
 }
 
 /// `/dev/ttyUSBn` for a USB-serial device's first interface.

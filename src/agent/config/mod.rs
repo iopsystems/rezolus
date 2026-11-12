@@ -256,7 +256,7 @@ impl Config {
         warnings
     }
 
-    /// Whether `part` of the merged sampler `name` is on: its section's
+    /// Whether `part` of sampler `name` is on: its section's
     /// switch, else on. The sampler's own `enabled` gates every part.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn part(&self, name: &str, part: &str) -> bool {
