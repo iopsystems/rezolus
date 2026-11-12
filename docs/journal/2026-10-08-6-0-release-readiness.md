@@ -1,7 +1,7 @@
 # Rezolus 6.0.0: release readiness
 
-**Status: OPEN.** Plan opened 2026-10-08, updated 2026-11-09. `Cargo.toml` is
-at `6.0.0-alpha.136`; no `v6.*` tag exists and the latest release is v5.30.0.
+**Status: OPEN.** Plan opened 2026-10-08, updated 2026-11-12. `Cargo.toml` is
+at `6.0.0-alpha.139`; no `v6.*` tag exists and the latest release is v5.31.0.
 This entry lists what has to be true before 6.0.0 is tagged and in what order,
 and records the decisions taken on 2026-10-08, 2026-10-12, 2026-11-05 and
 2026-11-06. On 2026-10-12
@@ -11,7 +11,10 @@ to 7, the viewer move included. On 2026-11-05 and 2026-11-06 (decisions 8
 to 14) decision 7 was narrowed to what is merged, the 24-hour run and the
 release candidate were waived, several items were deferred, and 6.0.0 was
 made to wait for three Prometheus ingestion fixes and for systemslab to read
-and record `.dendro`. The parent issue is #1224.
+and record `.dendro`. On 2026-11-12 (decisions 15 to 17) Prometheus series
+became stored as the exporter serves them, replacing decision 13's renaming,
+an endpoint lost mid-run stopped changing `record`'s exit status, and the
+RPM upgrade fix joined the release. The parent issue is #1224.
 
 Related entries in other repositories, opened the same day:
 
@@ -124,7 +127,8 @@ Taken with the metriken-recorder design (metriken
    recorder. At startup the run exits 1 and writes nothing; mid-run that
    endpoint is refused, the rest are recorded and finalized, and the run
    exits 1 (`refuse_mid_run`, as today for an agent that cannot stream).
-   This replaces decision 1. rezolus's 5.x line does not adopt
+   Changed 2026-11-12 by decision 16: a mid-run refusal no longer changes
+   the exit status. This replaces decision 1. rezolus's 5.x line does not adopt
    `metriken-recorder`: it keeps its own recorder and dependencies, and its
    scrape paths keep recording every agent version.
 7. **Narrowed 2026-11-05 by decision 8.** It read: **6.0.0 ships after
@@ -210,6 +214,8 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
       series is matched against `__prometheus_name__` by metriken-query, so
       queries and KPI lists written with the original names keep working.
       Renaming after 6.0.0 would leave two sets of names in recordings.
+      Superseded 2026-11-12 by decision 15: series are stored under the
+      exporter's names, in the exporter's units.
     - A histogram's observations above its highest finite bucket written as
       an overflow counter, and `histogram_quantile` returning `+Inf` with
       the band `[top bound, +Inf)` for a quantile among them
@@ -230,7 +236,8 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
     `_seconds` or `_ms` reads nanoseconds in a new recording; a `_seconds`
     histogram's buckets were in nanoseconds already. The only Prometheus
     names with a unit in the shipped templates are 46 `_seconds` histogram
-    KPIs, which keep the original names.
+    KPIs, which keep the original names. Decision 15 replaced this
+    renaming before 6.0.0 was tagged, so no release stores renamed series.
 
     Per-endpoint intervals, label selectors in `recording filter`, repeated
     scrapes of interval aggregates and grouping power 3 for converted
@@ -248,6 +255,52 @@ Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
     `:466`), which 6.x refuses, and lab images install the `rezolus` package
     unpinned (`dockerfiles/scripts/install-rezolus.sh`), so a 6.0.0 package
     would leave newly built lab hosts recording nothing.
+
+    Status 2026-11-12: iopsystems/systemslab#6853 is merged. It reads
+    `.dendro` artifacts and records `.dendro` on rezolus 6.0 hosts. Its
+    reader comes from a rezolus git pin whose `rez` and `dashboard` crates
+    are on metriken-storage 0.5 and metriken-query 0.42, which cannot read
+    float kinds (metriken-storage 0.8) or decision 15's histogram scale
+    (metriken-query 0.50). The pin moves to a rezolus main commit in
+    systemslab; until then this criterion is not met.
+
+## Decisions (2026-11-12)
+
+15. **Prometheus series are stored as the exporter serves them**
+    (iopsystems/metriken#410; metriken-recorder 0.15, metriken-storage
+    0.13, metriken-query 0.50, metriken-charts 0.1.5; rezolus #1689). This
+    replaces decision 13's renaming, by the owner's decision to stop
+    rewriting metrics before 6.0.0 rather than after it. A series keeps the
+    exporter's name and values; its unit (from a `# UNIT` line or the
+    name's unit token) is written as the `unit` storage key. A histogram's
+    bounds are stored as integers times a `scale` key, which metriken-query
+    divides by, so a `_seconds` quantile reads seconds. The viewers' metric
+    catalogs list each series' `unit`, and the metric browser, a gauge or
+    histogram KPI over a bare selector, and `view --tui` scale by it, so the
+    46 `_seconds` histogram KPIs draw times from 5.x recordings
+    (nanoseconds, no `unit`) and 6.0 ones (seconds). `__prometheus_name__`
+    and the fallback are gone. A recording made by a 6.0 development build
+    with metriken-recorder 0.12 to 0.14 keeps its rewritten names
+    (`..._nanoseconds`) and is read by them. A comparison of a 5.x and a
+    6.0 recording of one `_seconds` histogram is off by 1e9, and the
+    CHANGELOG and the upgrade page say so.
+16. **An endpoint lost mid-run does not change `record`'s exit status**
+    (metriken-recorder 0.15, rezolus #1689), by the owner's decision: a run
+    that loses one endpoint must not fail a whole SystemsLab run. A refused
+    endpoint, or one whose rows cannot be recorded, stops alone and is
+    named at the end of the run. `record` exits 1 when the recording cannot
+    start, when the archive cannot be written or saved, or when nothing was
+    recorded. When no endpoint is left recording, a run with neither
+    `--duration` nor a wrapped command ends; the others run to their own
+    end. hindsight and the live viewer record one agent, so they stop on
+    a source failure as on a refusal.
+17. **The RPM upgrade fix ships with 6.0.0** (#1464, #1692). Every RPM
+    upgrade left `rezolus` and `rezolus-exporter` stopped and disabled,
+    because the outgoing package's `%preun` ran unguarded after the new
+    `%post`. 6.0.0's package restores the units' state in `%posttrans`,
+    which also repairs the upgrade from a 5.x package. Tested in an Amazon
+    Linux 2023 guest with a control that reproduced the bug. `release/5.x`
+    keeps the old scriptlets; a backport is not decided.
 
 ## Plan
 
@@ -568,10 +621,16 @@ reader.
 - Every caller listed under "Callers that ask `record` for parquet or `.rez`"
   records `.dendro`.
 - metriken path step 4 is released and rezolus is on it (decision 8).
-- The three Prometheus ingestion fixes of decision 13 are released in
-  metriken and rezolus is on them.
-- systemslab reads dendro schema 5 with decision 13's float kinds, and its
-  runner records `.dendro`, merged (decision 14).
+- The three Prometheus ingestion fixes of decision 13, with decision 15's
+  storage as served in place of its renaming, are released in metriken and
+  rezolus is on them. Done 2026-11-12 (#1689).
+- systemslab reads dendro schema 5 with decision 13's float kinds and
+  decision 15's histogram scale, and its runner records `.dendro`, merged
+  (decision 14). The runner and the `.dendro` reader are merged
+  (iopsystems/systemslab#6853); the reader's rezolus pin is not yet on
+  metriken-storage 0.13 and metriken-query 0.50.
+- An RPM upgrade keeps the units enabled and running (decision 17). Done
+  2026-11-12 (#1692).
 - hindsight says why it refuses an agent at startup and creates nothing
   first (found 2026-11-06, while writing the upgrade page).
 - `site/docs/usage.html`'s config example uses `alias =`, in the release PR
