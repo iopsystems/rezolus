@@ -111,6 +111,7 @@ pub use metriken_segment::table::{
 
 use std::collections::HashMap;
 
+#[cfg(feature = "write")]
 use crate::window::Window;
 
 type RezError = Box<dyn std::error::Error>;
@@ -600,6 +601,7 @@ pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
 // is gated on `write`; the reader never sees them.
 #[cfg(feature = "write")]
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
+#[cfg(feature = "write")]
 use tracing::warn;
 
 #[cfg(feature = "write")]
