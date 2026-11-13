@@ -1915,6 +1915,50 @@ takes about 300 ms, and the rest about 30 µs; its NIC's MAC temperature adds
 about 18 ms. About 2.8 ms of each sweep is CPU; the
 rest is the worker waiting.
 
+A Corsair AXi power supply is read through its Corsair Link USB dongle, USB ID
+`1b1c:1c02`, which the `cp210x` driver exposes as `/dev/ttyUSBn`. Only an
+AX1500i has been tested; another AXi model whose dongle has a different USB ID
+is not found. Each PSU publishes input power, input voltage and input current
+(the AC side, RMS), two temperatures and its fan speed, with
+`source=corsair_axi`, `chip` set to the model the PSU reports (`AX1500i`) and
+`device` the USB port (`1-13`). To leave the dongle alone:
+
+```toml
+[samplers.hw_sensors]
+corsair_axi = false
+```
+
+The agent needs read-write access to the tty. Before opening it, the agent
+checks in sysfs that the tty still belongs to a device with the dongle's USB
+ID. It refuses the port if another process has set `TIOCEXCL` on it or holds a
+`flock` on it, and otherwise locks it with `flock` before changing the port's
+settings. The dongle is sent read requests and a setup command whose effect is
+undocumented; no PSU register is written. The PSU's PMBus page is read when the
+port is opened and again before a reading at most once a second. A page other
+than 0 fails the port, and the agent does not switch it back, so the PSU's
+readings stay absent until the page is 0 again. `cpsumon` sets page 0 at the
+start of a readout and leaves page 2 at the end; no tool is known to leave it
+on 0, and whether a power cycle resets it is not known. A process that already
+has the port open without setting `TIOCEXCL` or taking a `flock`, such as
+CyberPower's `pwrstatd` probing serial ports for a UPS, takes the PSU's
+replies, and discovery reports an error (`no reply`, or a reply that does not
+decode).
+
+A reading does not reopen a port for 60 seconds after a failed open; discovery
+tries again every 60 seconds. A failed reading, including a lost reply to the
+page check, closes the port, and that register is not read for 1 second,
+doubling on each consecutive failure up to 60 seconds. The port is closed on a
+separate thread, because usb-serial's close can wait up to 30 seconds for
+output to drain. A reading waits up to 100 ms for a previous close to return;
+if it has not, readings of the port fail without waiting for the next second,
+so a close that is draining costs at most 100 ms per second, and the 60-second
+backoff does not apply. If discovery runs while that close is pending, the PSU
+has no series until the next discovery. On an AX1500i the six readings and the
+page check add about 35 ms to each sweep (two serial exchanges per register),
+and a discovery that opens the port 42–46 ms. On the tested AX1500i the fan
+reported 0 rpm up to 371 W input. Corsair HXi/RMi power supplies use other USB
+IDs and are read by the kernel's `corsair-psu` hwmon driver.
+
 `asusec` reports -40 °C for a temperature header with nothing connected.
 Such a channel gets no slot and is not read on each sweep; discovery reads it
 every 60 seconds and adds it once it reports another value.
@@ -1940,9 +1984,9 @@ each family supports at most 256 lifetime identities, reporting overflow.
 | Metric | Type | Stored unit / interpretation |
 | --- | --- | --- |
 | `sensor_temperature` | Gauge | Millidegrees Celsius per temperature channel; signed |
-| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading or checked INA3221 voltage × current |
-| `sensor_voltage` | Gauge | Millivolts per bus-voltage channel; excludes INA3221 shunt-voltage channels |
-| `sensor_current` | Gauge | Milliamps per current channel |
+| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading, checked INA3221 voltage × current, or Corsair AXi input power |
+| `sensor_voltage` | Gauge | Millivolts per bus-voltage channel, or Corsair AXi AC input (RMS); excludes INA3221 shunt-voltage channels |
+| `sensor_current` | Gauge | Milliamps per current channel, or Corsair AXi AC input (RMS) |
 | `sensor_fan_speed` | Gauge | Measured revolutions per minute, including NVIDIA `pwm_tach/rpm` |
 | `sensor_fan_pwm` | Gauge | Fan command on a 0–255 scale, not measured rotation |
 | `sensor_cooling_state` | Gauge | Driver-defined cooling-state index, not a throttling percentage |

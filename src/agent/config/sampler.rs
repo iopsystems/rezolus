@@ -61,9 +61,9 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     process_attribution: Option<bool>,
-    /// The parts of a sampler that merged several older ones, each on by
-    /// default (`syscall`: `counts`, `latency`; `blockio`: `requests`,
-    /// `latency`; `scheduler`: `runqueue`, `migrations`). See `Config::part`.
+    /// The parts of a sampler, each on by default (`syscall`: `counts`,
+    /// `latency`; `blockio`: `requests`, `latency`; `scheduler`: `runqueue`,
+    /// `migrations`; `hw_sensors`: `corsair_axi`). See `Config::part`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     counts: Option<bool>,
@@ -79,6 +79,9 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     migrations: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    corsair_axi: Option<bool>,
     /// Which slab caches `memory_slabinfo` publishes `memory_slab_cache_bytes`
     /// for: `"all"` (every cache in `/proc/slabinfo`, the default) or
     /// `"fixed"` (the filesystem metadata and page-cache index caches whose
@@ -147,10 +150,13 @@ impl Sampler {
         if self.migrations.is_some() {
             parts.push("migrations");
         }
+        if self.corsair_axi.is_some() {
+            parts.push("corsair_axi");
+        }
         parts
     }
 
-    /// The switch for one part of a merged sampler, if the section sets it.
+    /// The switch for one part of a sampler, if the section sets it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn part(&self, part: &str) -> Option<bool> {
         match part {
@@ -159,6 +165,7 @@ impl Sampler {
             "requests" => self.requests,
             "runqueue" => self.runqueue,
             "migrations" => self.migrations,
+            "corsair_axi" => self.corsair_axi,
             _ => None,
         }
     }

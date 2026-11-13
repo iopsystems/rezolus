@@ -72,7 +72,7 @@ fn materialize(inventory: Inventory) -> tempfile::TempDir {
 
 fn descriptors(family: Family) -> (tempfile::TempDir, Vec<super::discovery::Descriptor>) {
     let root = materialize_inventory();
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     assert!(found.errors.is_empty(), "{:?}", found.errors);
     let descriptors = found
         .descriptors
@@ -190,7 +190,7 @@ fn standard_channels_fan_rpm_pwm_and_cooling_state_are_read_from_files() {
     // Thermal-zone mode controls trip-point actions, not temperature validity.
     write(thermal.join("mode"), "disabled");
 
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     let read = |family| {
         found
             .descriptors
@@ -216,7 +216,7 @@ fn drive_hwmon_chips_are_left_to_drivehealth() {
         write(hwmon.join("name"), chip);
         write(hwmon.join("temp1_input"), "45000");
     }
-    let chips: Vec<_> = discover(root.path())
+    let chips: Vec<_> = discover(root.path(), false)
         .descriptors
         .into_iter()
         .map(|d| d.chip)
@@ -232,7 +232,7 @@ fn acpi_processor_cooling_devices_are_not_read() {
         write(cooling.join("type"), kind);
         write(cooling.join("cur_state"), "0");
     }
-    let chips: Vec<_> = discover(root.path())
+    let chips: Vec<_> = discover(root.path(), false)
         .descriptors
         .into_iter()
         .map(|d| d.chip)
@@ -259,7 +259,7 @@ fn asusec_empty_temperature_headers_are_not_read() {
     write(other.join("name"), "generic");
     write(other.join("temp1_input"), "-40000");
     write(other.join("temp1_label"), "outdoor");
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     let channels: Vec<_> = found
         .descriptors
         .iter()
@@ -300,7 +300,7 @@ fn names_are_chip_label_or_channel_and_short_device() {
     let cooling = root.path().join("class/thermal/cooling_device0");
     write(cooling.join("type"), "pwm-fan");
     write(cooling.join("cur_state"), "1");
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     let names: Vec<_> = found
         .descriptors
         .iter()
@@ -335,7 +335,7 @@ fn names_are_chip_label_or_channel_and_short_device() {
 #[test]
 fn thor_fixture_names_are_unique_within_each_family() {
     let root = materialize_inventory();
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     let mut seen = std::collections::HashSet::new();
     for d in &found.descriptors {
         assert!(
@@ -369,7 +369,7 @@ fn disabled_faulted_missing_and_malformed_inputs_are_absent_not_zero() {
             ("pwm1", "256"),
         ],
     );
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     let mut temps: Vec<_> = found
         .descriptors
         .iter()
@@ -411,7 +411,7 @@ fn synthetic_orin_layout_remains_generic_without_thor_scope() {
     std::fs::create_dir_all(link.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(&hwmon, link).unwrap();
 
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     let power = found
         .descriptors
         .iter()
@@ -433,9 +433,9 @@ fn synthetic_orin_layout_remains_generic_without_thor_scope() {
 #[test]
 fn board_context_does_not_expand_sensor_identity() {
     let root = materialize_inventory();
-    let before = discover(root.path()).descriptors;
+    let before = discover(root.path(), false).descriptors;
     std::fs::remove_dir_all(root.path().join("firmware")).unwrap();
-    let after = discover(root.path()).descriptors;
+    let after = discover(root.path(), false).descriptors;
     // Scope remains part of identity; compare channels without board-specific scope.
     for descriptor in before.iter().filter(|d| d.scope.is_none()) {
         assert!(after.iter().any(|d| d.sensor == descriptor.sensor));
@@ -482,7 +482,7 @@ fn inventory_accepts_missing_platform_and_unreadable_attributes() {
     }))
     .unwrap();
     let root = materialize(inventory);
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     assert!(found.errors.is_empty());
     assert_eq!(found.descriptors.len(), 1);
     assert_eq!(found.descriptors[0].read().unwrap(), 42_000);
@@ -525,7 +525,7 @@ fn thermal_and_cooling_required_metadata_errors_are_reported() {
     let cooling = root.path().join("class/thermal/cooling_device0");
     write(cooling.join("cur_state"), "1");
 
-    let found = discover(root.path());
+    let found = discover(root.path(), false);
     assert_eq!(found.descriptors.len(), 0);
     assert_eq!(found.errors.len(), 2, "both required type failures surface");
     assert!(found
@@ -539,7 +539,7 @@ fn thermal_and_cooling_required_metadata_errors_are_reported() {
 }
 
 fn family_descriptors(root: &Path, family: Family) -> Vec<super::discovery::Descriptor> {
-    discover(root)
+    discover(root, false)
         .descriptors
         .into_iter()
         .filter(|d| d.family == family)
@@ -703,7 +703,7 @@ async fn refresh_dispatches_one_background_sweep_and_respects_both_guards() {
     let root = tempfile::tempdir().unwrap();
     let hwmon = make_hwmon(root.path(), "generic", &[("temp1_input", "42000")]);
     let _ = super::metric(Family::Temperature).set(0, i64::MIN);
-    let sampler = super::HwSensors::new(Duration::from_secs(60), root.path().to_path_buf());
+    let sampler = super::HwSensors::new(Duration::from_secs(60), root.path().to_path_buf(), false);
     assert_eq!(super::stats::SENSOR_TEMPERATURE_ACQ.member_bound(), Some(0));
     assert_eq!(super::metric(Family::Temperature).value(0), None);
 
@@ -729,4 +729,129 @@ async fn refresh_dispatches_one_background_sweep_and_respects_both_guards() {
     sampler.refresh().await;
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(super::metric(Family::Temperature).value(0), Some(42_000));
+}
+
+// --- Corsair AXi PSUs ---
+
+/// A sysfs tree with a USB device `name` of the given IDs, and optionally a
+/// `ttyUSB0` under its first interface.
+fn usb_tree(root: &Path, name: &str, vendor: &str, product: &str, tty: bool) {
+    let node = root
+        .join("devices/pci0000:00/0000:00:01.1/0000:01:00.0/usb1")
+        .join(name);
+    write(node.join("idVendor"), format!("{vendor}\n"));
+    write(node.join("idProduct"), format!("{product}\n"));
+    write(node.join("product"), "Corsair Link TM USB Dongle\n");
+    if tty {
+        std::fs::create_dir_all(node.join(format!("{name}:1.0/ttyUSB0"))).unwrap();
+    } else {
+        std::fs::create_dir_all(node.join(format!("{name}:1.0"))).unwrap();
+    }
+    let link = root.join("bus/usb/devices").join(name);
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&node, &link).unwrap();
+}
+
+#[test]
+fn corsair_axi_dongle_gets_one_descriptor_per_published_register() {
+    let root = tempfile::tempdir().unwrap();
+    usb_tree(root.path(), "1-13", "1b1c", "1c02", true);
+    // Not a Corsair device.
+    usb_tree(root.path(), "1-7", "8087", "0029", false);
+    // A Corsair RM650i: the kernel's corsair-psu hwmon driver reads it; it
+    // must not be probed here.
+    usb_tree(root.path(), "1-8", "1b1c", "1c0a", true);
+    let mut found = super::discovery::Discovery::default();
+    let probed = std::cell::RefCell::new(Vec::new());
+    super::discovery::discover_corsair_axi(root.path(), &mut found, &|tty: &Path| {
+        probed.borrow_mut().push(tty.to_path_buf());
+        Ok("AX1500i".to_string())
+    });
+    assert!(found.errors.is_empty(), "{:?}", found.errors);
+    assert_eq!(*probed.borrow(), [PathBuf::from("/dev/ttyUSB0")]);
+    let got: Vec<(Family, &str, &str)> = found
+        .descriptors
+        .iter()
+        .map(|d| (d.family, d.channel.as_str(), d.label.as_deref().unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (Family::Power, "pin", "input power"),
+            (Family::Voltage, "vin", "input voltage"),
+            (Family::Current, "iin", "input current"),
+            (Family::Temperature, "temp1", "temperature 1"),
+            (Family::Temperature, "temp2", "temperature 2"),
+            (Family::FanSpeed, "fan1", "fan"),
+        ]
+    );
+    let power = &found.descriptors[0];
+    assert_eq!(power.source, "corsair_axi");
+    assert_eq!(power.chip, "AX1500i");
+    assert_eq!(power.device, "1-13");
+    assert_eq!(power.name, "AX1500i input power 1-13");
+    assert_eq!(
+        power.sensor,
+        "corsair_axi:/devices/pci0000:00/0000:00:01.1/0000:01:00.0/usb1/1-13:AX1500i:pin:label=input power"
+    );
+}
+
+#[test]
+fn a_corsair_axi_dongle_that_cannot_be_read_is_an_error_without_descriptors() {
+    let root = tempfile::tempdir().unwrap();
+    usb_tree(root.path(), "1-13", "1b1c", "1c02", true);
+    let mut found = super::discovery::Discovery::default();
+    super::discovery::discover_corsair_axi(root.path(), &mut found, &|_: &Path| {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "corsair_axi: no reply",
+        ))
+    });
+    assert!(found.descriptors.is_empty());
+    assert_eq!(found.errors.len(), 1);
+    assert!(
+        found.errors[0].contains("1-13") && found.errors[0].contains("no reply"),
+        "{:?}",
+        found.errors
+    );
+
+    // No ttyUSB port: cp210x not bound.
+    let root = tempfile::tempdir().unwrap();
+    usb_tree(root.path(), "1-13", "1b1c", "1c02", false);
+    let mut found = super::discovery::Discovery::default();
+    super::discovery::discover_corsair_axi(root.path(), &mut found, &|_: &Path| {
+        panic!("no port to probe")
+    });
+    assert!(found.descriptors.is_empty());
+    assert!(found.errors[0].contains("no ttyUSB"), "{:?}", found.errors);
+}
+
+#[test]
+fn corsair_axi_readings_are_published_in_each_familys_unit() {
+    use super::discovery::corsair_axi_value as v;
+    assert_eq!(v(Family::Power, 187.0).unwrap(), 187_000_000); // µW
+    assert_eq!(v(Family::Voltage, 244.5).unwrap(), 244_500); // mV
+    assert_eq!(v(Family::Current, 0.766).unwrap(), 766); // mA
+    assert_eq!(v(Family::Temperature, 42.25).unwrap(), 42_250); // m°C
+    assert_eq!(v(Family::FanSpeed, 0.0).unwrap(), 0); // rpm
+    assert!(v(Family::FanPwm, 1.0).is_err());
+    assert!(v(Family::Power, f64::NAN).is_err());
+}
+
+#[test]
+fn discover_probes_a_dongle_only_with_corsair_axi_on_and_checks_the_tty_first() {
+    // The tree has the dongle but no class/tty entry for its port, so the real
+    // probe refuses before opening anything: the test never touches /dev.
+    let root = tempfile::tempdir().unwrap();
+    usb_tree(root.path(), "1-13", "1b1c", "1c02", true);
+    let found = discover(root.path(), false);
+    assert!(found.errors.is_empty(), "{:?}", found.errors);
+    let found = discover(root.path(), true);
+    assert!(found.descriptors.is_empty());
+    assert_eq!(found.errors.len(), 1, "{:?}", found.errors);
+    assert!(
+        found.errors[0].contains("no longer a Corsair Link dongle"),
+        "{:?}",
+        found.errors
+    );
 }

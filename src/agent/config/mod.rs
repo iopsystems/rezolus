@@ -29,6 +29,10 @@ fn enabled() -> bool {
 /// (e.g. via an absent/commented config) unacceptable.
 const OPT_IN_SAMPLERS: &[&str] = &["ext4_ops", "gpu_amd_pmu", "memory_pagecache", "xfs_log"];
 
+/// Parts of samplers that were not merged from older ones, each on by default:
+/// a source the sampler can leave out.
+const SAMPLER_PARTS: &[(&str, &[&str])] = &[("hw_sensors", &["corsair_axi"])];
+
 /// An old sampler, the part of the merged sampler it became, and whether it
 /// had a per-cgroup path (so its `cgroup_attribution` carries over).
 type MergedPart = (&'static str, &'static str, bool);
@@ -229,6 +233,12 @@ impl Config {
                 .iter()
                 .find(|(merged, _)| merged == name)
                 .map(|(_, parts)| parts.iter().map(|(_, part, _)| *part).collect())
+                .or_else(|| {
+                    SAMPLER_PARTS
+                        .iter()
+                        .find(|(sampler, _)| sampler == name)
+                        .map(|(_, parts)| parts.to_vec())
+                })
                 .unwrap_or_default();
             for part in self.samplers[name].parts_set() {
                 if !valid.contains(&part) {
@@ -246,7 +256,7 @@ impl Config {
         warnings
     }
 
-    /// Whether `part` of the merged sampler `name` is on: its section's
+    /// Whether `part` of sampler `name` is on: its section's
     /// switch, else on. The sampler's own `enabled` gates every part.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn part(&self, name: &str, part: &str) -> bool {
@@ -754,6 +764,19 @@ mod tests {
         assert!(!c.enabled("hw_sensors"));
         let c = config("[defaults]\nenabled = false\n");
         assert!(!c.enabled("hw_sensors"));
+    }
+
+    #[test]
+    fn hw_sensors_reads_corsair_axi_unless_turned_off() {
+        let c = config("");
+        assert!(c.part("hw_sensors", "corsair_axi"));
+        let c = config("[samplers.hw_sensors]\ncorsair_axi = false\n");
+        assert!(c.enabled("hw_sensors"));
+        assert!(!c.part("hw_sensors", "corsair_axi"));
+        assert!(c.unknown_names().is_empty(), "{:?}", c.unknown_names());
+        let c = config("[samplers.cpu_usage]\ncorsair_axi = false\n");
+        let w = c.unknown_names();
+        assert!(w.len() == 1 && w[0].contains("corsair_axi"), "{w:?}");
     }
 
     #[test]

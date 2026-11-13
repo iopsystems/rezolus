@@ -429,12 +429,16 @@ enabled = false
 # migrations = false           # drop the CPU migration counts
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
-# Read-only hardware sensor telemetry: temperatures, power, bus voltage/current,
-# fan RPM/PWM and cooling state. On Linux it reads thermal, hwmon and
-# cooling-device sysfs; on macOS, HID temperature services and the SMC (no
-# PWM or cooling state). Reads run on the blocking pool at most once per
-# `interval` (default 5s); Linux rediscovers sysfs capabilities every 60s,
-# macOS finds its sensors once at startup. No hardware controls are written.
+# Hardware sensor telemetry: temperatures, power, voltage/current, fan RPM/PWM
+# and cooling state. On Linux it reads thermal, hwmon and cooling-device sysfs,
+# and Corsair AXi power supplies through the Corsair Link USB dongle
+# (`/dev/ttyUSBn`); on macOS, HID temperature services and the SMC (no PWM or
+# cooling state). Reads run on the blocking pool at most once per `interval`
+# (default 5s); Linux rediscovers sysfs capabilities every 60s, macOS finds
+# its sensors once at startup. No sysfs control or PSU register is written;
+# the Corsair dongle is sent read requests and a setup command whose effect
+# is undocumented. The agent locks the dongle's tty (`flock`) while it uses
+# it and needs read-write access to it; `corsair_axi = false` leaves it alone.
 # On Linux, missing permissions or unavailable channels appear as absent
 # values; on macOS, a sensor not found at startup has no series, and a later
 # failed read is absent. On Linux, drive temperatures
@@ -443,6 +447,7 @@ enabled = false
 [samplers.hw_sensors]
 # enabled = false
 # interval = "5s"
+# corsair_axi = false
 
 # macOS only: the thermal pressure level the operating system reports to
 # applications (0 nominal to 4 sleeping). Each refresh checks shared memory

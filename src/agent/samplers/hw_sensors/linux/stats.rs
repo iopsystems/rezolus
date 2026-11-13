@@ -55,35 +55,35 @@ acquisition_group!(
 
 #[metric(
     name = "sensor_temperature",
-    description = "A temperature reading in millidegrees Celsius, from a Linux thermal zone or hwmon channel, or a macOS HID temperature service. Distinct native sources may describe the same physical component and are intentionally not deduplicated.",
+    description = "A temperature reading in millidegrees Celsius, from a Linux thermal zone or hwmon channel, a Corsair AXi power supply, or a macOS HID temperature service. Distinct native sources may describe the same physical component and are intentionally not deduplicated.",
     metadata = { unit = "millidegrees Celsius", acq_group = "hw_sensors_temperature" }
 )]
 pub static SENSOR_TEMPERATURE: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_power",
-    description = "A power reading in microwatts, from a Linux hwmon channel or a macOS SMC key. INA3221 values are derived from sequential bus-voltage and current reads and carry derived=voltage_x_current metadata.",
+    description = "A power reading in microwatts, from a Linux hwmon channel, a Corsair AXi power supply's input power, or a macOS SMC key. INA3221 values are derived from sequential bus-voltage and current reads and carry derived=voltage_x_current metadata.",
     metadata = { unit = "microwatts", acq_group = "hw_sensors_power" }
 )]
 pub static SENSOR_POWER: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_voltage",
-    description = "A bus-voltage reading in millivolts, from a Linux hwmon channel or a macOS SMC key. Driver-specific shunt and summation channels are excluded.",
+    description = "A bus-voltage reading in millivolts, from a Linux hwmon channel, a Corsair AXi power supply's AC input voltage (RMS), or a macOS SMC key. Driver-specific shunt and summation channels are excluded.",
     metadata = { unit = "millivolts", acq_group = "hw_sensors_voltage" }
 )]
 pub static SENSOR_VOLTAGE: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_current",
-    description = "A current reading in milliamps, from a Linux hwmon channel or a macOS SMC key. Driver-specific summation channels are excluded.",
+    description = "A current reading in milliamps, from a Linux hwmon channel, a Corsair AXi power supply's AC input current (RMS), or a macOS SMC key. Driver-specific summation channels are excluded.",
     metadata = { unit = "milliamps", acq_group = "hw_sensors_current" }
 )]
 pub static SENSOR_CURRENT: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_fan_speed",
-    description = "A fan tachometer reading in revolutions per minute, from a Linux hwmon channel or a macOS SMC key.",
+    description = "A fan tachometer reading in revolutions per minute, from a Linux hwmon channel, a Corsair AXi power supply, or a macOS SMC key.",
     metadata = { unit = "RPM", acq_group = "hw_sensors_fan_speed" }
 )]
 pub static SENSOR_FAN_SPEED: GaugeGroup = GaugeGroup::new(MAX_SENSORS);

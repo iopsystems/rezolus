@@ -1,9 +1,12 @@
-//! Linux thermal, hwmon and cooling-device discovery.
+//! Linux thermal, hwmon and cooling-device discovery, and Corsair AXi PSUs.
 //!
-//! Discovery reads only identity and capability files. Values stay behind
-//! [`Descriptor::read`] so callers can cache descriptors between discovery
-//! passes without coupling sysfs decoding to metric publication.
+//! Discovery reads only identity and capability files, except that a Corsair
+//! AXi PSU with no open session is asked for its model (see
+//! [`super::corsair_axi`]). Values stay
+//! behind [`Descriptor::read`] so callers can cache descriptors between
+//! discovery passes without coupling decoding to metric publication.
 
+use super::corsair_axi;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -74,6 +77,12 @@ pub struct Descriptor {
 pub(crate) enum Input {
     Direct(ReadSpec),
     Product(ReadSpec, ReadSpec),
+    /// A PMBus register of a Corsair AXi PSU behind the USB dongle on `tty`.
+    CorsairAxi {
+        sysfs: PathBuf,
+        tty: PathBuf,
+        register: u8,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -134,6 +143,11 @@ impl Descriptor {
                         io::ErrorKind::InvalidData,
                         "derived power overflow",
                     )),
+                Input::CorsairAxi {
+                    sysfs,
+                    tty,
+                    register,
+                } => corsair_axi_value(self.family, corsair_axi::read(sysfs, tty, *register)?),
             }?;
         if self.family == Family::FanPwm && !(0..=255).contains(&value) {
             return Err(io::Error::new(
@@ -145,12 +159,43 @@ impl Descriptor {
     }
 }
 
-pub fn discover(sysfs: &Path) -> Discovery {
+/// A PMBus reading (W, V, A, °C, rpm) in the family's published unit.
+pub(crate) fn corsair_axi_value(family: Family, value: f64) -> io::Result<i64> {
+    let scale = match family {
+        Family::Power => 1e6,
+        Family::Voltage | Family::Current | Family::Temperature => 1e3,
+        Family::FanSpeed => 1.0,
+        Family::FanPwm | Family::CoolingState => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "corsair_axi publishes no such family",
+            ))
+        }
+    };
+    let scaled = (value * scale).round();
+    if !scaled.is_finite() || scaled.abs() > i64::MAX as f64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "corsair_axi value out of range",
+        ));
+    }
+    Ok(scaled as i64)
+}
+
+/// Every sensor under `sysfs`, and each Corsair AXi PSU when `corsair_axi`.
+pub fn discover(sysfs: &Path, corsair_axi: bool) -> Discovery {
     let mut found = Discovery::default();
     let board = Board::read(sysfs);
     discover_thermal(sysfs, &mut found);
     discover_cooling(sysfs, &mut found);
     discover_hwmon(sysfs, &board, &mut found);
+    let mut ttys = Vec::new();
+    if corsair_axi {
+        ttys = discover_corsair_axi(sysfs, &mut found, &|tty: &Path| {
+            corsair_axi::model(sysfs, tty)
+        });
+    }
+    corsair_axi::retain(&ttys);
     for descriptor in &mut found.descriptors {
         descriptor.board_model.clone_from(&board.model);
         descriptor.soc_compatible.clone_from(&board.compatible);
@@ -589,6 +634,126 @@ fn disconnected(label: Option<&str>) -> bool {
             "nc" | "n/c" | "not connected" | "unconnected"
         )
     })
+}
+
+/// The registers published for each Corsair AXi PSU: family, register,
+/// channel, label.
+const CORSAIR_AXI_CHANNELS: &[(Family, u8, &str, &str)] = &[
+    (Family::Power, corsair_axi::READ_PIN, "pin", "input power"),
+    (
+        Family::Voltage,
+        corsair_axi::READ_VIN,
+        "vin",
+        "input voltage",
+    ),
+    (
+        Family::Current,
+        corsair_axi::READ_IIN,
+        "iin",
+        "input current",
+    ),
+    (
+        Family::Temperature,
+        corsair_axi::READ_TEMPERATURE_1,
+        "temp1",
+        "temperature 1",
+    ),
+    (
+        Family::Temperature,
+        corsair_axi::READ_TEMPERATURE_2,
+        "temp2",
+        "temperature 2",
+    ),
+    (
+        Family::FanSpeed,
+        corsair_axi::READ_FAN_SPEED_1,
+        "fan1",
+        "fan",
+    ),
+];
+
+/// Corsair AXi dongles by USB ID, each with its `ttyUSB` port. `probe` returns
+/// the PSU's model; a dongle whose PSU cannot be read (the port held by another
+/// process, no reply) is reported as a discovery error and gets no descriptors.
+/// Returns every dongle port found, read or not.
+pub(crate) fn discover_corsair_axi(
+    sysfs: &Path,
+    found: &mut Discovery,
+    probe: &dyn Fn(&Path) -> io::Result<String>,
+) -> Vec<PathBuf> {
+    let mut ttys = Vec::new();
+    let devices = sysfs.join("bus/usb/devices");
+    let Ok(entries) = std::fs::read_dir(&devices) else {
+        return ttys;
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| !name.contains(':'))
+        .collect();
+    names.sort();
+    for name in names {
+        let node = devices.join(&name);
+        let id = |file: &str| read_text(&node.join(file)).ok();
+        let (Some(vendor), Some(product)) = (id("idVendor"), id("idProduct")) else {
+            continue;
+        };
+        if !corsair_axi::USB_IDS
+            .iter()
+            .any(|(v, p)| *v == vendor && *p == product)
+        {
+            continue;
+        }
+        let Some(tty) = usb_tty(&node, &name) else {
+            found.errors.push(format!(
+                "corsair_axi {name}: no ttyUSB port (is cp210x loaded?)"
+            ));
+            continue;
+        };
+        ttys.push(tty.clone());
+        let model = match probe(&tty) {
+            Ok(model) => model,
+            Err(e) => {
+                found
+                    .errors
+                    .push(format!("corsair_axi {name} ({}): {e}", tty.display()));
+                continue;
+            }
+        };
+        let device = device_identity(sysfs, &node, false);
+        for &(family, register, channel, label) in CORSAIR_AXI_CHANNELS {
+            add_with_device(
+                found,
+                &device,
+                family,
+                "corsair_axi",
+                &model,
+                channel,
+                Some(label.to_string()),
+                None,
+                false,
+                Input::CorsairAxi {
+                    sysfs: sysfs.to_path_buf(),
+                    tty: tty.clone(),
+                    register,
+                },
+            );
+        }
+    }
+    ttys
+}
+
+/// `/dev/ttyUSBn` for a USB-serial device's first interface.
+fn usb_tty(node: &Path, name: &str) -> Option<PathBuf> {
+    let interface = node.join(format!("{name}:1.0"));
+    let mut ttys: Vec<String> = std::fs::read_dir(interface)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("ttyUSB"))
+        .collect();
+    ttys.sort();
+    ttys.first().map(|t| PathBuf::from("/dev").join(t))
 }
 
 #[allow(clippy::too_many_arguments)]

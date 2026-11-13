@@ -1,7 +1,11 @@
-//! Read-only Linux hardware sensors from thermal, hwmon and cooling sysfs.
+//! Linux hardware sensors from thermal, hwmon and cooling sysfs, and Corsair
+//! AXi power supplies over their USB-serial dongle.
 //!
 //! These gauges have no BPF or perf-event source, so this is a deliberate
-//! principle-15 sysfs exception. Discovery is cached for 60 seconds and value
+//! principle-15 sysfs exception. The sysfs reads are read-only; a Corsair AXi
+//! dongle is sent read requests and its setup command, and no PSU register is
+//! written (see [`corsair_axi`]). `corsair_axi = false` leaves the dongle
+//! alone. Discovery is cached for 60 seconds and value
 //! reads run family-major on a configurable cadence (5 seconds by default), in
 //! one nonoverlapping `spawn_blocking` worker as required by principle 17.
 //! `refresh()` only checks the throttle and dispatches that worker.
@@ -13,6 +17,7 @@
 //! membership event. Lifetime slots and their metadata are never reused or
 //! relabeled, including after removal and rediscovery.
 
+mod corsair_axi;
 mod discovery;
 mod stats;
 
@@ -42,6 +47,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     Ok(Some(Box::new(HwSensors::new(
         interval,
         PathBuf::from(SYSFS),
+        config.part(NAME, "corsair_axi"),
     ))))
 }
 
@@ -359,11 +365,11 @@ fn report_reads(last: &mut Option<ReadHealth>, current: ReadHealth) {
     *last = Some(current);
 }
 
-fn sweep(state: &mut SweepState, sysfs: &Path) {
+fn sweep(state: &mut SweepState, sysfs: &Path, corsair_axi: bool) {
     let now = Instant::now();
     if state.rediscovery.due(now, REDISCOVERY_INTERVAL) {
         let started = Instant::now();
-        let found = discovery::discover(sysfs);
+        let found = discovery::discover(sysfs, corsair_axi);
         let descriptor_count = found.descriptors.len();
         let mut by_family: [Vec<Descriptor>; 7] = std::array::from_fn(|_| Vec::new());
         for descriptor in found.descriptors {
@@ -415,10 +421,11 @@ struct HwSensors {
     stuck_warned: AtomicBool,
     state: Arc<Mutex<SweepState>>,
     sysfs: PathBuf,
+    corsair_axi: bool,
 }
 
 impl HwSensors {
-    fn new(interval: Duration, sysfs: PathBuf) -> Self {
+    fn new(interval: Duration, sysfs: PathBuf, corsair_axi: bool) -> Self {
         // Initialization performs no device reads; the first blocking sweep
         // discovers and reads. Until it lands every family is explicitly empty.
         for family in Family::ALL {
@@ -432,6 +439,7 @@ impl HwSensors {
             stuck_warned: AtomicBool::new(false),
             state: Arc::new(Mutex::new(SweepState::new())),
             sysfs,
+            corsair_axi,
         }
     }
 
@@ -485,9 +493,10 @@ impl Sampler for HwSensors {
         let reading = self.reading.clone();
         let state = self.state.clone();
         let sysfs = self.sysfs.clone();
+        let corsair_axi = self.corsair_axi;
         tokio::task::spawn_blocking(move || {
             let _in_flight = InFlight(reading);
-            sweep(&mut lock_state(&state), &sysfs);
+            sweep(&mut lock_state(&state), &sysfs, corsair_axi);
         });
     }
 }

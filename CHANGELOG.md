@@ -27,6 +27,19 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **Corsair AXi power supplies.** On Linux, `hw_sensors` reads a Corsair AXi
+  PSU through its Corsair Link USB dongle (USB ID `1b1c:1c02`, the `cp210x`
+  driver's `/dev/ttyUSBn`; tested on an AX1500i): input power, voltage and
+  current as `sensor_power`, `sensor_voltage` and `sensor_current`, two
+  `sensor_temperature` channels and `sensor_fan_speed`, with
+  `source=corsair_axi` and `chip` the PSU's model. Input power is the machine's
+  draw at the wall. On a host with that dongle the
+  agent now locks its tty and sends it read requests;
+  `[samplers.hw_sensors] corsair_axi = false` leaves it alone. On an AX1500i
+  the readings add about 35 ms to each sweep, on the blocking worker. A
+  process that already has the port open, such as CyberPower's `pwrstatd`,
+  takes the replies, and discovery reports an error.
+
 - **AWS EFA counters.** `network_efa` publishes each Elastic Fabric Adapter
   port's traffic, RDMA, retransmit and error counters
   (`ports/<n>/hw_counters`) and each device's admin command and verbs setup
