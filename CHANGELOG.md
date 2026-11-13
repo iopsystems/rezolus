@@ -145,6 +145,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   networking, plus `awdl0`, `llw0` and `ap1` on the wifi radio; not
   loopback, bridges, tunnels or VM interfaces), so the network dashboard's
   traffic charts and the overview's network chart draw on a Mac.
+- **Interface errors and drops on macOS.** `network_traffic` sets
+  `network_interface_errors` (`ifi_ierrors`, `ifi_oerrors`) and
+  `network_interface_drops` (`ifi_iqdrops`, `ifmd_snd_drops`), by direction,
+  summed over every interface, loopback included, except those under
+  `IOResources` (VM `vmenet` interfaces), whose `ifi_iqdrops` on macOS 26.6
+  grows in steps of about 0xAAAAAAAA that are not drops. The network
+  dashboard's Errors group plots them.
 - **TCP counters on macOS.** `tcp_mib`, `tcp_retransmit` and `tcp_traffic`
   now run on macOS, from the `net.inet.tcp.stats` sysctl, and set
   `tcp_retransmit`, `tcp_segments_retransmitted`, `tcp_delayed_acks`,

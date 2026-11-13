@@ -136,6 +136,68 @@
               ]
             }
           ]
+        },
+        {
+          "when": {
+            "any": [
+              {
+                "present": "network_interface_errors"
+              },
+              {
+                "present": "network_interface_drops"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "Interface Errors & Drops",
+              "description": "Errors and queue drops the network interfaces report, summed over every interface, loopback included, except the software interfaces under IOResources (the vmenet interfaces of virtual machines). macOS only.",
+              "plots": [
+                {
+                  "when": {
+                    "present": "network_interface_errors"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Interface Errors Receive",
+                      "id": "interface-errors-rx",
+                      "unit": "rate",
+                      "query": "sum(irate(network_interface_errors{direction=\"receive\"}[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "Interface Errors Transmit",
+                      "id": "interface-errors-tx",
+                      "unit": "rate",
+                      "query": "sum(irate(network_interface_errors{direction=\"transmit\"}[5m]))"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "network_interface_drops"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Interface Drops Receive",
+                      "id": "interface-drops-rx",
+                      "unit": "rate",
+                      "query": "sum(irate(network_interface_drops{direction=\"receive\"}[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "Interface Drops Transmit",
+                      "id": "interface-drops-tx",
+                      "unit": "rate",
+                      "query": "sum(irate(network_interface_drops{direction=\"transmit\"}[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ]
     },

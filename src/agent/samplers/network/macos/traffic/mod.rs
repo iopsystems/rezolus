@@ -15,12 +15,29 @@
 //! delegated to a wifi interface) and the `vmenet` interfaces of virtual
 //! machines (`IOUserEthernetInterface` under `IOResources`).
 //!
+//! `network_interface_errors` and `network_interface_drops` sum the input and
+//! output errors (`ifi_ierrors`, `ifi_oerrors`), the input queue drops
+//! (`ifi_iqdrops`) and the send queue drops (`ifmd_snd_drops`) of every
+//! interface except those under `IOResources`. On macOS 26.6 a `vmenet`
+//! interface's `ifi_iqdrops` grows in steps of about 0xAAAAAAAA that are not
+//! drops, so the errors and drops of every interface under `IOResources` are
+//! left out.
+//!
+//! An interface in neither the hardware-backed nor the `IOResources` set
+//! when first listed (`lo0`, bridges, `utun`, or an interface `if_nameindex`
+//! lists before the I/O registry does) is classified again on the first read
+//! at least `SETTLE` later, and on each read after that until a
+//! classification succeeds. Its errors and drops are held until then:
+//! discarded if it is found under `IOResources` or goes away first, added to
+//! the sums otherwise. One found hardware-backed then is in the host sums
+//! from that read on.
+//!
 //! The counters start at zero when the sampler starts and add each
 //! interface's increase since the previous read. An interface first listed
-//! after the sampler started adds its whole count, since it was created
-//! after the previous read. What an interface added stays in the sums after
-//! it goes away; its traffic after the last read before it went away is not
-//! counted.
+//! after the sampler started adds its whole count, since it was created after
+//! the previous read; if it is in neither set, its errors and drops are held
+//! as above. What an interface added stays in the sums after it goes away;
+//! its traffic after the last read before it went away is not counted.
 //!
 //! The same counters from `NET_RT_IFLIST2`, the routing sysctl, give bytes
 //! rounded down to 1 KiB and truncated to 32 bits to a process that is not an
@@ -35,10 +52,9 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-mod stats {
-    include!("../../linux/traffic/stats.rs");
-}
+mod stats;
 
 use stats::*;
 
@@ -52,17 +68,15 @@ fn init(config: Arc<Config>) -> SamplerResult {
             crate::agent::sampler_status::Unsupported("if_nameindex failed".to_string()).into(),
         );
     };
-    let Some(host) = host_interfaces() else {
+    let Some(classes) = classify_interfaces() else {
         return Err(crate::agent::sampler_status::Unsupported(
-            "listing the hardware-backed interfaces failed (I/O registry, if_nameindex or \
-             socket)"
-                .to_string(),
+            "classifying the interfaces failed (I/O registry, if_nameindex or socket)".to_string(),
         )
         .into());
     };
 
     let mut state = State::default();
-    state.update(interfaces, || Some(host));
+    state.update(interfaces, Instant::now(), || Some(classes));
 
     Ok(Some(Box::new(Traffic {
         state: Mutex::new(state),
@@ -92,11 +106,11 @@ impl Sampler for Traffic {
         let Some(interfaces) = read_interfaces() else {
             return;
         };
-        // The window is the counter read; a registry walk for a new
-        // interface in `update` is not part of it.
+        // The window is the counter read; the registry walk in `update` is
+        // not part of it.
         guard.mark_end();
         let mut state = self.state.lock().unwrap();
-        state.update(interfaces, host_interfaces);
+        state.update(interfaces, Instant::now(), classify_interfaces);
 
         let [rx_bytes, rx_packets, tx_bytes, tx_packets] = state.total;
         NETWORK_RX_BYTES.set(rx_bytes);
@@ -110,13 +124,33 @@ impl Sampler for Traffic {
         NETWORK_TX_HOST_BYTES.set(tx_bytes);
         NETWORK_TX_HOST_PACKETS.set(tx_packets);
 
+        let [rx_errors, tx_errors, rx_drops, tx_drops] = state.faults;
+        NETWORK_RX_ERRORS.set(rx_errors);
+        NETWORK_TX_ERRORS.set(tx_errors);
+        NETWORK_RX_DROPS.set(rx_drops);
+        NETWORK_TX_DROPS.set(tx_drops);
+
         guard.finish();
     }
 }
 
-/// Cumulative counters: received bytes, received packets, transmitted bytes,
-/// transmitted packets.
-type Counters = [u64; 4];
+/// Cumulative counters of one interface: received bytes, received packets,
+/// transmitted bytes, transmitted packets, input errors, output errors, input
+/// queue drops, send queue drops.
+type Counters = [u64; 8];
+
+/// Sums of four of the `Counters`: the first four, or the last four.
+type Sums = [u64; 4];
+
+/// The interfaces whose counters go into the sums other than
+/// `network_bytes` and `network_packets`.
+#[derive(Default)]
+struct Classes {
+    /// The interfaces `network_host_*` sums.
+    host: HashSet<String>,
+    /// The interfaces under `IOResources`, which errors and drops leave out.
+    software: HashSet<String>,
+}
 
 /// One interface listed by `if_nameindex`, with its counters, or `None` if
 /// they could not be read.
@@ -126,10 +160,29 @@ struct Reading {
     counters: Option<Counters>,
 }
 
+/// The least time after an interface in neither of the `Classes` sets is
+/// first listed before it is classified again, on the first read after that. The lag between `if_nameindex` and the I/O
+/// registry listing a new `vmenet` has not been measured.
+const SETTLE: Duration = Duration::from_secs(2);
+
+/// Whether an interface's errors and drops go into the sums.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Faults {
+    /// Not under `IOResources`: they are added.
+    Counted,
+    /// Under `IOResources`: they are left out.
+    Excluded,
+    /// In neither of the `Classes` sets when first listed, at `since`: the
+    /// increases accumulate in `held`, which is added when it becomes
+    /// `Counted` and dropped when it becomes `Excluded` or goes away.
+    Unsettled { since: Instant, held: Sums },
+}
+
 /// An interface as of the last read.
 struct Seen {
     name: String,
     host: bool,
+    faults: Faults,
     last: Counters,
 }
 
@@ -137,9 +190,13 @@ struct Seen {
 struct State {
     /// The interfaces of the last read, by index.
     seen: HashMap<u32, Seen>,
-    /// The sums over every interface and over hardware-backed interfaces.
-    total: Counters,
-    host: Counters,
+    /// Traffic summed over every interface and over hardware-backed
+    /// interfaces.
+    total: Sums,
+    host: Sums,
+    /// Errors and drops summed over every interface but those under
+    /// `IOResources`.
+    faults: Sums,
     /// False until the first read, whose counters are the baseline.
     started: bool,
     /// Interfaces listed but unreadable in every read since the first: their
@@ -148,14 +205,21 @@ struct State {
 }
 
 impl State {
-    /// Add each interface's increase since the last read. `host` returns the
-    /// names of the hardware-backed interfaces; it is called at most once,
-    /// and only if an interface not seen before is listed. If it returns
-    /// `None`, such interfaces are left out of this read and are new again in
-    /// the next.
-    fn update(&mut self, readings: Vec<Reading>, host: impl FnOnce() -> Option<HashSet<String>>) {
-        let mut host = Some(host);
-        let mut host_names: Option<Option<HashSet<String>>> = None;
+    /// Add each interface's increase since the last read, taken at `at`.
+    /// `classify` returns the interfaces' classes. It is called at most once,
+    /// and only if a readable interface not seen before is listed, or a
+    /// readable one whose `faults` has been `Unsettled` for at least
+    /// `SETTLE`. If it returns `None`, an interface not seen before is left
+    /// out of this read and is new again in the next; one already seen stays
+    /// as it was.
+    fn update(
+        &mut self,
+        readings: Vec<Reading>,
+        at: Instant,
+        classify: impl FnOnce() -> Option<Classes>,
+    ) {
+        let mut classify = Some(classify);
+        let mut classes: Option<Option<Classes>> = None;
         let mut next = HashMap::with_capacity(readings.len());
         let mut pending = HashSet::new();
 
@@ -176,32 +240,70 @@ impl State {
                 continue;
             };
 
-            let (is_host, increase) = match previous {
-                Some(s) => (s.host, increase(&now, &s.last)),
+            let (is_host, mut faults, increase) = match previous {
+                Some(s) => {
+                    let mut faults = s.faults;
+                    let mut is_host = s.host;
+                    if let Faults::Unsettled { since, held } = faults {
+                        if at.saturating_duration_since(since) >= SETTLE {
+                            let found = classes
+                                .get_or_insert_with(|| classify.take().and_then(|f| f()))
+                                .as_ref();
+                            if let Some(found) = found {
+                                if found.software.contains(&name) {
+                                    faults = Faults::Excluded;
+                                } else {
+                                    is_host = found.host.contains(&name);
+                                    faults = Faults::Counted;
+                                    add(&mut self.faults, &held);
+                                }
+                            }
+                        }
+                    }
+                    (is_host, faults, increase(&now, &s.last))
+                }
                 None => {
-                    let names = host_names
-                        .get_or_insert_with(|| host.take().and_then(|f| f()))
+                    let found = classes
+                        .get_or_insert_with(|| classify.take().and_then(|f| f()))
                         .as_ref();
-                    let Some(names) = names else {
+                    let Some(found) = found else {
                         if in_baseline {
                             pending.insert((index, name));
                         }
                         continue;
                     };
-                    let increase = if in_baseline { [0; 4] } else { now };
-                    (names.contains(&name), increase)
+                    let increase = if in_baseline { [0; 8] } else { now };
+                    let is_host = found.host.contains(&name);
+                    let faults = if found.software.contains(&name) {
+                        Faults::Excluded
+                    } else if is_host {
+                        Faults::Counted
+                    } else {
+                        Faults::Unsettled {
+                            since: at,
+                            held: [0; 4],
+                        }
+                    };
+                    (is_host, faults, increase)
                 }
             };
 
-            add(&mut self.total, &increase);
+            let (traffic, fault_increase) = increase.split_at(4);
+            add(&mut self.total, traffic);
             if is_host {
-                add(&mut self.host, &increase);
+                add(&mut self.host, traffic);
+            }
+            match &mut faults {
+                Faults::Counted => add(&mut self.faults, fault_increase),
+                Faults::Excluded => {}
+                Faults::Unsettled { held, .. } => add(held, fault_increase),
             }
             next.insert(
                 index,
                 Seen {
                     name,
                     host: is_host,
+                    faults,
                     last: now,
                 },
             );
@@ -219,7 +321,7 @@ fn increase(now: &Counters, last: &Counters) -> Counters {
     std::array::from_fn(|i| now[i].checked_sub(last[i]).unwrap_or(now[i]))
 }
 
-fn add(sum: &mut Counters, increase: &Counters) {
+fn add(sum: &mut Sums, increase: &[u64]) {
     for (s, i) in sum.iter_mut().zip(increase) {
         *s = s.wrapping_add(*i);
     }
@@ -273,10 +375,21 @@ fn interface_names() -> Option<Vec<(u32, CString)>> {
 }
 
 /// The counters of interface `index`, or `None` if the read fails or the
-/// index now names another interface.
+/// index now names another interface. `ifmd_snd_drops` is 32 bits; when it
+/// wraps, `increase` takes it for a reset and adds only its new value.
 fn counters(index: u32, name: &CStr) -> Option<Counters> {
-    let d = ifmib(index, name)?.ifmd_data;
-    Some([d.ifi_ibytes, d.ifi_ipackets, d.ifi_obytes, d.ifi_opackets])
+    let m = ifmib(index, name)?;
+    let d = m.ifmd_data;
+    Some([
+        d.ifi_ibytes,
+        d.ifi_ipackets,
+        d.ifi_obytes,
+        d.ifi_opackets,
+        d.ifi_ierrors,
+        d.ifi_oerrors,
+        d.ifi_iqdrops,
+        u64::from(m.ifmd_snd_drops),
+    ])
 }
 
 /// Interface `index`'s `IFMIB_IFDATA` record, or `None` if the read fails or
@@ -314,17 +427,22 @@ fn ifmib(index: u32, name: &CStr) -> Option<libc::ifmibdata> {
     (read_name == name).then_some(data)
 }
 
-/// The names of the interfaces `network_host_*` sums (see the module doc),
-/// or `None` if the I/O registry lookup, `if_nameindex` or opening a socket
-/// fails.
-fn host_interfaces() -> Option<HashSet<String>> {
+/// The hardware-backed interfaces `network_host_*` sums and the interfaces
+/// under `IOResources` (see the module doc), or `None` if the I/O registry
+/// lookup, `if_nameindex` or opening a socket fails.
+fn classify_interfaces() -> Option<Classes> {
     let key = CfString::new("BSD Name")?;
-    let interfaces = Service::matching("IONetworkInterface")?;
-    let mut out: HashSet<String> = interfaces
-        .into_iter()
-        .filter(|s| !has_ancestor(s, c"IOResources"))
-        .filter_map(|s| s.string(&key))
-        .collect();
+    let mut classes = Classes::default();
+    for s in Service::matching("IONetworkInterface")? {
+        let Some(name) = s.string(&key) else {
+            continue;
+        };
+        if has_ancestor(&s, c"IOResources") {
+            classes.software.insert(name);
+        } else {
+            classes.host.insert(name);
+        }
+    }
 
     let socket = ioctl_socket()?;
     for (_, name) in interface_names()? {
@@ -332,11 +450,11 @@ fn host_interfaces() -> Option<HashSet<String>> {
         let delegate = ifreq_u32(&socket, &name, SIOCGIFDELEGATE);
         if let (Some(functional_type), Some(delegate)) = (functional_type, delegate) {
             if is_radio(functional_type, delegate) {
-                out.insert(name.to_string_lossy().into_owned());
+                classes.host.insert(name.to_string_lossy().into_owned());
             }
         }
     }
-    Some(out)
+    Some(classes)
 }
 
 /// `IFRTYPE_FUNCTIONAL_WIFI_INFRA`, `_WIFI_AWDL` and `_CELLULAR` (`net/if.h`).
@@ -346,9 +464,12 @@ const RADIO_FUNCTIONAL_TYPES: [u32; 3] = [3, 4, 5];
 /// has no delegate interface. An interface with a delegate (a `utun` or
 /// `ipsec` tunnel, or a redirect interface `rdN`) reports its delegate's
 /// functional type and sends through the delegate, whose counters already
-/// include its traffic. Both are read once, when the interface is first
-/// listed: a cellular redirect interface listed before its delegate is set
-/// is counted as host from then on.
+/// include its traffic. Both are read when the interface is first listed
+/// and, for one in neither of the `Classes` sets then, again on the first
+/// read at least `SETTLE` later and on each read after that until a
+/// classification succeeds. An interface counted as host stays host, so a cellular
+/// redirect interface listed before its delegate is set is counted as host
+/// from then on.
 fn is_radio(functional_type: u32, delegate: u32) -> bool {
     RADIO_FUNCTIONAL_TYPES.contains(&functional_type) && delegate == 0
 }
@@ -427,8 +548,32 @@ fn has_ancestor(service: &Service, class: &CStr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
-    fn reading(index: u32, name: &str, counters: Counters) -> Reading {
+    thread_local! {
+        static CLOCK: Cell<Option<Instant>> = const { Cell::new(None) };
+    }
+
+    /// `State::update` at `SETTLE` after this test's previous read, so an
+    /// interface in neither set is settled by its next read.
+    fn read(state: &mut State, readings: Vec<Reading>, classify: impl FnOnce() -> Option<Classes>) {
+        let at = CLOCK.with(|c| {
+            let at = c.get().map_or_else(Instant::now, |t| t + SETTLE);
+            c.set(Some(at));
+            at
+        });
+        state.update(readings, at, classify);
+    }
+
+    /// A reading with these traffic counters and no errors or drops.
+    fn reading(index: u32, name: &str, traffic: Sums) -> Reading {
+        with_faults(index, name, traffic, [0; 4])
+    }
+
+    fn with_faults(index: u32, name: &str, traffic: Sums, faults: Sums) -> Reading {
+        let mut counters = [0; 8];
+        counters[..4].copy_from_slice(&traffic);
+        counters[4..].copy_from_slice(&faults);
         Reading {
             index,
             name: name.to_string(),
@@ -436,18 +581,187 @@ mod tests {
         }
     }
 
-    fn host(names: &[&str]) -> impl FnOnce() -> Option<HashSet<String>> {
-        let names: HashSet<String> = names.iter().map(|n| n.to_string()).collect();
-        move || Some(names)
+    fn host(names: &[&str]) -> impl FnOnce() -> Option<Classes> {
+        classes(names, &[])
+    }
+
+    fn classes(host: &[&str], software: &[&str]) -> impl FnOnce() -> Option<Classes> {
+        let set = |names: &[&str]| names.iter().map(|n| n.to_string()).collect();
+        let classes = Classes {
+            host: set(host),
+            software: set(software),
+        };
+        move || Some(classes)
+    }
+
+    fn ms(t0: Instant, ms: u64) -> Instant {
+        t0 + Duration::from_millis(ms)
+    }
+
+    fn never() -> Option<Classes> {
+        panic!("classified before SETTLE")
+    }
+
+    #[test]
+    fn an_interface_registered_late_under_io_resources_adds_no_errors_or_drops() {
+        let t0 = Instant::now();
+        let mut state = State::default();
+        state.update(vec![reading(1, "lo0", [0; 4])], t0, classes(&[], &[]));
+        // vmenet4 is listed before the I/O registry lists it.
+        let vmenet = |drops| with_faults(30, "vmenet4", [0; 4], [0, 0, drops, 0]);
+        let t1 = ms(t0, 10);
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), vmenet(0xAAAA_AAAA)],
+            t1,
+            classes(&[], &[]),
+        );
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), vmenet(2 * 0xAAAA_AAAA)],
+            ms(t0, 20),
+            never,
+        );
+        // At SETTLE the classification fails, so it stays unsettled.
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), vmenet(3 * 0xAAAA_AAAA)],
+            t1 + SETTLE,
+            || None,
+        );
+        assert!(matches!(state.seen[&30].faults, Faults::Unsettled { .. }));
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), vmenet(4 * 0xAAAA_AAAA)],
+            t1 + SETTLE + Duration::from_millis(10),
+            classes(&[], &["vmenet4"]),
+        );
+        assert_eq!(state.seen[&30].faults, Faults::Excluded);
+        assert_eq!(state.faults, [0; 4]);
+    }
+
+    #[test]
+    fn an_interface_in_neither_set_adds_what_it_held_after_settle() {
+        let t0 = Instant::now();
+        let mut state = State::default();
+        state.update(vec![reading(1, "lo0", [0; 4])], t0, classes(&[], &[]));
+        let utun = |errors| with_faults(50, "utun9", [0; 4], [errors, 0, 0, 0]);
+        let t1 = ms(t0, 10);
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), utun(1)],
+            t1,
+            classes(&[], &[]),
+        );
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), utun(3)],
+            ms(t0, 1000),
+            never,
+        );
+        assert_eq!(state.faults, [0; 4]);
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), utun(4)],
+            t1 + SETTLE,
+            classes(&[], &[]),
+        );
+        // Its whole count, since it was first listed after the first read.
+        assert_eq!(state.faults, [4, 0, 0, 0]);
+        // Settled: no classification on a later read.
+        state.update(
+            vec![reading(1, "lo0", [0; 4]), utun(6)],
+            t1 + 3 * SETTLE,
+            never,
+        );
+        assert_eq!(state.faults, [6, 0, 0, 0]);
+    }
+
+    #[test]
+    fn an_unsettled_interface_keeps_what_it_held_through_an_unreadable_read() {
+        let t0 = Instant::now();
+        let mut state = State::default();
+        state.update(vec![reading(1, "lo0", [0; 4])], t0, classes(&[], &[]));
+        let t1 = ms(t0, 10);
+        state.update(
+            vec![
+                reading(1, "lo0", [0; 4]),
+                with_faults(50, "utun9", [0; 4], [1, 0, 0, 0]),
+            ],
+            t1,
+            classes(&[], &[]),
+        );
+        state.update(
+            vec![
+                reading(1, "lo0", [0; 4]),
+                Reading {
+                    index: 50,
+                    name: "utun9".to_string(),
+                    counters: None,
+                },
+            ],
+            ms(t0, 20),
+            never,
+        );
+        state.update(
+            vec![
+                reading(1, "lo0", [0; 4]),
+                with_faults(50, "utun9", [0; 4], [5, 0, 0, 0]),
+            ],
+            t1 + SETTLE,
+            classes(&[], &[]),
+        );
+        assert_eq!(state.faults, [5, 0, 0, 0]);
+    }
+
+    #[test]
+    fn an_interface_registered_late_as_hardware_is_host_from_then_on() {
+        let t0 = Instant::now();
+        let mut state = State::default();
+        let en = |bytes, errors| with_faults(40, "en12", [bytes, 0, 0, 0], [errors, 0, 0, 0]);
+        state.update(vec![en(100, 1)], t0, classes(&[], &[]));
+        state.update(vec![en(300, 2)], ms(t0, 10), never);
+        state.update(vec![en(600, 4)], t0 + SETTLE, host(&["en12"]));
+        assert_eq!(state.total, [500, 0, 0, 0]);
+        assert_eq!(state.host, [300, 0, 0, 0]);
+        assert_eq!(state.faults, [3, 0, 0, 0]);
+    }
+
+    #[test]
+    fn errors_and_drops_leave_out_interfaces_under_io_resources() {
+        let mut state = State::default();
+        let classify = || classes(&["en0"], &["vmenet0", "vmenet1"]);
+        read(
+            &mut state,
+            vec![
+                with_faults(1, "lo0", [0; 4], [0, 0, 100, 0]),
+                with_faults(14, "en0", [0; 4], [1, 2, 0, 3]),
+                with_faults(27, "vmenet0", [0; 4], [0, 0, 0xAAAA_AAAA, 0]),
+            ],
+            classify(),
+        );
+        read(
+            &mut state,
+            vec![
+                with_faults(1, "lo0", [0; 4], [0, 0, 8300, 0]),
+                with_faults(14, "en0", [0; 4], [2, 4, 0, 6]),
+                with_faults(27, "vmenet0", [10, 1, 0, 0], [0, 0, 2 * 0xAAAA_AAAA, 0]),
+                with_faults(28, "vmenet1", [0; 4], [0, 0, 5 * 0xAAAA_AAAA, 7]),
+            ],
+            classify(),
+        );
+        assert_eq!(state.faults, [1, 2, 8200, 3]);
+        assert_eq!(state.total, [10, 1, 0, 0]);
     }
 
     #[test]
     fn the_first_read_is_the_baseline() {
         let mut state = State::default();
-        state.update(vec![reading(1, "lo0", [100, 10, 100, 10])], host(&[]));
+        read(
+            &mut state,
+            vec![reading(1, "lo0", [100, 10, 100, 10])],
+            host(&[]),
+        );
         assert_eq!(state.total, [0; 4]);
 
-        state.update(vec![reading(1, "lo0", [150, 12, 170, 13])], host(&[]));
+        read(
+            &mut state,
+            vec![reading(1, "lo0", [150, 12, 170, 13])],
+            host(&[]),
+        );
         assert_eq!(state.total, [50, 2, 70, 3]);
         assert_eq!(state.host, [0; 4]);
     }
@@ -462,8 +776,9 @@ mod tests {
                 reading(28, "bridge100", [0; 4]),
             ]
         };
-        state.update(first(), host(&["en0"]));
-        state.update(
+        read(&mut state, first(), host(&["en0"]));
+        read(
+            &mut state,
             vec![
                 reading(1, "lo0", [1000, 10, 1000, 10]),
                 reading(14, "en0", [200, 2, 300, 3]),
@@ -478,18 +793,20 @@ mod tests {
     #[test]
     fn an_interface_that_goes_away_keeps_what_it_added() {
         let mut state = State::default();
-        state.update(
+        read(
+            &mut state,
             vec![reading(1, "lo0", [0; 4]), reading(27, "vmenet0", [0; 4])],
             host(&[]),
         );
-        state.update(
+        read(
+            &mut state,
             vec![
                 reading(1, "lo0", [0; 4]),
                 reading(27, "vmenet0", [500, 5, 0, 0]),
             ],
             host(&[]),
         );
-        state.update(vec![reading(1, "lo0", [0; 4])], host(&[]));
+        read(&mut state, vec![reading(1, "lo0", [0; 4])], host(&[]));
         assert_eq!(state.total, [500, 5, 0, 0]);
         assert!(!state.seen.contains_key(&27));
     }
@@ -497,24 +814,34 @@ mod tests {
     #[test]
     fn an_interface_that_appears_later_adds_its_whole_count() {
         let mut state = State::default();
-        state.update(vec![reading(1, "lo0", [0; 4])], host(&[]));
-        state.update(
+        read(&mut state, vec![reading(1, "lo0", [0; 4])], host(&[]));
+        read(
+            &mut state,
             vec![
                 reading(1, "lo0", [0; 4]),
-                reading(40, "en12", [700, 7, 0, 0]),
+                with_faults(40, "en12", [700, 7, 0, 0], [0, 0, 0, 5]),
             ],
             host(&["en12"]),
         );
         assert_eq!(state.total, [700, 7, 0, 0]);
         assert_eq!(state.host, [700, 7, 0, 0]);
+        assert_eq!(state.faults, [0, 0, 0, 5]);
     }
 
     #[test]
     fn a_reused_index_is_a_new_interface() {
         let mut state = State::default();
-        state.update(vec![reading(27, "vmenet0", [900, 9, 0, 0])], host(&[]));
+        read(
+            &mut state,
+            vec![reading(27, "vmenet0", [900, 9, 0, 0])],
+            host(&[]),
+        );
         // Index 27 now names a hardware interface whose counters are lower.
-        state.update(vec![reading(27, "en12", [100, 1, 0, 0])], host(&["en12"]));
+        read(
+            &mut state,
+            vec![reading(27, "en12", [100, 1, 0, 0])],
+            host(&["en12"]),
+        );
         assert_eq!(state.total, [100, 1, 0, 0]);
         assert_eq!(state.host, [100, 1, 0, 0]);
     }
@@ -522,16 +849,29 @@ mod tests {
     #[test]
     fn a_counter_that_went_down_counts_from_zero() {
         let mut state = State::default();
-        state.update(vec![reading(14, "en0", [900, 9, 0, 0])], host(&[]));
-        state.update(vec![reading(14, "en0", [100, 1, 0, 0])], host(&[]));
+        read(
+            &mut state,
+            vec![reading(14, "en0", [900, 9, 0, 0])],
+            host(&[]),
+        );
+        read(
+            &mut state,
+            vec![reading(14, "en0", [100, 1, 0, 0])],
+            host(&[]),
+        );
         assert_eq!(state.total, [100, 1, 0, 0]);
     }
 
     #[test]
     fn an_unreadable_interface_keeps_its_last_counters() {
         let mut state = State::default();
-        state.update(vec![reading(14, "en0", [100, 1, 0, 0])], host(&["en0"]));
-        state.update(
+        read(
+            &mut state,
+            vec![reading(14, "en0", [100, 1, 0, 0])],
+            host(&["en0"]),
+        );
+        read(
+            &mut state,
             vec![Reading {
                 index: 14,
                 name: "en0".to_string(),
@@ -539,7 +879,11 @@ mod tests {
             }],
             || panic!("no new interface, so no registry lookup"),
         );
-        state.update(vec![reading(14, "en0", [300, 3, 0, 0])], host(&["en0"]));
+        read(
+            &mut state,
+            vec![reading(14, "en0", [300, 3, 0, 0])],
+            host(&["en0"]),
+        );
         assert_eq!(state.total, [200, 2, 0, 0]);
         assert_eq!(state.host, [200, 2, 0, 0]);
     }
@@ -552,14 +896,16 @@ mod tests {
             name: "en12".to_string(),
             counters: None,
         };
-        state.update(vec![unreadable()], host(&["en12"]));
-        state.update(vec![unreadable()], host(&["en12"]));
-        state.update(
+        read(&mut state, vec![unreadable()], host(&["en12"]));
+        read(&mut state, vec![unreadable()], host(&["en12"]));
+        read(
+            &mut state,
             vec![reading(40, "en12", [5_000_000_000, 5, 0, 0])],
             host(&["en12"]),
         );
         assert_eq!(state.total, [0; 4]);
-        state.update(
+        read(
+            &mut state,
             vec![reading(40, "en12", [5_000_000_100, 6, 0, 0])],
             host(&["en12"]),
         );
@@ -570,8 +916,9 @@ mod tests {
     #[test]
     fn an_interface_unreadable_when_first_listed_later_adds_its_whole_count() {
         let mut state = State::default();
-        state.update(vec![reading(1, "lo0", [0; 4])], host(&[]));
-        state.update(
+        read(&mut state, vec![reading(1, "lo0", [0; 4])], host(&[]));
+        read(
+            &mut state,
             vec![
                 reading(1, "lo0", [0; 4]),
                 Reading {
@@ -582,7 +929,8 @@ mod tests {
             ],
             host(&[]),
         );
-        state.update(
+        read(
+            &mut state,
             vec![
                 reading(1, "lo0", [0; 4]),
                 reading(40, "en12", [700, 7, 0, 0]),
@@ -595,7 +943,8 @@ mod tests {
     #[test]
     fn a_failed_registry_lookup_keeps_a_baseline_interface_pending() {
         let mut state = State::default();
-        state.update(
+        read(
+            &mut state,
             vec![Reading {
                 index: 40,
                 name: "en12".to_string(),
@@ -603,8 +952,13 @@ mod tests {
             }],
             host(&["en12"]),
         );
-        state.update(vec![reading(40, "en12", [5_000_000_000, 5, 0, 0])], || None);
-        state.update(
+        read(
+            &mut state,
+            vec![reading(40, "en12", [5_000_000_000, 5, 0, 0])],
+            || None,
+        );
+        read(
+            &mut state,
             vec![reading(40, "en12", [5_000_000_100, 6, 0, 0])],
             host(&["en12"]),
         );
@@ -614,8 +968,9 @@ mod tests {
     #[test]
     fn a_failed_registry_lookup_leaves_new_interfaces_for_the_next_read() {
         let mut state = State::default();
-        state.update(vec![reading(1, "lo0", [0; 4])], host(&[]));
-        state.update(
+        read(&mut state, vec![reading(1, "lo0", [0; 4])], host(&[]));
+        read(
+            &mut state,
             vec![
                 reading(1, "lo0", [0; 4]),
                 reading(40, "en12", [700, 7, 0, 0]),
@@ -623,7 +978,8 @@ mod tests {
             || None,
         );
         assert_eq!(state.total, [0; 4]);
-        state.update(
+        read(
+            &mut state,
             vec![
                 reading(1, "lo0", [0; 4]),
                 reading(40, "en12", [800, 8, 0, 0]),
@@ -681,7 +1037,7 @@ mod tests {
             .iter()
             .any(|(_, name)| name.as_c_str() == c"awdl0");
         if listed {
-            assert!(host_interfaces().unwrap().contains("awdl0"));
+            assert!(classify_interfaces().unwrap().host.contains("awdl0"));
         }
     }
 
@@ -696,8 +1052,9 @@ mod tests {
 
     #[test]
     fn loopback_is_counted_and_is_not_host() {
-        let host = host_interfaces().expect("registry lookup");
-        assert!(!host.contains("lo0"));
+        let classes = classify_interfaces().expect("registry lookup");
+        assert!(!classes.host.contains("lo0"));
+        assert!(!classes.software.contains("lo0"));
 
         let interfaces = read_interfaces().expect("if_nameindex");
         assert!(interfaces
@@ -706,26 +1063,44 @@ mod tests {
     }
 
     // Checks the interfaces this host has: on one with no software
-    // interface (a `vmenet` of a running VM, for example) the second
-    // assertion has nothing to check.
+    // interface (a `vmenet` of a running VM, for example) the software
+    // assertions have nothing to check.
     #[test]
-    fn interfaces_under_io_resources_are_not_host() {
+    fn interfaces_under_io_resources_are_software_and_not_host() {
         let key = CfString::new("BSD Name").unwrap();
-        let host = host_interfaces().unwrap();
+        let classes = classify_interfaces().unwrap();
         for s in Service::matching("IONetworkInterface").unwrap() {
             assert!(has_ancestor(&s, c"IOPlatformExpertDevice"));
+            let name = s.string(&key).unwrap();
             if has_ancestor(&s, c"IOResources") {
-                assert!(!host.contains(&s.string(&key).unwrap()));
+                assert!(!classes.host.contains(&name));
+                assert!(classes.software.contains(&name));
+            } else {
+                assert!(!classes.software.contains(&name));
             }
         }
     }
 
+    // The one test in this module that refreshes the sampler: two would race
+    // on the process-global counters it sets.
     #[tokio::test]
-    async fn refresh_counts_loopback_traffic() {
+    async fn refresh_counts_loopback_traffic_and_publishes_errors_and_drops() {
         let sampler = init(Arc::new(toml::from_str("").unwrap()))
             .unwrap()
             .unwrap();
+        let faults = [
+            &NETWORK_RX_ERRORS,
+            &NETWORK_TX_ERRORS,
+            &NETWORK_RX_DROPS,
+            &NETWORK_TX_DROPS,
+        ];
+        for counter in faults {
+            counter.set(u64::MAX);
+        }
         sampler.refresh().await;
+        for counter in faults {
+            assert!(counter.value() < u64::MAX);
+        }
         let before = NETWORK_TX_BYTES.value();
 
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();

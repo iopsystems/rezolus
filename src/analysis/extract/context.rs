@@ -342,9 +342,12 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ),
     ("network_ena_pps_allowance_exceeded", "network_ethtool"),
     // Not prefix-recoverable: the sampler is `network_traffic`, and neither
-    // host-boundary name starts with it.
+    // host-boundary name starts with it, nor do the macOS interface errors
+    // and drops.
     ("network_host_bytes", "network_traffic"),
     ("network_host_packets", "network_traffic"),
+    ("network_interface_drops", "network_traffic"),
+    ("network_interface_errors", "network_traffic"),
     ("network_packets", "network_traffic"),
     ("network_transmit_busy", "network_interfaces"),
     ("network_transmit_complete", "network_interfaces"),
