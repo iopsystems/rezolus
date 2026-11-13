@@ -6,12 +6,13 @@ license.workspace = true
 publish = false
 
 [features]
-cli = []
+# The `systeminfo` binary, which prints the inventory as JSON.
+cli = ["dep:serde_json"]
 
 [dependencies]
 log.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
 walkdir.workspace = true
 
 # Used to dlopen the vendor GPU libraries (libnvidia-ml, librocm_smi64) at
@@ -24,6 +25,13 @@ walkdir.workspace = true
 libloading.workspace = true
 libc.workspace = true
 
+
+# The macOS summary parses `system_profiler`'s JSON output.
+[target.'cfg(target_os = "macos")'.dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [[bin]]
 name = "systeminfo"
