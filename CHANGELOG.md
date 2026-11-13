@@ -14,7 +14,7 @@
   install only, `%preun` stops and disables the units on removal only, and
   `%postun` reloads systemd. A `systemctl` call no longer fails the
   scriptlet where systemd is not running, such as a container image build.
-  Backported from 6.0 (#1692). (#1464)
+  Backported from 6.0 (#1692) in #1695. (#1464)
 
 ## [5.31.0] - 2026-11-11
 
