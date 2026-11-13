@@ -280,7 +280,8 @@ fn closing() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
 const CLOSE_WAIT: Duration = Duration::from_millis(100);
 
 /// The error for a port whose previous close has not returned. It is not a
-/// failed open: the port is retried on the next reading.
+/// failed open, so no [`OPEN_BACKOFF`] is set; the port is retried by the
+/// first reading at least [`CLOSE_PENDING_RETRY`] later.
 #[derive(Debug)]
 pub(crate) struct ClosePending;
 
@@ -604,7 +605,7 @@ impl<P: Port> Sessions<P> {
     fn open(&mut self, sysfs: &Path, tty: &Path, now: Instant) -> io::Result<&mut Session<P>> {
         if !self.sessions.contains_key(tty) {
             // Within a second of finding the previous close still running, do
-            // not wait for it again: one wait per sweep, not one per register.
+            // not wait for it again: one wait per second, not one per register.
             if let Some(at) = self.close_pending.get(tty) {
                 if now.saturating_duration_since(*at) < CLOSE_PENDING_RETRY {
                     return Err(io::Error::new(io::ErrorKind::ResourceBusy, ClosePending));

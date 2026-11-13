@@ -1950,13 +1950,14 @@ page check, closes the port, and that register is not read for 1 second,
 doubling on each consecutive failure up to 60 seconds. The port is closed on a
 separate thread, because usb-serial's close can wait up to 30 seconds for
 output to drain. A reading waits up to 100 ms for a previous close to return;
-if it has not, the port is skipped without further waiting for 1 second, so a
-close that is draining costs at most 100 ms per sweep, and the 60-second
-backoff does not apply. On an AX1500i the six readings and the page check add
-about 35 ms to each sweep (two serial exchanges per register), and a discovery
-that opens the port 42–46 ms. On the tested AX1500i the fan reported 0 rpm up
-to 371 W input. Corsair HXi/RMi power supplies use other USB IDs and are read
-by the kernel's `corsair-psu` hwmon driver.
+if it has not, readings of the port fail without waiting for the next second,
+so a close that is draining costs at most 100 ms per second, and the 60-second
+backoff does not apply. If discovery runs while that close is pending, the PSU
+has no series until the next discovery. On an AX1500i the six readings and the
+page check add about 35 ms to each sweep (two serial exchanges per register),
+and a discovery that opens the port 42–46 ms. On the tested AX1500i the fan
+reported 0 rpm up to 371 W input. Corsair HXi/RMi power supplies use other USB
+IDs and are read by the kernel's `corsair-psu` hwmon driver.
 
 `asusec` reports -40 °C for a temperature header with nothing connected.
 Such a channel gets no slot and is not read on each sweep; discovery reads it
