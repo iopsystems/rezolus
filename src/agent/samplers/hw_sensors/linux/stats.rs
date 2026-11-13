@@ -51,35 +51,35 @@ acquisition_group!(
 
 #[metric(
     name = "sensor_temperature",
-    description = "A native Linux thermal-zone or hwmon temperature reading in millidegrees Celsius. Distinct native sources may describe the same physical component and are intentionally not deduplicated.",
+    description = "A native Linux thermal-zone, hwmon or Corsair AXi power supply temperature reading in millidegrees Celsius. Distinct native sources may describe the same physical component and are intentionally not deduplicated.",
     metadata = { unit = "millidegrees Celsius", acq_group = "hw_sensors_temperature" }
 )]
 pub static SENSOR_TEMPERATURE: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_power",
-    description = "A native hwmon power reading in microwatts. INA3221 values are derived from sequential bus-voltage and current reads and carry derived=voltage_x_current metadata.",
+    description = "A native hwmon power reading, or a Corsair AXi power supply's input power, in microwatts. INA3221 values are derived from sequential bus-voltage and current reads and carry derived=voltage_x_current metadata.",
     metadata = { unit = "microwatts", acq_group = "hw_sensors_power" }
 )]
 pub static SENSOR_POWER: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_voltage",
-    description = "A native hwmon bus-voltage reading in millivolts. Driver-specific shunt and summation channels are excluded.",
+    description = "A native hwmon bus-voltage reading, or a Corsair AXi power supply's AC input voltage (RMS), in millivolts. Driver-specific shunt and summation channels are excluded.",
     metadata = { unit = "millivolts", acq_group = "hw_sensors_voltage" }
 )]
 pub static SENSOR_VOLTAGE: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_current",
-    description = "A native hwmon current reading in milliamps. Driver-specific summation channels are excluded.",
+    description = "A native hwmon current reading, or a Corsair AXi power supply's AC input current (RMS), in milliamps. Driver-specific summation channels are excluded.",
     metadata = { unit = "milliamps", acq_group = "hw_sensors_current" }
 )]
 pub static SENSOR_CURRENT: GaugeGroup = GaugeGroup::new(MAX_SENSORS);
 
 #[metric(
     name = "sensor_fan_speed",
-    description = "A native hwmon fan tachometer reading in revolutions per minute.",
+    description = "A native hwmon or Corsair AXi power supply fan tachometer reading in revolutions per minute.",
     metadata = { unit = "RPM", acq_group = "hw_sensors_fan_speed" }
 )]
 pub static SENSOR_FAN_SPEED: GaugeGroup = GaugeGroup::new(MAX_SENSORS);

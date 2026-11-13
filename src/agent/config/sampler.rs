@@ -34,6 +34,11 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     task_attribution: Option<bool>,
+    /// Whether `hw_sensors` reads Corsair AXi power supplies through their
+    /// USB dongle. `None` means on.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    corsair_axi: Option<bool>,
 }
 
 impl Sampler {
@@ -59,6 +64,11 @@ impl Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn task_attribution(&self) -> Option<bool> {
         self.task_attribution
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn corsair_axi(&self) -> Option<bool> {
+        self.corsair_axi
     }
 
     pub fn check(&self, name: &str) {

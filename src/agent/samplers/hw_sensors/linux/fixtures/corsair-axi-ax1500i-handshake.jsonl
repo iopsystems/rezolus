@@ -1,0 +1,434 @@
+{"t": 1794517956.0358, "dir": "tx", "hex": "54595500", "note": "dongle name"}
+{"t": 1794517956.0451, "dir": "rx", "hex": "a866665a6659655559656aaa6955595a66a665596555595965596a966965696a6966695559955969659669596aa6696a6a5669596a666955595969966a55595966aa695a6a5a6a55596965aa695a6aa5696669596a9659555500", "note": "dongle name"}
+{"t": 1794517956.05, "dir": "tx", "hex": "54565659556569555555555555555500", "note": "dongle setup"}
+{"t": 1794517956.0523, "dir": "rx", "hex": "a800", "note": "dongle setup"}
+{"t": 1794517956.0523, "dir": "tx", "hex": "54555500", "note": "dongle version"}
+{"t": 1794517956.0539, "dir": "rx", "hex": "a85555965500", "note": "dongle version"}
+{"t": 1794517956.0539, "dir": "tx", "hex": "545a565a55695556556a556a55999600", "note": "MFR_MODEL 0x9a (req)"}
+{"t": 1794517956.0567, "dir": "rx", "hex": "a800", "note": "MFR_MODEL 0x9a (req)"}
+{"t": 1794517956.0567, "dir": "tx", "hex": "5495556a556a5500", "note": "MFR_MODEL 0x9a"}
+{"t": 1794517956.0604, "dir": "rx", "hex": "a856659566565a665a555a555a966900", "note": "MFR_MODEL 0x9a"}
+{"t": 1794517956.0604, "dir": "tx", "hex": "545a565a55695556556a555655555500", "note": "PAGE 0x00 (req)"}
+{"t": 1794517956.0627, "dir": "rx", "hex": "a800", "note": "PAGE 0x00 (req)"}
+{"t": 1794517956.0628, "dir": "tx", "hex": "5495556a55565500", "note": "PAGE 0x00"}
+{"t": 1794517956.0653, "dir": "rx", "hex": "a8555500", "note": "PAGE 0x00"}
+{"t": 1794517956.0653, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517956.0677, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517956.0678, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517956.0703, "dir": "rx", "hex": "a8a9a5555500", "note": "READ_PIN 0x97"}
+{"t": 1794517956.0703, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517956.073, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517956.073, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517956.0753, "dir": "rx", "hex": "a895a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517956.0753, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517956.0777, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517956.0777, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517956.0803, "dir": "rx", "hex": "a896a655a500", "note": "READ_IIN 0x89"}
+{"t": 1794517956.0803, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517956.0827, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517956.0828, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517956.0853, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517956.0853, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517956.0877, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517956.0878, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517956.0903, "dir": "rx", "hex": "a86a9955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517956.0903, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517956.0927, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517956.0928, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517956.0953, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517956.0953, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517956.0977, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517956.0977, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517956.1003, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517957.1005, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517957.1029, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517957.1029, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517957.1056, "dir": "rx", "hex": "a859a5555500", "note": "READ_PIN 0x97"}
+{"t": 1794517957.1057, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517957.1081, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517957.1081, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517957.1105, "dir": "rx", "hex": "a896a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517957.1105, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517957.113, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517957.1131, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517957.1156, "dir": "rx", "hex": "a89aa555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517957.1157, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517957.1178, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517957.1179, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517957.1206, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517957.1207, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517957.1229, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517957.1229, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517957.1256, "dir": "rx", "hex": "a86a9955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517957.1257, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517957.1281, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517957.1281, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517957.1305, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517957.1305, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517957.1331, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517957.1331, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517957.1356, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517958.1358, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517958.1382, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517958.1382, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517958.1408, "dir": "rx", "hex": "a8a59a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517958.1408, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517958.1431, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517958.1431, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517958.1458, "dir": "rx", "hex": "a899a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517958.1458, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517958.1482, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517958.1483, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517958.1507, "dir": "rx", "hex": "a865a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517958.1507, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517958.1532, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517958.1532, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517958.1558, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517958.1558, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517958.158, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517958.158, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517958.1608, "dir": "rx", "hex": "a8699955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517958.1608, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517958.1631, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517958.1631, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517958.1657, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517958.1658, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517958.1682, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517958.1683, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517958.1707, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517959.1708, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517959.1733, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517959.1734, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517959.176, "dir": "rx", "hex": "a89a9a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517959.176, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517959.1782, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517959.1782, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517959.181, "dir": "rx", "hex": "a896a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517959.181, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517959.1834, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517959.1834, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517959.1858, "dir": "rx", "hex": "a865a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517959.1858, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517959.1884, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517959.1884, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517959.1908, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517959.1908, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517959.1933, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517959.1934, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517959.196, "dir": "rx", "hex": "a86a9955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517959.1961, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517959.1982, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517959.1982, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517959.201, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517959.2011, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517959.2034, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517959.2034, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517959.2058, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517960.2061, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517960.2085, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517960.2086, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517960.211, "dir": "rx", "hex": "a8a59a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517960.211, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517960.2135, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517960.2135, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517960.2161, "dir": "rx", "hex": "a899a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517960.2161, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517960.2184, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517960.2184, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517960.2211, "dir": "rx", "hex": "a865a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517960.2211, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517960.2235, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517960.2236, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517960.2259, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517960.226, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517960.2285, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517960.2286, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517960.2311, "dir": "rx", "hex": "a86a9955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517960.2312, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517960.2335, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517960.2335, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517960.2361, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517960.2362, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517960.2385, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517960.2386, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517960.2411, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517961.2413, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517961.2435, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517961.2436, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517961.2461, "dir": "rx", "hex": "a8a99a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517961.2461, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517961.2485, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517961.2486, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517961.2511, "dir": "rx", "hex": "a899a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517961.2511, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517961.2537, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517961.2537, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517961.2561, "dir": "rx", "hex": "a86aa555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517961.2561, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517961.2585, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517961.2586, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517961.2611, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517961.2611, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517961.2635, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517961.2636, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517961.2662, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517961.2663, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517961.2685, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517961.2686, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517961.2711, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517961.2712, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517961.2735, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517961.2735, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517961.2761, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517962.2763, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517962.2787, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517962.2787, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517962.2813, "dir": "rx", "hex": "a8a99a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517962.2813, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517962.2837, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517962.2837, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517962.2863, "dir": "rx", "hex": "a896a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517962.2863, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517962.2887, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517962.2887, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517962.2913, "dir": "rx", "hex": "a869a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517962.2913, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517962.2938, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517962.2938, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517962.2963, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517962.2963, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517962.2987, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517962.2987, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517962.3013, "dir": "rx", "hex": "a8699955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517962.3013, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517962.3037, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517962.3037, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517962.3063, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517962.3063, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517962.3087, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517962.3087, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517962.3113, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517963.3114, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517963.3138, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517963.3138, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517963.3164, "dir": "rx", "hex": "a8a59a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517963.3165, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517963.3189, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517963.3189, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517963.3214, "dir": "rx", "hex": "a89aa996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517963.3215, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517963.3239, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517963.3239, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517963.3264, "dir": "rx", "hex": "a865a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517963.3265, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517963.3289, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517963.3289, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517963.3314, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517963.3315, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517963.3338, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517963.3338, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517963.3364, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517963.3365, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517963.3389, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517963.3389, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517963.3414, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517963.3414, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517963.3439, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517963.3439, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517963.3464, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517964.3466, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517964.349, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517964.349, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517964.3516, "dir": "rx", "hex": "a8a59a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517964.3516, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517964.354, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517964.354, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517964.3566, "dir": "rx", "hex": "a899a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517964.3566, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517964.359, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517964.359, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517964.3617, "dir": "rx", "hex": "a865a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517964.3617, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517964.3642, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517964.3642, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517964.3666, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517964.3666, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517964.3692, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517964.3692, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517964.3718, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517964.3718, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517964.374, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517964.374, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517964.3767, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517964.3768, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517964.379, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517964.3791, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517964.3817, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517965.3818, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517965.3843, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517965.3843, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517965.387, "dir": "rx", "hex": "a8969a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517965.387, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517965.3893, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517965.3893, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517965.392, "dir": "rx", "hex": "a899a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517965.392, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517965.3943, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517965.3943, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517965.397, "dir": "rx", "hex": "a856a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517965.397, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517965.3994, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517965.3994, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517965.402, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517965.402, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517965.4044, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517965.4044, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517965.4068, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517965.4068, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517965.4091, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517965.4092, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517965.4118, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517965.4118, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517965.4141, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517965.4142, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517965.4168, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517966.4169, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517966.4193, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517966.4311, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517966.433, "dir": "rx", "hex": "a8999a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517966.4331, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517966.4355, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517966.4355, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517966.4379, "dir": "rx", "hex": "a896a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517966.4379, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517966.4405, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517966.4405, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517966.4429, "dir": "rx", "hex": "a85aa555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517966.443, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517966.4455, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517966.4455, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517966.4481, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517966.4481, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517966.4505, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517966.4505, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517966.4531, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517966.4531, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517966.4555, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517966.4556, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517966.458, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517966.4581, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517966.4605, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517966.4605, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517966.4629, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517967.4631, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517967.4657, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517967.4657, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517967.4683, "dir": "rx", "hex": "a8999a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517967.4684, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517967.4705, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517967.4705, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517967.4733, "dir": "rx", "hex": "a899a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517967.4733, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517967.4757, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517967.4757, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517967.478, "dir": "rx", "hex": "a859a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517967.4781, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517967.4807, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517967.4807, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517967.4833, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517967.4834, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517967.4857, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517967.4857, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517967.4883, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517967.4883, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517967.4905, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517967.4905, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517967.4933, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517967.4933, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517967.4957, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517967.4957, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517967.4982, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517968.4984, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517968.501, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517968.501, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517968.5034, "dir": "rx", "hex": "a89a9a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517968.5034, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517968.5057, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517968.5057, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517968.5084, "dir": "rx", "hex": "a896a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517968.5084, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517968.5107, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517968.5107, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517968.5134, "dir": "rx", "hex": "a865a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517968.5134, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517968.516, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517968.516, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517968.5182, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517968.5182, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517968.521, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517968.521, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517968.5234, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517968.5235, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517968.5257, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517968.5257, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517968.5284, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517968.5284, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517968.5307, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517968.5307, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517968.5334, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517969.5337, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517969.5358, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517969.5358, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517969.5384, "dir": "rx", "hex": "a89a9a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517969.5384, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517969.5408, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517969.5408, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517969.5434, "dir": "rx", "hex": "a896a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517969.5434, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517969.546, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517969.546, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517969.5484, "dir": "rx", "hex": "a865a555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517969.5484, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517969.5508, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517969.5509, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517969.5534, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517969.5534, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517969.5558, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517969.5558, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517969.5584, "dir": "rx", "hex": "a8969955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517969.5584, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517969.5608, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517969.5608, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517969.5634, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517969.5634, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517969.5658, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517969.5658, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517969.5684, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517970.5685, "dir": "tx", "hex": "545a565a55695556556a5559556a9600", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517970.571, "dir": "rx", "hex": "a800", "note": "READ_PIN 0x97 (req)"}
+{"t": 1794517970.571, "dir": "tx", "hex": "5495556a55595500", "note": "READ_PIN 0x97"}
+{"t": 1794517970.5737, "dir": "rx", "hex": "a8999a555500", "note": "READ_PIN 0x97"}
+{"t": 1794517970.5738, "dir": "tx", "hex": "545a565a55695556556a555955959500", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517970.5762, "dir": "rx", "hex": "a800", "note": "READ_VIN 0x88 (req)"}
+{"t": 1794517970.5762, "dir": "tx", "hex": "5495556a55595500", "note": "READ_VIN 0x88"}
+{"t": 1794517970.5787, "dir": "rx", "hex": "a896a996aa00", "note": "READ_VIN 0x88"}
+{"t": 1794517970.5788, "dir": "tx", "hex": "545a565a55695556556a555955969500", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517970.5812, "dir": "rx", "hex": "a800", "note": "READ_IIN 0x89 (req)"}
+{"t": 1794517970.5812, "dir": "tx", "hex": "5495556a55595500", "note": "READ_IIN 0x89"}
+{"t": 1794517970.5837, "dir": "rx", "hex": "a85aa555a500", "note": "READ_IIN 0x89"}
+{"t": 1794517970.5838, "dir": "tx", "hex": "545a565a55695556556a555955a9a900", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517970.5861, "dir": "rx", "hex": "a800", "note": "Corsair output power 0xee 0xee (req)"}
+{"t": 1794517970.5861, "dir": "tx", "hex": "5495556a55595500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517970.5887, "dir": "rx", "hex": "a85555955500", "note": "Corsair output power 0xee 0xee"}
+{"t": 1794517970.5888, "dir": "tx", "hex": "545a565a55695556556a555955a99500", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517970.591, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_2 0x8e (req)"}
+{"t": 1794517970.591, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517970.5937, "dir": "rx", "hex": "a86a9955aa00", "note": "READ_TEMPERATURE_2 0x8e"}
+{"t": 1794517970.5937, "dir": "tx", "hex": "545a565a55695556556a555955a69500", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517970.5961, "dir": "rx", "hex": "a800", "note": "READ_TEMPERATURE_1 0x8d (req)"}
+{"t": 1794517970.5962, "dir": "tx", "hex": "5495556a55595500", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517970.5986, "dir": "rx", "hex": "a8999955aa00", "note": "READ_TEMPERATURE_1 0x8d"}
+{"t": 1794517970.5986, "dir": "tx", "hex": "545a565a55695556556a555955559600", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517970.6011, "dir": "rx", "hex": "a800", "note": "READ_FAN_SPEED_1 0x90 (req)"}
+{"t": 1794517970.6012, "dir": "tx", "hex": "5495556a55595500", "note": "READ_FAN_SPEED_1 0x90"}
+{"t": 1794517970.6037, "dir": "rx", "hex": "a85555555600", "note": "READ_FAN_SPEED_1 0x90"}

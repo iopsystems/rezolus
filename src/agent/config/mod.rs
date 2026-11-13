@@ -166,6 +166,16 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// Whether `name` (`hw_sensors`) reads Corsair AXi power supplies: its
+    /// own section's `corsair_axi`, else on. `[defaults]` does not set it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn corsair_axi(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.corsair_axi())
+            .unwrap_or(true)
+    }
+
     pub fn enabled(&self, name: &str) -> bool {
         // Opt-in-only samplers are never turned on by the `[defaults]` fallback:
         // they require explicit `enabled = true` in their own section. These are
@@ -342,6 +352,16 @@ mod tests {
         assert!(!c.enabled("cpu_usage"));
         // Opt-in sampler is still off too.
         assert!(!c.enabled("gpu_amd_pmu"));
+    }
+
+    #[test]
+    fn hw_sensors_reads_corsair_axi_unless_turned_off() {
+        assert!(config("").corsair_axi("hw_sensors"));
+        let c = config("[samplers.hw_sensors]\ncorsair_axi = false\n");
+        assert!(c.enabled("hw_sensors"));
+        assert!(!c.corsair_axi("hw_sensors"));
+        // Only the sampler's own section sets it.
+        assert!(config("[defaults]\ncorsair_axi = false\n").corsair_axi("hw_sensors"));
     }
 
     #[test]
