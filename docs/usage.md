@@ -940,7 +940,32 @@ Code the first time it opens in that directory.
 rezolus mcp                                                  # stdio server
 rezolus mcp detect-anomalies run.dendro              # anomaly detection
 rezolus mcp query run.dendro "sum(irate(cpu_cycles[1m]))"
+rezolus mcp query run.dendro "sum(irate(blockio_bytes[1m]))" \
+    --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --above 5e8
 ```
+
+A query is evaluated at the multiples of the step from `--start` to `--end`
+(Unix seconds or RFC 3339, the end included); by default every second of the
+recording, or a coarser whole-second step on a recording of more than a
+million seconds. A query combining samplers of different cadence is evaluated
+at the slower one's rows instead, and `histogram_quantile()` and the other
+histogram functions without a stride argument give one point per row that
+holds observations, wherever the step falls (a gauge histogram gives one per
+step; `histogram_quantiles([q], h, STEP)` gives one per step). No point after
+the recording's last row is returned. A `rate()` or `irate()` at the end over a
+sampler whose rows are further apart than 120 s (or two of the recording's
+finest row interval, when that is longer; or a million steps, when that is
+shorter) is computed without its next row. `--step` takes seconds or humantime such as `10s`. `irate()` is the
+rate over one step, so a larger step also averages over a longer interval.
+Each series prints min, max, mean, p50, p90 and p99 over its points that are
+not NaN (nearest rank); `--above VALUE` computes them over the points strictly above VALUE, and
+prints how many there were.
+
+The MCP `query` tool takes `start` and `end` (an RFC 3339 string or Unix
+seconds as a JSON number) and `step` (a humantime string or seconds as a JSON
+number). It returns every point unless `summarize` is true, when it returns
+those statistics per series instead, over the points above `above` when that
+is given.
 
 `extract-features` distills a whole recording into one deterministic, versioned
 JSON record — the structured input for an AI-assisted bottleneck assessment,

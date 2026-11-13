@@ -27,6 +27,21 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **A time window and per-series statistics on `query`.** The MCP `query`
+  tool takes `start`, `end` (RFC 3339 or Unix seconds) and `step`
+  (humantime or seconds); without them it evaluates every second of the
+  recording, as before, except on a recording of more than a million
+  seconds, where the default step is the whole number of seconds that
+  keeps it to a million points. `summarize: true` returns, per series, the
+  number of points, the number of active points, and their min, max, mean,
+  p50, p90 and p99 instead of every point; `above` makes the active points those strictly
+  above a threshold, so a benchmark's busy seconds can be summarized
+  without startup and teardown. `rezolus mcp query` takes `--start`,
+  `--end`, `--step` and `--above`, and prints p50, p90 and p99 beside min,
+  max and mean. Its statistics now leave out NaN points, so a series with
+  one no longer prints a NaN mean, and a series whose points are all NaN
+  prints none.
+
 - **Corsair AXi power supplies.** On Linux, `hw_sensors` reads a Corsair AXi
   PSU through its Corsair Link USB dongle (USB ID `1b1c:1c02`, the `cp210x`
   driver's `/dev/ttyUSBn`; tested on an AX1500i): input power, voltage and

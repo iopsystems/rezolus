@@ -16,6 +16,7 @@ mod describe_metrics;
 mod install;
 mod link;
 mod server;
+mod window;
 
 use chrono::{DateTime, Utc};
 use metriken_query::{MetricsSource, QueryResult};
@@ -594,7 +595,14 @@ pub fn run(config: Config) {
         Mode::DescribeRecording { file } => run_describe_recording(file, &recording),
         Mode::DescribeMetrics { file } => run_describe_metrics(file, &recording),
         Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query, &recording),
-        Mode::Query { file, query } => run_query(file, query, &recording),
+        Mode::Query {
+            file,
+            query,
+            start,
+            end,
+            step,
+            above,
+        } => run_query(file, query, &recording, start, end, step, above),
         Mode::ExtractFeatures { file } => run_extract_features(file, &recording),
         Mode::Install(opts) => std::process::exit(install::run(&opts)),
     }
@@ -1033,7 +1041,15 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
     }
 }
 
-fn run_query(file: PathBuf, query: String, selector: &RecordingSelector) {
+fn run_query(
+    file: PathBuf,
+    query: String,
+    selector: &RecordingSelector,
+    start: Option<f64>,
+    end: Option<f64>,
+    step: Option<f64>,
+    above: Option<f64>,
+) {
     let reader = match open_source_selected(&file, selector) {
         Ok(r) => r,
         Err(e) => {
@@ -1042,12 +1058,21 @@ fn run_query(file: PathBuf, query: String, selector: &RecordingSelector) {
         }
     };
 
-    let (start_time, end_time) = reader.time_range().unwrap_or((0.0, 0.0));
-    let step = 1.0;
+    let window = match window::resolve(reader.time_range(), reader.interval(), start, end, step) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("Query failed: {e}");
+            std::process::exit(1);
+        }
+    };
 
-    match reader.query_range(&query, start_time, end_time, step) {
+    match window::query(reader.as_ref(), &query, &window) {
         Ok(result) => {
-            println!("{}", format_query_result(&result));
+            println!(
+                "Window: {} to {} (Unix seconds), step {} s\n",
+                window.start, window.end, window.step
+            );
+            println!("{}", format_query_result(&result, above));
         }
         Err(e) => {
             eprintln!("Query failed: {e}");
@@ -1088,7 +1113,7 @@ fn run_extract_features(file: PathBuf, selector: &RecordingSelector) {
     }
 }
 
-fn format_query_result(result: &QueryResult) -> String {
+fn format_query_result(result: &QueryResult, above: Option<f64>) -> String {
     use std::fmt::Write;
     let mut output = String::new();
 
@@ -1160,14 +1185,25 @@ fn format_query_result(result: &QueryResult) -> String {
                     }
 
                     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
-                    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-                    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                    let sum: f64 = values.iter().sum();
-                    let mean = sum / values.len() as f64;
-
-                    writeln!(&mut output, "  Min:   {}", num(min)).unwrap();
-                    writeln!(&mut output, "  Max:   {}", num(max)).unwrap();
-                    writeln!(&mut output, "  Mean:  {}", num(mean)).unwrap();
+                    let stats = window::stats(&values, above);
+                    if let Some(t) = above {
+                        writeln!(
+                            &mut output,
+                            "  Active: {} of {} points above {}",
+                            stats.active,
+                            stats.points,
+                            num(t)
+                        )
+                        .unwrap();
+                    }
+                    if let Some(v) = &stats.values {
+                        writeln!(&mut output, "  Min:   {}", num(v.min)).unwrap();
+                        writeln!(&mut output, "  Max:   {}", num(v.max)).unwrap();
+                        writeln!(&mut output, "  Mean:  {}", num(v.mean)).unwrap();
+                        writeln!(&mut output, "  p50:   {}", num(v.p50)).unwrap();
+                        writeln!(&mut output, "  p90:   {}", num(v.p90)).unwrap();
+                        writeln!(&mut output, "  p99:   {}", num(v.p99)).unwrap();
+                    }
                     // A +Inf quantile is one past the histogram's highest
                     // finite bucket (metriken-query 0.47); say how many.
                     let inf = values.iter().filter(|v| **v == f64::INFINITY).count();
@@ -1277,6 +1313,10 @@ pub enum Mode {
     Query {
         file: PathBuf,
         query: String,
+        start: Option<f64>,
+        end: Option<f64>,
+        step: Option<f64>,
+        above: Option<f64>,
     },
     /// Extract structured features from a recording as JSON
     ExtractFeatures {
@@ -1386,7 +1426,27 @@ impl TryFrom<ArgMatches> for Config {
                     .get_one::<String>("QUERY")
                     .ok_or("Query argument is required")?
                     .clone();
-                Mode::Query { file, query }
+                let instant = |key: &str| {
+                    sub_args
+                        .get_one::<String>(key)
+                        .map(|s| window::instant_of_str(s, &format!("--{key}")))
+                        .transpose()
+                };
+                let start = instant("start")?;
+                let end = instant("end")?;
+                let step = sub_args
+                    .get_one::<String>("step")
+                    .map(|s| window::step_of_str(s))
+                    .transpose()?;
+                let above = sub_args.get_one::<f64>("above").copied();
+                Mode::Query {
+                    file,
+                    query,
+                    start,
+                    end,
+                    step,
+                    above,
+                }
             }
             Some(("extract-features", sub_args)) => {
                 let file = sub_args
@@ -1663,11 +1723,36 @@ pub fn command() -> Command {
                      widening first to the union span when the two came from different\n\
                      acquisition tables. Queries with no rate() and no histogram have no band\n\
                      to show.\n\n\
+                     The query is evaluated at the multiples of --step (counted from the\n\
+                     Unix epoch) from --start to --end: by default every second of the\n\
+                     recording (a coarser whole-second step on a recording of more than a\n\
+                     million seconds). A query combining samplers of different cadence is\n\
+                     evaluated at the slower one's rows instead, and histogram_quantile()\n\
+                     and the other histogram functions without a stride argument give one\n\
+                     point per row that holds observations, wherever the step falls (a\n\
+                     gauge histogram gives one per step; histogram_quantiles([q], h, STEP)\n\
+                     gives one per step). irate() is the rate over one step, so a\n\
+                     larger step also averages over a longer interval; a rate() at --start\n\
+                     reads data from before it. No point after the recording's last row is\n\
+                     printed. A rate() or irate() at --end over a sampler whose rows are\n\
+                     further apart than 120 s (or two of the recording's finest row\n\
+                     interval, when that is longer; or a million steps, when that is\n\
+                     shorter) is computed without its next row.\n\n\
+                     Each series prints its point count, its first and last points, and\n\
+                     lines Min:, Max:, Mean:, p50:, p90: and p99: over all its points that\n\
+                     are not NaN (percentiles by nearest rank). With --above VALUE those\n\
+                     statistics are over the points strictly above VALUE, and a line\n\
+                     \"Active: K of N points above VALUE\" comes first. A series with no\n\
+                     such point (none above VALUE, or every point NaN) prints no statistics\n\
+                     lines.\n\n\
                      EXAMPLES:\n    \
                      # Total cycles per second across all CPUs\n    \
                      rezolus mcp query out.dendro 'sum(irate(cpu_cycles[1m]))'\n\n    \
                      # A ratio: both operands' bands are combined\n    \
-                     rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'"
+                     rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'\n\n    \
+                     # Block IO throughput over the seconds above 500 MB/s, in a window\n    \
+                     rezolus mcp query out.dendro 'sum(irate(blockio_bytes[1m]))' \\\n        \
+                     --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --above 5e8"
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -1681,6 +1766,41 @@ pub fn command() -> Command {
                         .help("PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')")
                         .required(true)
                         .index(2),
+                )
+                .arg(
+                    clap::Arg::new("start")
+                        .long("start")
+                        .value_name("TIME")
+                        .help(
+                            "Start of the window: Unix seconds or RFC 3339 (default: the recording's start)",
+                        ),
+                )
+                .arg(
+                    clap::Arg::new("end")
+                        .long("end")
+                        .value_name("TIME")
+                        .help(
+                            "End of the window, included: Unix seconds or RFC 3339 (default: the recording's end)",
+                        ),
+                )
+                .arg(
+                    clap::Arg::new("step")
+                        .long("step")
+                        .value_name("DURATION")
+                        .help("Time between evaluations: seconds or humantime such as 10s (default: 1s, coarser past a million seconds)"),
+                )
+                .arg(
+                    clap::Arg::new("above")
+                        .long("above")
+                        .value_name("VALUE")
+                        .value_parser(|s: &str| {
+                            s.parse::<f64>()
+                                .ok()
+                                .filter(|v| v.is_finite())
+                                .ok_or_else(|| format!("{s:?} is not a finite number"))
+                        })
+                        .allow_negative_numbers(true)
+                        .help("Compute each series' statistics over its points strictly above VALUE"),
                 )
                 .arg(recording_arg()),
         )
@@ -1790,7 +1910,7 @@ pub(crate) mod tests {
             ],
             notices: Vec::new(),
         };
-        let s = format_query_result(&with);
+        let s = format_query_result(&with, None);
         assert!(s.contains("[291.26"), "expected bound in output: {s}");
         assert!(s.contains("acquisition-window uncertainty"), "{s}");
 
@@ -1799,7 +1919,7 @@ pub(crate) mod tests {
             result: vec![MatrixSample::new(metric, vec![(1.0, 300.0)])],
             notices: Vec::new(),
         };
-        let s2 = format_query_result(&without);
+        let s2 = format_query_result(&without, None);
         assert!(!s2.contains('['), "no bounds expected: {s2}");
     }
 
@@ -1816,7 +1936,7 @@ pub(crate) mod tests {
             .with_intervals(Some(vec![(2.0e9, 2.5e9), (1.0e10, f64::INFINITY)]))],
             notices: Vec::new(),
         };
-        let s = format_query_result(&result);
+        let s = format_query_result(&result, None);
         assert!(
             s.contains("Last:  2 = +Inf  [10000000000.000000, +Inf]"),
             "{s}"
@@ -1829,7 +1949,7 @@ pub(crate) mod tests {
             result: (1.0, f64::NAN),
             notices: Vec::new(),
         };
-        assert!(format_query_result(&scalar).contains("1 = NaN"));
+        assert!(format_query_result(&scalar, None).contains("1 = NaN"));
     }
 
     /// A result's notices follow the table, one JSON object a line; a
@@ -1847,14 +1967,14 @@ pub(crate) mod tests {
             result: vec![MatrixSample::new(HashMap::new(), vec![(1.0, 300.0)])],
             notices: vec![notice.clone()],
         };
-        let s = format_query_result(&with);
+        let s = format_query_result(&with, None);
         let line = serde_json::to_string(&notice).unwrap();
         assert!(s.contains(&format!("Notices:\n  {line}\n")), "{s}");
         let without = QueryResult::Matrix {
             result: vec![MatrixSample::new(HashMap::new(), vec![(1.0, 300.0)])],
             notices: Vec::new(),
         };
-        assert!(!format_query_result(&without).contains("Notices"));
+        assert!(!format_query_result(&without, None).contains("Notices"));
     }
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
