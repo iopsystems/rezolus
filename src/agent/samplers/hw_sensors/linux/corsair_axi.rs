@@ -276,7 +276,7 @@ fn closing() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
 }
 
 /// How long an open waits for the port's previous close to return. A cp210x
-/// close that is not draining output takes a few milliseconds.
+/// close with no output to drain took 7.9 ms on the tested dongle.
 const CLOSE_WAIT: Duration = Duration::from_millis(100);
 
 /// The error for a port whose previous close has not returned. It is not a
@@ -555,6 +555,9 @@ pub(crate) const OPEN_BACKOFF: Duration = Duration::from_secs(60);
 /// each consecutive failure doubles the wait.
 const REGISTER_BACKOFF: Duration = Duration::from_secs(1);
 pub(crate) const MAX_REGISTER_BACKOFF: Duration = Duration::from_secs(60);
+/// After an open finds the port's previous close still running, further opens
+/// are refused without waiting for this long.
+const CLOSE_PENDING_RETRY: Duration = Duration::from_secs(1);
 /// The PMBus page is read again before a reading at most this often.
 const PAGE_RECHECK: Duration = Duration::from_secs(1);
 
@@ -582,6 +585,8 @@ pub(crate) struct Sessions<P> {
     open: Opener<P>,
     sessions: HashMap<PathBuf, Session<P>>,
     open_failed: HashMap<PathBuf, Instant>,
+    /// When an open last found the port's previous close still running.
+    close_pending: HashMap<PathBuf, Instant>,
     register_failed: HashMap<(PathBuf, u8), Failure>,
 }
 
@@ -591,20 +596,32 @@ impl<P: Port> Sessions<P> {
             open: Box::new(open),
             sessions: HashMap::new(),
             open_failed: HashMap::new(),
+            close_pending: HashMap::new(),
             register_failed: HashMap::new(),
         }
     }
 
     fn open(&mut self, sysfs: &Path, tty: &Path, now: Instant) -> io::Result<&mut Session<P>> {
         if !self.sessions.contains_key(tty) {
+            // Within a second of finding the previous close still running, do
+            // not wait for it again: one wait per sweep, not one per register.
+            if let Some(at) = self.close_pending.get(tty) {
+                if now.saturating_duration_since(*at) < CLOSE_PENDING_RETRY {
+                    return Err(io::Error::new(io::ErrorKind::ResourceBusy, ClosePending));
+                }
+            }
             match (self.open)(sysfs, tty).and_then(Session::open) {
                 Ok(mut session) => {
                     session.page_checked = now;
                     self.open_failed.remove(tty);
+                    self.close_pending.remove(tty);
                     self.sessions.insert(tty.to_path_buf(), session);
                 }
                 Err(e) => {
-                    if !is_close_pending(&e) {
+                    if is_close_pending(&e) {
+                        self.close_pending.insert(tty.to_path_buf(), now);
+                    } else {
+                        self.close_pending.remove(tty);
                         self.open_failed.insert(tty.to_path_buf(), now);
                     }
                     return Err(e);
@@ -621,6 +638,7 @@ impl<P: Port> Sessions<P> {
     pub(crate) fn retain(&mut self, ttys: &[PathBuf]) {
         self.sessions.retain(|tty, _| ttys.contains(tty));
         self.open_failed.retain(|tty, _| ttys.contains(tty));
+        self.close_pending.retain(|tty, _| ttys.contains(tty));
         self.register_failed
             .retain(|(tty, _), _| ttys.contains(tty));
     }
@@ -1479,7 +1497,7 @@ mod tests {
         closing().push(tty.clone());
         let done = tty.clone();
         let closer = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(2));
             closing().retain(|p| *p != done);
         });
         // Past the wait, the open is attempted and fails on the missing path.
@@ -1488,6 +1506,26 @@ mod tests {
             .expect("no such path");
         closer.join().unwrap();
         assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err}");
+    }
+
+    #[test]
+    fn a_long_pending_close_costs_one_wait_per_sweep() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let mut sessions: Sessions<Scripted> = Sessions::new(move |_: &Path, _: &Path| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(io::Error::new(io::ErrorKind::ResourceBusy, ClosePending))
+        });
+        let t0 = Instant::now();
+        let tty = Path::new(TTY);
+        for k in 0..6 {
+            let now = t0 + Duration::from_secs(5 * k);
+            for register in SWEEP {
+                assert!(sessions.read(Path::new(SYS), tty, register, now).is_err());
+            }
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 6);
+        assert!(sessions.open_failed.is_empty());
     }
 
     #[test]
@@ -1509,9 +1547,11 @@ mod tests {
         let tty = Path::new(TTY);
         assert!(sessions.read(Path::new(SYS), tty, READ_PIN, t0).is_err());
         assert!(sessions.open_failed.is_empty());
-        // The next register in the same sweep opens and reads.
+        // The next sweep opens and reads; no 60 s backoff.
         assert_eq!(
-            sessions.read(Path::new(SYS), tty, READ_VIN, t0).unwrap(),
+            sessions
+                .read(Path::new(SYS), tty, READ_VIN, t0 + Duration::from_secs(5))
+                .unwrap(),
             187.0
         );
         drop(psu);

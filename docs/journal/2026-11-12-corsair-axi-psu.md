@@ -89,8 +89,11 @@ never drains. A fifth review found that a dropped session's tty was still on
 that list when the next register, microseconds later, tried to reopen it, and
 the refusal set the 60 s port backoff, so one lost reply took the PSU offline
 until the next rediscovery. An open now waits up to 100 ms for a pending close
-(a cp210x close without output to drain makes two USB control transfers), and a
-refusal for a pending close sets no backoff.
+(a cp210x close with no output to drain took 7.9 ms on hv02, median of 10), and
+a refusal for a pending close sets no 60 s backoff. A sixth review found that
+this made every register wait 100 ms on every sweep while a close drained (600
+ms a sweep); after one such refusal the port is now refused without waiting for
+1 s, so a draining close costs at most 100 ms a sweep.
 
 On Linux, a tty in raw mode with VMIN 0 and `O_NONBLOCK` returns 0 from `read`
 when no byte is waiting, not `EAGAIN`; a hangup is visible only as `POLLHUP`.
