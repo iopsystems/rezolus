@@ -1717,6 +1717,8 @@ Basic network traffic statistics.
 | `network_packets` | Packets transferred, counted once per interface traversed — **reads high on stacked interfaces**, see below | `direction={receive,transmit}` |
 | `network_host_bytes` | Bytes crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
 | `network_host_packets` | Packets crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
+| `network_interface_errors` | Errors reported by network interfaces (macOS only) | `direction={receive,transmit}` |
+| `network_interface_drops` | Packets dropped at an interface's input or send queue (macOS only) | `direction={receive,transmit}` |
 
 #### Which pair to use
 
@@ -1795,6 +1797,26 @@ They exclude `lo0`, bridges and `utun` tunnels, which have no
 `IONetworkInterface`, and `vmenet` interfaces, which are software devices
 under `IOResources`. A tunnel delegated to a wifi interface reports wifi as
 its functional type, and is excluded because it has a delegate.
+
+`network_interface_errors` sums the input errors (`ifi_ierrors`, receive) and
+output errors (`ifi_oerrors`, transmit). `network_interface_drops` sums the
+input queue drops (`ifi_iqdrops`, receive) and send queue drops
+(`ifmd_snd_drops`, transmit). Both sum every interface, loopback included,
+except those with an `IOResources` ancestor in the I/O registry. On macOS
+26.6 these are the `vmenet` interfaces of virtual machines, whose
+`ifi_iqdrops` grows in steps of about 0xAAAAAAAA that are not drops. `ifmd_snd_drops` is 32 bits; when it wraps, that read adds only
+its new value.
+
+An interface that is neither hardware-backed nor under `IOResources` when
+first listed (`lo0`, bridges, `utun`, or an interface `if_nameindex` lists
+before the I/O registry does) is classified again on the first read at least
+2 seconds later, and on each read after that until a classification
+succeeds. Its errors and drops are held until then: discarded if it is found
+under `IOResources` or goes away first, added to the sums otherwise. An
+interface found hardware-backed then is in `network_host_bytes` and
+`network_host_packets` from that read on. A `vmenet` interface the I/O
+registry has not listed by then is counted, and its `ifi_iqdrops` steps go
+into `network_interface_drops`.
 
 The counters start at zero when the sampler starts and add each interface's
 increase since the previous read. An interface first listed after the

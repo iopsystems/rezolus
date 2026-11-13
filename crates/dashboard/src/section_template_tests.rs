@@ -381,7 +381,8 @@ fn legacy(bench: &Catalog) -> Catalog {
 /// buffers, LRU lists, commit accounting or swap cache, and has the
 /// macOS-only page classes and compressor. Block IO
 /// has the storage driver's counters but no latency or size histograms.
-/// Network has bytes and packets but no network_drop. TCP has the tcp_mib,
+/// Network has bytes and packets, and the macOS-only interface errors and
+/// drops, but no network_drop. TCP has the tcp_mib,
 /// tcp_retransmit and tcp_bytes counters but no tcp_packet_latency.
 /// Filesystem has the space, inode and read-only gauges, and the macOS-only
 /// per-volume use. Hardware sensors has temperature, power, voltage, current
@@ -483,6 +484,8 @@ fn macos() -> Catalog {
         "network_packets",
         "network_host_bytes",
         "network_host_packets",
+        "network_interface_errors",
+        "network_interface_drops",
         "tcp_bytes",
     ] {
         out.counters.insert(
@@ -1044,6 +1047,25 @@ fn exceptions_on_macos_draw_only_tcp_retransmits() {
     assert_eq!(group_names(&json), ["TCP"]);
     let json = render_generator(&macos().without("tcp_retransmit"), "/exceptions", &ctx);
     assert!(group_names(&json).is_empty(), "{json}");
+}
+
+/// A macOS recording without the TCP statistics has the interface errors
+/// and drops but neither network_drop nor tcp_retransmit, so the network
+/// section's Errors group has no Drops & Retransmits subgroup.
+#[test]
+fn network_on_macos_without_tcp_stats_matches_the_template() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let data = macos().without("tcp_retransmit");
+    let generated = render_generator(&data, "/network", &ctx);
+    assert!(!generated.contains("Drops & Retransmits"), "{generated}");
+    assert!(
+        generated.contains("Interface Errors & Drops"),
+        "{generated}"
+    );
+    assert_eq!(
+        generated,
+        render_template(&template(), &data, "/network", &ctx)
+    );
 }
 
 /// A subgroup gated on any of several metrics, rendered with only one of

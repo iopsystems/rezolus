@@ -89,24 +89,65 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     // default).
     let drops = has_metric(data, "network_drop");
     let retransmits = has_metric(data, "tcp_retransmit");
-    if drops || retransmits {
+    let interface_errors = has_metric(data, "network_interface_errors");
+    let interface_drops = has_metric(data, "network_interface_drops");
+    if drops || retransmits || interface_errors || interface_drops {
         let mut errors = Group::new("Errors", "errors");
 
-        let health = errors.subgroup("Drops & Retransmits");
-        health.describe(
-            "Packets dropped at the network layer and TCP-level retransmissions — key health signals.",
-        );
-        if drops {
-            health.plot_promql(
-                Plot::counter("Packet Drops", "packet-drops", Unit::Rate),
-                "sum(irate(network_drop[5m]))".to_string(),
+        if drops || retransmits {
+            let health = errors.subgroup("Drops & Retransmits");
+            health.describe(
+                "Packets dropped at the network layer and TCP-level retransmissions — key health signals.",
             );
+            if drops {
+                health.plot_promql(
+                    Plot::counter("Packet Drops", "packet-drops", Unit::Rate),
+                    "sum(irate(network_drop[5m]))".to_string(),
+                );
+            }
+            if retransmits {
+                health.plot_promql(
+                    Plot::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
+                    "sum(irate(tcp_retransmit[5m]))".to_string(),
+                );
+            }
         }
-        if retransmits {
-            health.plot_promql(
-                Plot::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
-                "sum(irate(tcp_retransmit[5m]))".to_string(),
+
+        if interface_errors || interface_drops {
+            let interface = errors.subgroup("Interface Errors & Drops");
+            interface.describe(
+                "Errors and queue drops the network interfaces report, summed over every \
+                 interface, loopback included, except the software interfaces under \
+                 IOResources (the vmenet interfaces of virtual machines). macOS only.",
             );
+            if interface_errors {
+                interface.plot_promql(
+                    Plot::counter(
+                        "Interface Errors Receive",
+                        "interface-errors-rx",
+                        Unit::Rate,
+                    ),
+                    "sum(irate(network_interface_errors{direction=\"receive\"}[5m]))".to_string(),
+                );
+                interface.plot_promql(
+                    Plot::counter(
+                        "Interface Errors Transmit",
+                        "interface-errors-tx",
+                        Unit::Rate,
+                    ),
+                    "sum(irate(network_interface_errors{direction=\"transmit\"}[5m]))".to_string(),
+                );
+            }
+            if interface_drops {
+                interface.plot_promql(
+                    Plot::counter("Interface Drops Receive", "interface-drops-rx", Unit::Rate),
+                    "sum(irate(network_interface_drops{direction=\"receive\"}[5m]))".to_string(),
+                );
+                interface.plot_promql(
+                    Plot::counter("Interface Drops Transmit", "interface-drops-tx", Unit::Rate),
+                    "sum(irate(network_interface_drops{direction=\"transmit\"}[5m]))".to_string(),
+                );
+            }
         }
 
         view.group(errors);

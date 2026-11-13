@@ -215,6 +215,80 @@
               "promql_query": "sum(irate(tcp_retransmit[5m]))"
             }
           ]
+        },
+        {
+          "name": "Interface Errors & Drops",
+          "description": "Errors and queue drops the network interfaces report, summed over every interface, loopback included, except the software interfaces under IOResources (the vmenet interfaces of virtual machines). macOS only.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Interface Errors Receive",
+                "id": "interface-errors-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_interface_errors{direction=\"receive\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Interface Errors Transmit",
+                "id": "interface-errors-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_interface_errors{direction=\"transmit\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Interface Drops Receive",
+                "id": "interface-drops-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_interface_drops{direction=\"receive\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Interface Drops Transmit",
+                "id": "interface-drops-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_interface_drops{direction=\"transmit\"}[5m]))"
+            }
+          ]
         }
       ]
     },
