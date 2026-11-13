@@ -85,7 +85,12 @@ at all (it still refuses a port another process set it on, and still takes the
 flock), moves the fd itself to the close thread, and refuses a tty from a list
 of pending closes until its close returns, so the worker never opens a port
 whose close is draining. The close thread's effect is not tested: a pty close
-never drains.
+never drains. A fifth review found that a dropped session's tty was still on
+that list when the next register, microseconds later, tried to reopen it, and
+the refusal set the 60 s port backoff, so one lost reply took the PSU offline
+until the next rediscovery. An open now waits up to 100 ms for a pending close
+(a cp210x close without output to drain makes two USB control transfers), and a
+refusal for a pending close sets no backoff.
 
 On Linux, a tty in raw mode with VMIN 0 and `O_NONBLOCK` returns 0 from `read`
 when no byte is waiting, not `EAGAIN`; a hangup is visible only as `POLLHUP`.
@@ -103,8 +108,8 @@ handshake capture's median is 2.5 ms.
 
 After the review fixes (page reread once a second, exclusive open), the same
 setup gave sweeps of 34.3–35.2 ms (12 sweeps over 60 s; the first, with the page
-checked at open, 29.8 ms), a discovery that opened the port 46 ms, and a
-rediscovery with the port already open 2.5 ms.
+checked at open, 29.8 ms), a discovery that opened the port 46 ms (42 ms in
+three later runs), and a rediscovery with the port already open 2.5 ms.
 
 ## Not done
 

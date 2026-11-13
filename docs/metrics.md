@@ -1932,14 +1932,14 @@ The agent needs read-write access to the tty. Before opening it, the agent
 checks in sysfs that the tty still belongs to a device with the dongle's USB
 ID. It refuses the port if another process has set `TIOCEXCL` on it or holds a
 `flock` on it, and otherwise locks it with `flock` before changing the port's
-settings. The dongle is sent read requests
-and a setup command whose effect is undocumented; no PSU register is written.
-The PSU's PMBus page is read when the port is opened and again before a
-reading at most once a second. A page other than 0 fails the port, and the
-agent does not switch it back, so the PSU's readings stay absent until the
-page is 0 again. `cpsumon` sets page 0 at the start of a readout and leaves
-page 2 at the end; no tool is known to leave it on 0, and whether a power
-cycle resets it is not known. A process that already has the port open without claiming it, such as
+settings. The dongle is sent read requests and a setup command whose effect is
+undocumented; no PSU register is written. The PSU's PMBus page is read when the
+port is opened and again before a reading at most once a second. A page other
+than 0 fails the port, and the agent does not switch it back, so the PSU's
+readings stay absent until the page is 0 again. `cpsumon` sets page 0 at the
+start of a readout and leaves page 2 at the end; no tool is known to leave it
+on 0, and whether a power cycle resets it is not known. A process that already
+has the port open without setting `TIOCEXCL` or taking a `flock`, such as
 CyberPower's `pwrstatd` probing serial ports for a UPS, takes the PSU's
 replies, and discovery reports an error (`no reply`, or a reply that does not
 decode).
@@ -1949,12 +1949,13 @@ tries again every 60 seconds. A failed reading, including a lost reply to the
 page check, closes the port, and that register is not read for 1 second,
 doubling on each consecutive failure up to 60 seconds. The port is closed on a
 separate thread, because usb-serial's close can wait up to 30 seconds for
-output to drain, and is not reopened until that close returns. On an AX1500i
-the six readings and the page check add about 35 ms to each sweep (two serial
-exchanges per register), and a discovery that opens the port 42–46 ms. On the
-tested AX1500i the fan reported 0 rpm up to 371 W input. Corsair HXi/RMi power
-supplies use other USB IDs and are read by the kernel's `corsair-psu` hwmon
-driver.
+output to drain; a reading waits up to 100 ms for a previous close to return
+and otherwise skips the port until the next reading, without the 60-second
+backoff. On an AX1500i the six readings and the page check add about 35 ms to
+each sweep (two serial exchanges per register), and a discovery that opens the
+port 42–46 ms. On the tested AX1500i the fan reported 0 rpm up to 371 W input.
+Corsair HXi/RMi power supplies use other USB IDs and are read by the kernel's
+`corsair-psu` hwmon driver.
 
 `asusec` reports -40 °C for a temperature header with nothing connected.
 Such a channel gets no slot and is not read on each sweep; discovery reads it

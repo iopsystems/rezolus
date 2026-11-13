@@ -275,6 +275,27 @@ fn closing() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
     CLOSING.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// How long an open waits for the port's previous close to return. A cp210x
+/// close that is not draining output takes a few milliseconds.
+const CLOSE_WAIT: Duration = Duration::from_millis(100);
+
+/// The error for a port whose previous close has not returned. It is not a
+/// failed open: the port is retried on the next reading.
+#[derive(Debug)]
+pub(crate) struct ClosePending;
+
+impl std::fmt::Display for ClosePending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("corsair_axi: the port's last close has not finished")
+    }
+}
+
+impl std::error::Error for ClosePending {}
+
+fn is_close_pending(e: &io::Error) -> bool {
+    e.get_ref().is_some_and(|inner| inner.is::<ClosePending>())
+}
+
 impl SerialPort {
     fn raw(&self) -> i32 {
         self.fd.as_ref().expect("open until dropped").as_raw_fd()
@@ -334,15 +355,16 @@ impl SerialPort {
     }
 
     /// Opens `path` for this agent's use, then configures it; see
-    /// [`Self::claim`]. A port whose previous close is still running is
-    /// refused without being opened, since the open would wait for that
-    /// close to finish.
+    /// [`Self::claim`]. If the port's previous close is still running, waits
+    /// up to [`CLOSE_WAIT`] for it, then refuses with [`ClosePending`]
+    /// without opening the port, since the open would wait for that close.
     pub(crate) fn open_exclusive(path: &Path) -> io::Result<Self> {
-        if closing().iter().any(|p| p == path) {
-            return Err(io::Error::new(
-                io::ErrorKind::ResourceBusy,
-                "corsair_axi: the port's last close has not finished",
-            ));
+        let started = Instant::now();
+        while closing().iter().any(|p| p == path) {
+            if started.elapsed() >= CLOSE_WAIT {
+                return Err(io::Error::new(io::ErrorKind::ResourceBusy, ClosePending));
+            }
+            std::thread::sleep(Duration::from_millis(1));
         }
         Self::claim(Self::open_fd(path)?, path)
     }
@@ -582,7 +604,9 @@ impl<P: Port> Sessions<P> {
                     self.sessions.insert(tty.to_path_buf(), session);
                 }
                 Err(e) => {
-                    self.open_failed.insert(tty.to_path_buf(), now);
+                    if !is_close_pending(&e) {
+                        self.open_failed.insert(tty.to_path_buf(), now);
+                    }
                     return Err(e);
                 }
             }
@@ -1434,17 +1458,67 @@ mod tests {
 
     #[test]
     fn a_port_whose_close_is_pending_is_refused_without_opening_it() {
-        // A path that cannot be opened: a refusal of any other kind than
-        // ResourceBusy would mean the open was attempted.
+        // A path that cannot be opened: any refusal but ClosePending would
+        // mean the open was attempted.
         let tty = PathBuf::from("/nonexistent/ttyUSB-closing");
         closing().push(tty.clone());
+        let started = Instant::now();
         let err = SerialPort::open_exclusive(&tty).err().expect("refused");
+        let waited = started.elapsed();
         closing().retain(|p| *p != tty);
-        assert_eq!(err.kind(), io::ErrorKind::ResourceBusy, "{err}");
+        assert!(is_close_pending(&err), "{err}");
+        assert!(
+            waited >= CLOSE_WAIT && waited < Duration::from_secs(1),
+            "{waited:?}"
+        );
     }
 
     #[test]
-    fn a_dropped_port_is_closed_off_the_callers_thread_then_claimable() {
+    fn an_open_waits_out_a_short_close() {
+        let tty = PathBuf::from("/nonexistent/ttyUSB-short-close");
+        closing().push(tty.clone());
+        let done = tty.clone();
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            closing().retain(|p| *p != done);
+        });
+        // Past the wait, the open is attempted and fails on the missing path.
+        let err = SerialPort::open_exclusive(&tty)
+            .err()
+            .expect("no such path");
+        closer.join().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err}");
+    }
+
+    #[test]
+    fn a_pending_close_does_not_back_off_the_port() {
+        let psu = std::sync::Arc::new(std::sync::Mutex::new(Psu::default()));
+        let shared = psu.clone();
+        let refused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let once = refused.clone();
+        let mut sessions = Sessions::new(move |_: &Path, _: &Path| {
+            if !once.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Err(io::Error::new(io::ErrorKind::ResourceBusy, ClosePending));
+            }
+            Ok(Scripted {
+                psu: shared.clone(),
+                pending: None,
+            })
+        });
+        let t0 = Instant::now();
+        let tty = Path::new(TTY);
+        assert!(sessions.read(Path::new(SYS), tty, READ_PIN, t0).is_err());
+        assert!(sessions.open_failed.is_empty());
+        // The next register in the same sweep opens and reads.
+        assert_eq!(
+            sessions.read(Path::new(SYS), tty, READ_VIN, t0).unwrap(),
+            187.0
+        );
+        drop(psu);
+    }
+
+    #[test]
+    fn a_dropped_port_is_claimable_once_its_close_returns() {
         let (_master, slave) = pty();
         drop(SerialPort::open_exclusive(&slave).unwrap());
         let started = Instant::now();
