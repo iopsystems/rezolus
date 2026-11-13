@@ -212,10 +212,12 @@ mod tests {
             match v {
                 serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, out)),
                 serde_json::Value::Object(o) => {
-                    if let Some(q) = o.get("promql_query").and_then(|q| q.as_str()) {
-                        if q.contains("__SELECTED_CGROUPS__") {
-                            out.push(q.to_string());
-                        }
+                    if let Some(q) = o
+                        .get("promql_query")
+                        .and_then(|q| q.as_str())
+                        .filter(|q| q.contains("__SELECTED_CGROUPS__"))
+                    {
+                        out.push(q.to_string());
                     }
                     o.values().for_each(|v| walk(v, out));
                 }
