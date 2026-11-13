@@ -142,10 +142,7 @@ pub(super) fn filter_parquet_file(
                 .get("source")
                 .map(String::as_str)
                 .or(file_source.as_deref());
-            if source == Some("rezolus") {
-                return true;
-            }
-            false
+            source == Some("rezolus")
         })
         .map(|(i, _)| i)
         .collect();
