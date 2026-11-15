@@ -13,7 +13,7 @@
   false` leaves it alone. On an AX1500i the readings add about 35 ms to each
   sweep, on the blocking worker. A process that already has the port open,
   such as CyberPower's `pwrstatd`, takes the replies, and discovery reports
-  an error. Backported from 6.0 (#1694).
+  an error. Backported from 6.0 (#1694) in #1699.
 
 ### Fixed
 
