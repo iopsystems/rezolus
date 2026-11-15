@@ -268,6 +268,11 @@ mod tests {
                 bare.gpu_perf_level(name),
                 "{name}: gpu_perf_level"
             );
+            assert_eq!(
+                packaged.corsair_axi(name),
+                bare.corsair_axi(name),
+                "{name}: corsair_axi"
+            );
         }
     }
 

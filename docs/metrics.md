@@ -1497,8 +1497,9 @@ backoff does not apply. If discovery runs while that close is pending, the PSU
 has no series until the next discovery. On an AX1500i the six readings and the
 page check add about 35 ms to each sweep (two serial exchanges per register),
 and a discovery that opens the port 42–46 ms. On the tested AX1500i the fan
-reported 0 rpm up to 371 W input. Corsair HXi/RMi power supplies use other USB
-IDs and are read by the kernel's `corsair-psu` hwmon driver.
+read 0 rpm up to 371 W input in the two committed captures and 236 rpm at 222 W
+in a later run. Corsair HXi/RMi power supplies use other USB IDs and are read
+by the kernel's `corsair-psu` hwmon driver.
 
 `asusec` reports -40 °C for a temperature header with nothing connected.
 Such a channel gets no slot and is not read on each sweep; discovery reads it
