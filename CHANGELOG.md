@@ -1,35 +1,19 @@
 ## [Unreleased]
 
+## [5.32.0] - 2026-11-15
+
 ### Added
 
-- **Corsair AXi power supplies.** `hw_sensors` reads a Corsair AXi PSU
-  through its Corsair Link USB dongle (USB ID `1b1c:1c02`, the `cp210x`
-  driver's `/dev/ttyUSBn`; tested on an AX1500i): input power, voltage and
-  current as `sensor_power`, `sensor_voltage` and `sensor_current`, two
-  `sensor_temperature` channels and `sensor_fan_speed`, with
-  `source=corsair_axi` and `chip` the PSU's model. Input power is the
-  machine's draw at the wall. On a host with that dongle the agent now locks
-  its tty and sends it read requests; `[samplers.hw_sensors] corsair_axi =
-  false` leaves it alone. On an AX1500i the readings add about 35 ms to each
-  sweep, on the blocking worker. A process that already has the port open,
-  such as CyberPower's `pwrstatd`, takes the replies, and discovery reports
-  an error. Backported from 6.0 (#1694) in #1699.
+- `hw_sensors` reads Corsair AXi power supplies through the Corsair Link USB
+  dongle (`1b1c:1c02`; tested on an AX1500i): input power, voltage and
+  current at the wall, two temperatures and the fan. On by default; turn it
+  off with `[samplers.hw_sensors] corsair_axi = false`. Backported from 6.0
+  (#1694) in #1699.
 
 ### Fixed
 
-- **An RPM upgrade keeps the units enabled and running.** Every `rpm -U`
-  left `rezolus` and `rezolus-exporter` stopped and disabled at boot: the
-  outgoing package's `%preun` stopped and disabled them after the incoming
-  package's `%post` had enabled them. The package now records each unit's
-  state in `%pre` on an upgrade and restores it in `%posttrans`, which runs
-  after the outgoing package's scriptlets, so an upgrade from 5.31.0 or
-  earlier keeps the units too: an enabled unit stays enabled, a running one
-  is restarted on the new binary, and a unit the operator disabled stays
-  disabled. `%post` enables and starts the agent and the exporter on a first
-  install only, `%preun` stops and disables the units on removal only, and
-  `%postun` reloads systemd. A `systemctl` call no longer fails the
-  scriptlet where systemd is not running, such as a container image build.
-  Backported from 6.0 (#1692) in #1695. (#1464)
+- An RPM upgrade no longer leaves `rezolus` and `rezolus-exporter` stopped
+  and disabled. Backported from 6.0 (#1692) in #1695. (#1464)
 
 ## [5.31.0] - 2026-11-11
 
@@ -2262,7 +2246,9 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.30.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.32.0...HEAD
+[5.32.0]: https://github.com/iopsystems/rezolus/compare/v5.31.0...v5.32.0
+[5.31.0]: https://github.com/iopsystems/rezolus/compare/v5.30.0...v5.31.0
 [5.30.0]: https://github.com/iopsystems/rezolus/compare/v5.29.2...v5.30.0
 [5.29.2]: https://github.com/iopsystems/rezolus/compare/v5.29.1...v5.29.2
 [5.29.1]: https://github.com/iopsystems/rezolus/compare/v5.29.0...v5.29.1
