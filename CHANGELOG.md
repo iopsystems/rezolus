@@ -193,6 +193,30 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **`rezolus view` uses less memory.** With metriken-storage 0.13.1,
+  `--cache-size-mb` bounds a `.dendro`'s opened segments and the blocks
+  decoded from them together. Before, each table kept its opened segments in
+  its own cache of up to that size, not counted by the budget, and histogram
+  blocks were charged less than they allocate (a snapshot with one non-zero
+  bucket, 12 of its 96 bytes). This lowers memory when a browse opens and
+  decodes more than the budget holds; a budget that already holds all of it
+  changes nothing. A segment that does not fit in the budget beside the
+  blocks one series decodes from it is opened again for each series. The
+  browser viewer's 64 MB budget now covers segments too.
+  With metriken-query 0.50.1, `rate` and `irate` over a recording with an
+  agent restart are read on the batched path instead of per series at full
+  resolution, and the batched path passes on each series' points as soon as
+  every epoch has been read far enough to answer them, instead of after each
+  chunk of up to eight segments.
+  Replaying the dashboard's 426 queries against a 12 h `.dendro` with 655
+  cgroups and one agent restart, on macOS, with all of these changes, the
+  viewer's peak RSS fell from 9.9–13.3 GiB to 1.9–2.0 GiB with
+  `--cache-size-mb 512` (two runs a side), and from 13.0 GiB to 4.0 GiB at
+  the default cache size (8 GiB on that 128 GiB host; one run a side). In
+  metriken's before-and-after runs of the same 426 queries, the query
+  changes gave every answer the same to 9 significant digits, and the
+  segment change answered and failed the same queries.
+
 - **An RPM upgrade keeps the units enabled and running.** Every `rpm -U`
   left `rezolus` and `rezolus-exporter` stopped and disabled at boot: the
   outgoing package's `%preun` stopped and disabled them after the incoming
