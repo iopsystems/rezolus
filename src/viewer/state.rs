@@ -33,17 +33,16 @@ pub const MAX_DEFAULT_CACHE_SIZE_BYTES: usize = 8 * 1024 * 1024 * 1024;
 /// Default buffer pool budget for the server-side viewer: an eighth of the
 /// memory available to the process (physical memory, or a Linux cgroup's
 /// limit when lower), clamped to [`MIN_DEFAULT_CACHE_SIZE_BYTES`] to
-/// [`MAX_DEFAULT_CACHE_SIZE_BYTES`]. The row-group cache holds at most the
-/// budget. Each table's segment cache holds at most the budget or that
-/// table's segment bytes, whichever is smaller, so together they hold at
-/// most the archive's segment bytes.
+/// [`MAX_DEFAULT_CACHE_SIZE_BYTES`]. The pool holds at most the budget: a
+/// `.dendro`'s opened segments and the blocks decoded from them share it.
 ///
-/// All readers share this budget via an LRU-evicted cache of decoded row
-/// groups. The budget is a ceiling: the pool holds only the row groups
-/// queries decode. First-query latency is unchanged; a query over row groups
-/// already decoded (the common dashboard workload) is served from the cache.
-/// A budget smaller than a query's row groups gives no reuse at all: every
-/// repeat decodes them again.
+/// All readers share this budget via an LRU-evicted cache of opened segments
+/// and decoded blocks. The budget is a ceiling: the pool holds only what
+/// queries open and decode. A query over blocks already decoded (the common
+/// dashboard workload) is served from the cache. A budget smaller than a
+/// query's blocks gives no reuse: every repeat decodes them again. A segment
+/// that does not fit in the pool beside the blocks one series decodes from it
+/// is opened again for each series.
 ///
 /// Tune with `REZOLUS_CACHE_MB` (env) or the `--cache-size-mb` flag.
 pub fn default_cache_size_bytes() -> usize {
@@ -320,7 +319,8 @@ pub struct AppState {
     pub file_checksum: RwLock<Option<String>>,
     pub proxy: ProxyState,
     pub trimmed_report_marker: RwLock<Option<String>>,
-    /// Shared LRU row-group cache for all `ParquetReader`s in this process.
+    /// Shared LRU cache of opened segments and decoded blocks for all readers
+    /// in this process.
     ///
     /// Readers opened with `Arc::clone(&state.pool)` share the same budget.
     /// The default is `default_cache_size_bytes()`; set `REZOLUS_CACHE_MB` or

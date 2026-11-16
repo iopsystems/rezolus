@@ -329,9 +329,13 @@ pub fn command() -> Command {
                 .long("cache-size-mb")
                 .value_name("MB")
                 .help(
-                    "Row-group buffer cache size in megabytes. Larger values \
+                    "Buffer pool size in megabytes, for opened segments and \
+                     decoded blocks together. Larger values \
                      speed up repeated queries against the same data (typical \
-                     dashboard workload); smaller values reduce peak RSS. \
+                     dashboard workload); smaller values reduce peak RSS, but \
+                     a segment that does not fit in the pool beside the \
+                     blocks one series decodes from it is opened again for \
+                     each series. \
                      Overrides REZOLUS_CACHE_MB. Default: an eighth of the \
                      memory available (physical, or a Linux cgroup's limit \
                      when lower), clamped to 500-8192.",
@@ -536,7 +540,7 @@ pub fn run(config: Config) {
 
     let registry = load_template_registry(config.templates_dir.as_deref());
 
-    // One shared pool for all ParquetReaders in this process.
+    // One buffer pool shared by every reader in this process.
     let pool = metriken_storage::BufferPool::new(config.cache_size_bytes);
     info!(
         "Buffer pool: {} MB",

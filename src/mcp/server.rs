@@ -71,9 +71,9 @@ impl From<&str> for McpTool {
 
 /// Default buffer pool budget for the MCP server: 500 MB.
 ///
-/// Multiple parquet files may be queried in a single MCP session; the
-/// shared pool means row groups decoded for one file stay warm for the
-/// next tool call against the same file.
+/// Several recordings may be queried in one MCP session; the pool keeps the
+/// segments opened and the blocks decoded for one recording for the next
+/// tool call against it.
 const MCP_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
 
 /// A cached reader, tagged with the recording it was opened from.
@@ -499,7 +499,8 @@ pub struct Server {
     /// bug: label values are free text, so two different selectors can render
     /// identical key bytes. The tuple cannot alias.
     reader_cache: Arc<RwLock<HashMap<(String, crate::mcp::RecordingSelector), CachedReader>>>,
-    /// Shared LRU row-group cache for all readers opened by this server.
+    /// Shared LRU cache of opened segments and decoded blocks for all readers
+    /// opened by this server.
     pool: Arc<BufferPool>,
 }
 

@@ -6,10 +6,11 @@ use metriken_storage::BufferPool;
 
 /// Buffer pool budget for the WASM viewer: 64 MB.
 ///
-/// Browsers impose tighter heap limits than servers; the source bytes
-/// are already in memory, so the effective warm-cache speedup is bounded
-/// by how many row groups fit alongside them. 64 MB is a conservative
-/// default — enough for a moderate recording without crowding the JS heap.
+/// Browsers impose tighter heap limits than servers; the source bytes are already in memory, so
+/// the effective warm-cache speedup is bounded by how many opened segments and decoded blocks fit
+/// in the budget. A segment that does not fit in the budget beside the blocks one series decodes
+/// from it is opened again for each series. 64 MB is a conservative default, enough for a moderate
+/// recording without crowding the JS heap.
 const WASM_CACHE_SIZE_BYTES: usize = 64 * 1024 * 1024;
 use dashboard::keys::{KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SYSTEMINFO};
 use dashboard::source_templates::TemplatePreference;
