@@ -227,30 +227,6 @@ fn str_list(args: &Value, key: &str) -> Result<Vec<String>, String> {
     }
 }
 
-/// An instant argument: RFC 3339, or Unix seconds as a number. A digit-only
-/// string is refused as ambiguous, as `add_event` refuses it.
-fn instant_secs(v: &Value, key: &str) -> Result<f64, String> {
-    match v {
-        Value::Number(n) => {
-            let s = n
-                .as_f64()
-                .ok_or_else(|| format!("{key} is not a finite number"))?;
-            if !s.is_finite() || s < 0.0 || s > 1e10 {
-                return Err(format!("{key} must be Unix seconds (a number under 1e10)"));
-            }
-            Ok(s)
-        }
-        Value::String(s) if s.trim().chars().all(|c| c.is_ascii_digit()) => Err(format!(
-            "{key} {s:?} is a digit-only string, which is ambiguous; send Unix seconds \
-             as a number or an RFC 3339 string"
-        )),
-        Value::String(s) => chrono::DateTime::parse_from_rfc3339(s.trim())
-            .map(|dt| dt.timestamp_millis() as f64 / 1000.0)
-            .map_err(|e| format!("{key} {s:?} is not RFC 3339: {e}")),
-        _ => Err(format!("{key} must be an RFC 3339 string or Unix seconds")),
-    }
-}
-
 /// Validate a section or chart id for the hash: non-empty, no `/`, `#`, `?`
 /// or whitespace, which would be read as more path or as a query.
 fn path_piece(s: &str, what: &str) -> Result<String, String> {
@@ -291,8 +267,8 @@ impl LinkSpec {
         let range = match (args.get("from"), args.get("to")) {
             (None | Some(Value::Null), None | Some(Value::Null)) => None,
             (Some(f), Some(t)) if !f.is_null() && !t.is_null() => {
-                let from = instant_secs(f, "from")?;
-                let to = instant_secs(t, "to")?;
+                let from = super::window::instant_of_value(f, "from")?;
+                let to = super::window::instant_of_value(t, "to")?;
                 if to <= from {
                     return Err(format!(
                         "to ({}) must be after from ({})",

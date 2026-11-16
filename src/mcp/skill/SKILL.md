@@ -28,7 +28,14 @@ the file if you were not given one; `rezolus record -o out.dendro` writes one.
    Read it before forming hypotheses; it needs at least 10 s of data.
 4. **`query`**, **`detect_anomalies`**, **`analyze_correlation`** to test
    specific hypotheses. `detect_anomalies` and a check need ONE series:
-   aggregate with `sum()` / `avg()` or add label matchers.
+   aggregate with `sum()` / `avg()` or add label matchers. A `query`
+   returns one point per second of the recording by default: pass `start`
+   and `end` (from `describe_recording` or an event's time) to read a
+   window, and `summarize: true` to get min, max, mean, p50, p90 and p99
+   per series instead of the points. `above` restricts that summary to the
+   points over a threshold, which leaves out startup, teardown and idle
+   seconds. `irate()` is the rate over one `step`, so a coarser step also
+   smooths the series and lowers its peaks.
 5. Write back what you found (below), and hand the person a link.
 
 Rules that hold on every recording:

@@ -240,6 +240,18 @@ target/release/rezolus mcp describe-metrics run.dendro                     # lis
 target/release/rezolus mcp detect-anomalies run.dendro                     # exhaustive anomaly detection
 target/release/rezolus mcp detect-anomalies run.dendro "cpu_usage"          # targeted anomaly detection
 target/release/rezolus mcp query run.dendro "sum(irate(cpu_cycles[1m]))"     # PromQL query
+target/release/rezolus mcp query run.dendro "sum(irate(blockio_bytes[1m]))" --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --step 1s --above 5e8
+# --start/--end: Unix seconds or RFC 3339 (default: the recording's span, end included); --step: seconds or
+#   humantime (default 1s, coarser on a recording of more than a million seconds); points at multiples of step
+#   (except cross-cadence: the slower sampler's rows; unstrided histogram functions: one per row), irate() over one step;
+#   each series prints min/max/mean/p50/p90/p99 (nearest rank), over the points strictly above --above when given.
+#   src/mcp/window.rs, shared with the MCP query tool (start/end/step; summarize=true [+ above] returns
+#   resultType "summary" with those statistics per series instead of the points). window::query asks the engine
+#   for the part of the window the recording covers, extended past end by max(120 s, 2 x reader.interval()) (at
+#   least one step, at most 1e6 steps), and drops points outside [start, end]: metriken-query 0.50 reads no row after
+#   the end it is given, so a rate at a point equal to end would miss the row after it. reader.interval() is the
+#   finest table's, so the 120 s floor is what covers a slower sampler read alone; one whose rows are further
+#   apart is still computed at end without its next row. Points after the recording's last row are dropped too.
 # query prints an acquisition-window uncertainty band [lo, hi] beside rate()/irate() values
 # (scalar ops scale the band, e.g. rate(x)*k; series-op-series combines both operands'
 # bands by interval arithmetic; non-rate/non-histogram queries have no band to show)

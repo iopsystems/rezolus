@@ -194,7 +194,7 @@ fn read_tools() -> Vec<Value> {
         },
         {
             "name": "query",
-            "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window.",
+            "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window. Points are at the multiples of step (counted from the Unix epoch) from start to end: by default every second of the recording, or a coarser whole-second step on a recording of more than a million seconds. A query combining samplers of different cadence is evaluated at the slower one's rows instead, and histogram_quantile() and the other histogram functions without a stride argument give one point per row that holds observations, wherever the step falls (a gauge histogram gives one per step); histogram_quantiles([q], h, STEP) gives one per step. With summarize, each series is returned as statistics (points, active, min, max, mean, p50, p90, p99) instead of its points; above restricts the statistics to points above a threshold, such as the seconds a workload was running.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -210,6 +210,26 @@ fn read_tools() -> Vec<Value> {
                     "query": {
                         "type": "string",
                         "description": "PromQL query expression. For COUNTERS use irate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
+                    },
+                    "start": {
+                        "type": ["string", "number"],
+                        "description": "Start of the window: an RFC 3339 string or Unix seconds as a JSON number (a digit-only string is refused). Defaults to the recording's start. A rate() at start reads data from before it."
+                    },
+                    "end": {
+                        "type": ["string", "number"],
+                        "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned. A rate() or irate() at end over a sampler whose rows are further apart than 120 s (or two of the recording's finest row interval, when that is longer; or a million steps, when that is shorter) is computed without its next row."
+                    },
+                    "step": {
+                        "type": ["string", "number"],
+                        "description": "Time between evaluations: a humantime string (10s, 500ms, 1m) or seconds as a JSON number, fractional allowed (a digit-only string is refused). Defaults to 1 second, or a coarser whole number of seconds that keeps the window within 1,000,000 points. irate() is the rate over one step, so a larger step also averages over a longer interval."
+                    },
+                    "summarize": {
+                        "type": "boolean",
+                        "description": "Return each series as statistics over its points instead of the points: resultType summary, with start, end and step, and per series its labels (metric), points, active, and min, max, mean, p50, p90 and p99 over the active points (left out when active is 0). A percentile is the nearest rank. Defaults to false."
+                    },
+                    "above": {
+                        "type": "number",
+                        "description": "With summarize (refused without it): the active points are those strictly above this value, so the statistics leave out idle seconds. Without it, every point that is not NaN is active. NaN is never active."
                     }
                 },
                 "required": ["parquet_file", "query"]
@@ -403,30 +423,32 @@ fn timestamp_ns_of(v: &Value) -> Result<u64, String> {
     }
 }
 
-/// `duration` as a tool argument: humantime (`30s`, `2m`) or seconds as a
-/// number. A digit-only string is refused for the same reason as in
-/// `timestamp_ns_of`.
-fn duration_ns_of(v: &Value) -> Result<u64, String> {
+/// A duration tool argument named `key`: humantime (`30s`, `2m`) or
+/// seconds as a number. A digit-only string is refused for the same reason
+/// as in `timestamp_ns_of`.
+fn duration_ns_of(v: &Value, key: &str) -> Result<u64, String> {
     match v {
-        Value::String(s) if s.trim().is_empty() => Err("duration is empty".into()),
+        Value::String(s) if s.trim().is_empty() => Err(format!("{key} is empty")),
         Value::String(s) if s.trim().chars().all(|c| c.is_ascii_digit()) => Err(format!(
-            "duration {s:?} is a digit-only string, which is ambiguous (seconds or \
+            "{key} {s:?} is a digit-only string, which is ambiguous (seconds or \
              nanoseconds?); send seconds as a number or humantime such as \"30s\""
         )),
         Value::String(s) => crate::parquet_tools::events::parse_duration_str(s),
         Value::Number(n) => {
-            let secs = n.as_f64().ok_or("duration is not a finite number")?;
+            let secs = n
+                .as_f64()
+                .ok_or_else(|| format!("{key} is not a finite number"))?;
             if !secs.is_finite() || secs <= 0.0 {
-                return Err("duration must be a positive number of seconds".into());
+                return Err(format!("{key} must be a positive number of seconds"));
             }
             if secs > MAX_DURATION_SECONDS {
                 return Err(format!(
-                    "duration {secs} s is over 31 years; send seconds, not nanoseconds"
+                    "{key} {secs} s is over 31 years; send seconds, not nanoseconds"
                 ));
             }
             Ok((secs * 1e9).round() as u64)
         }
-        _ => Err("duration must be a humantime string or seconds".into()),
+        _ => Err(format!("{key} must be a humantime string or seconds")),
     }
 }
 
@@ -1093,14 +1115,45 @@ impl Server {
             .and_then(|q| q.as_str())
             .ok_or("Missing query")?;
 
+        // An argument sent as null is absent, as add_event reads one.
+        let arg = |key: &str| arguments.get(key).filter(|v| !v.is_null());
+        let instant = |key: &str| {
+            arg(key)
+                .map(|v| super::window::instant_of_value(v, key))
+                .transpose()
+        };
+        let start = instant("start")?;
+        let end = instant("end")?;
+        let step = arg("step")
+            .map(|v| duration_ns_of(v, "step").map(|ns| ns as f64 / 1e9))
+            .transpose()?;
+        let summarize = match arg("summarize") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err("summarize must be true or false".into()),
+        };
+        let above = match arg("above") {
+            None => None,
+            Some(v) => Some(
+                v.as_f64()
+                    .filter(|t| t.is_finite())
+                    .ok_or("above must be a finite number")?,
+            ),
+        };
+        if above.is_some() && !summarize {
+            return Err("above applies to a summary; set summarize to true".into());
+        }
+
         let selector = Self::selector_of(arguments)?;
         let reader = self.get_reader_selected(parquet_file, &selector).await?;
+        let window =
+            super::window::resolve(reader.time_range(), reader.interval(), start, end, step)?;
+        let result = super::window::query(reader.as_ref(), query, &window)?;
 
-        let (start_time, end_time) = reader.time_range().unwrap_or((0.0, 0.0));
-        let step = 1.0;
-
-        let result = reader.query_range(query, start_time, end_time, step)?;
-
+        if summarize {
+            let summary = super::window::summary_json(&result, &window, above)?;
+            return Ok(serde_json::to_string_pretty(&summary)?);
+        }
         Ok(serde_json::to_string_pretty(&result)?)
     }
 
@@ -1154,7 +1207,7 @@ impl Server {
         let description = opt_str(arguments, "description")?.ok_or("Missing description")?;
         let duration_ns = match arguments.get("duration") {
             None | Some(Value::Null) => None,
-            Some(v) => Some(duration_ns_of(v)?),
+            Some(v) => Some(duration_ns_of(v, "duration")?),
         };
         let id = opt_str(arguments, "id")?
             .unwrap_or_else(|| format!("mcp:{}", crate::agent::epoch::mint()));
@@ -2303,6 +2356,308 @@ mod tests {
             server.reader_cache.read().unwrap().is_empty(),
             "a reader opened before the write would report the old events"
         );
+    }
+
+    /// A recording of `jobs` that is idle for 5 s, counts 100 a second for
+    /// 10 s, then is idle for 5 s, one row a second, each half a second
+    /// after a whole second as an agent's rows are off the step grid.
+    fn idle_busy_idle(path: &std::path::Path) {
+        use ::rez::fixtures::{counter, map, snap, write_dendro, Finish, Source, ANCHOR};
+        let mut value = 0;
+        let rows = (0..20u64)
+            .map(|t| {
+                if (5..15).contains(&t) {
+                    value += 100;
+                }
+                let ts = ANCHOR + t * 1_000_000_000 + 500_000_000;
+                let w = Some(metriken::Window::new(ts - 1_000_000, ts));
+                (
+                    snap(ts, vec![counter("jobs", "jobs", value, w)], vec![]),
+                    ts,
+                )
+            })
+            .collect();
+        write_dendro(
+            path,
+            &[Source {
+                labels: map(&[("source", "rezolus")]),
+                metadata: map(&[("source", "rezolus")]),
+                rows,
+            }],
+            None,
+            Finish::Finalized,
+        );
+    }
+
+    /// `summarize` with `above` gives the busy seconds' rate, where a mean
+    /// over the whole recording is diluted by the idle ones; `start`/`end`
+    /// and `step` cut the points a plain query returns.
+    #[tokio::test]
+    async fn query_summarizes_the_busy_seconds_of_a_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.dendro");
+        idle_busy_idle(&path);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let start = ::rez::fixtures::ANCHOR as f64 / 1e9;
+        let query = "sum(irate(jobs[2s]))";
+        let run = |args: Value| {
+            let server = &server;
+            async move {
+                serde_json::from_str::<Value>(&server.execute_query(&args).await.unwrap()).unwrap()
+            }
+        };
+
+        let all = run(json!({"parquet_file": file, "query": query, "summarize": true})).await;
+        assert_eq!(all["resultType"], "summary");
+        assert_eq!(all["step"], 1.0);
+        let series = &all["result"][0];
+        let mean = series["mean"].as_f64().unwrap();
+        assert!(mean < 90.0, "{all}");
+
+        let busy =
+            run(json!({"parquet_file": file, "query": query, "summarize": true, "above": 75}))
+                .await;
+        let series = &busy["result"][0];
+        // Rows are half a second off the grid, so the seconds the rate
+        // changes in read 50; the nine whole busy seconds read 100.
+        assert_eq!(series["active"], 9, "{busy}");
+        assert_eq!(series["points"], all["result"][0]["points"]);
+        for k in ["mean", "p50", "p90", "max"] {
+            let v = series[k].as_f64().unwrap();
+            assert!((v - 100.0).abs() < 1.0, "{k} {v}: {busy}");
+        }
+
+        let window = run(json!({
+            "parquet_file": file, "query": query,
+            "start": start + 6.0, "end": start + 13.0, "step": "1s",
+        }))
+        .await;
+        assert_eq!(window["resultType"], "matrix");
+        let points = window["result"][0]["values"].as_array().unwrap();
+        assert_eq!(points.len(), 8, "{window}");
+
+        let coarse = run(json!({"parquet_file": file, "query": query, "step": 5})).await;
+        let points = coarse["result"][0]["values"].as_array().unwrap();
+        assert!(points.len() <= 4, "{coarse}");
+    }
+
+    /// A point's value does not depend on whether the window ends at it,
+    /// and a window keeps only the points from start to end.
+    #[tokio::test]
+    async fn the_points_at_a_windows_edges_are_those_of_a_wider_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.dendro");
+        idle_busy_idle(&path);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let t0 = ::rez::fixtures::ANCHOR as f64 / 1e9;
+        // jobs changes rate at t0 + 5.5 and t0 + 15.5, so irate over a
+        // 1 s step at t0 + 6 and t0 + 15 depends on the rows after them.
+        let points = |start: f64, end: f64, step: Value| {
+            let server = &server;
+            async move {
+                let out: Value = serde_json::from_str(
+                    &server
+                        .execute_query(&json!({
+                            "parquet_file": file, "query": "sum(irate(jobs[2s]))",
+                            "start": start, "end": end, "step": step,
+                        }))
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                out["result"][0]["values"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+                    .collect::<Vec<_>>()
+            }
+        };
+        let wide = points(t0 + 2.0, t0 + 18.0, json!(1)).await;
+        let at = |pts: &[(f64, f64)], t: f64| {
+            pts.iter()
+                .find(|(x, _)| (x - t).abs() < 1e-6)
+                .map(|(_, v)| *v)
+                .unwrap()
+        };
+        let narrow = points(t0 + 6.0, t0 + 15.0, json!(1)).await;
+        assert_eq!(narrow.first().unwrap().0, t0 + 6.0);
+        assert_eq!(narrow.last().unwrap().0, t0 + 15.0);
+        for t in [6.0, 15.0] {
+            assert_eq!(at(&narrow, t0 + t), at(&wide, t0 + t), "at t0 + {t}");
+        }
+        // A step finer than the rows: the point at end still has the row
+        // after it, half a second (two steps) later.
+        let fine = points(t0 + 2.0, t0 + 18.0, json!(0.25)).await;
+        for end in [14.0, 15.0] {
+            let narrow = points(t0 + 10.0, t0 + end, json!(0.25)).await;
+            assert!((narrow.last().unwrap().0 - (t0 + end)).abs() < 1e-6);
+            assert_eq!(
+                narrow.last().unwrap().1,
+                at(&fine, t0 + end),
+                "at t0 + {end}"
+            );
+        }
+        let single = points(t0 + 15.0, t0 + 15.0, json!(1)).await;
+        assert_eq!(single, vec![(t0 + 15.0, at(&wide, t0 + 15.0))]);
+
+        // A start off the step grid keeps no point before it: the grid
+        // starts at t0, which is dropped, and t0 + 5 has no row before its
+        // window, so t0 + 10 and t0 + 15 are left.
+        let coarse = points(t0 + 3.0, t0 + 17.0, json!(5)).await;
+        let times: Vec<f64> = coarse.iter().map(|(t, _)| t - t0).collect();
+        assert_eq!(times, [10.0, 15.0], "{coarse:?}");
+        // The grid starts at t0 + 10, where rate() has a value from its
+        // own window; it is before start, so it is dropped.
+        let out: Value = serde_json::from_str(
+            &server
+                .execute_query(&json!({
+                    "parquet_file": file, "query": "sum(rate(jobs[5s]))",
+                    "start": t0 + 13.0, "end": t0 + 17.0, "step": 5,
+                }))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let times: Vec<f64> = out["result"][0]["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p[0].as_f64().unwrap() - t0)
+            .collect();
+        assert_eq!(times, [15.0], "{out}");
+    }
+
+    /// A recording with a `fast` sampler, one row a second, and a `slow`
+    /// one, a row every 10 s, whose counter grows 1 a second until t0 + 50.5
+    /// and 5 a second after.
+    fn fast_and_slow(path: &std::path::Path) {
+        use ::rez::fixtures::{counter, map, snap, write_dendro, Finish, Source, ANCHOR};
+        let rows = (0..100u64)
+            .map(|t| {
+                let ts = ANCHOR + t * 1_000_000_000 + 500_000_000;
+                let w = Some(metriken::Window::new(ts - 1_000_000, ts));
+                let mut counters = vec![counter("fast", "fast", t, w)];
+                if t % 10 == 0 {
+                    let slow = if t <= 50 { t } else { 50 + 5 * (t - 50) };
+                    counters.push(counter("slow", "slow", slow, w));
+                }
+                (snap(ts, counters, vec![]), ts)
+            })
+            .collect();
+        write_dendro(
+            path,
+            &[Source {
+                labels: map(&[("source", "rezolus")]),
+                metadata: map(&[("source", "rezolus")]),
+                rows,
+            }],
+            None,
+            Finish::Finalized,
+        );
+    }
+
+    /// A query that reads only a sampler slower than the recording's
+    /// fastest still has the slow row after the window's end.
+    #[tokio::test]
+    async fn a_slow_samplers_points_at_a_windows_end_are_those_of_a_wider_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed.dendro");
+        fast_and_slow(&path);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let t0 = ::rez::fixtures::ANCHOR as f64 / 1e9;
+        let points = |start: f64, end: f64| {
+            let server = &server;
+            async move {
+                let out: Value = serde_json::from_str(
+                    &server
+                        .execute_query(&json!({
+                            "parquet_file": file, "query": "sum(rate(slow[30s]))",
+                            "start": start, "end": end,
+                        }))
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                out["result"][0]["values"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+                    .collect::<Vec<_>>()
+            }
+        };
+        let wide = points(t0 + 40.0, t0 + 80.0).await;
+        for end in [46.0, 52.0] {
+            let narrow = points(t0 + 40.0, t0 + end).await;
+            for (t, v) in &narrow {
+                let w = wide
+                    .iter()
+                    .find(|(x, _)| (x - t).abs() < 1e-6)
+                    .map(|(_, v)| *v);
+                assert_eq!(Some(*v), w, "end t0 + {end}, at {}", t - t0);
+            }
+        }
+    }
+
+    /// An argument sent as null is absent.
+    #[tokio::test]
+    async fn query_reads_null_arguments_as_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.dendro");
+        idle_busy_idle(&path);
+        let server = Server::new();
+        let out: Value = serde_json::from_str(
+            &server
+                .execute_query(&json!({
+                    "parquet_file": path.to_str().unwrap(), "query": "sum(irate(jobs[2s]))",
+                    "start": null, "end": null, "step": null, "summarize": null, "above": null,
+                }))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["resultType"], "matrix");
+    }
+
+    /// The window and summary arguments are checked before the query runs.
+    #[tokio::test]
+    async fn query_refuses_a_bad_window_or_summary_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.dendro");
+        idle_busy_idle(&path);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let start = ::rez::fixtures::ANCHOR as f64 / 1e9;
+        for (extra, want) in [
+            (json!({"above": 1}), "set summarize to true"),
+            (
+                json!({"summarize": "yes"}),
+                "summarize must be true or false",
+            ),
+            (json!({"start": "1700000000"}), "digit-only"),
+            (json!({"step": "0"}), "digit-only"),
+            (json!({"step": 0}), "step must be a positive"),
+            (
+                json!({"start": start + 10.0, "end": start + 5.0}),
+                "is after end",
+            ),
+            (
+                json!({"start": start + 100.0, "end": start + 200.0}),
+                "does not overlap",
+            ),
+            (json!({"start": start + 100.0}), "does not overlap"),
+        ] {
+            let mut args = json!({"parquet_file": file, "query": "sum(irate(jobs[2s]))"});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let err = server.execute_query(&args).await.unwrap_err().to_string();
+            assert!(err.contains(want), "{extra}: {err}");
+        }
     }
 
     /// A query holds the archive through the cached reader, and dendro
