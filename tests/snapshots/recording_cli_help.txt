@@ -1175,6 +1175,10 @@ Arguments:
   <QUERY>  PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')
 
 Options:
+      --start <TIME>           Start of the window: Unix seconds or RFC 3339 (default: the recording's start)
+      --end <TIME>             End of the window, included: Unix seconds or RFC 3339 (default: the recording's end)
+      --step <DURATION>        Time between evaluations: seconds or humantime such as 10s (default: 1s, coarser past a million seconds)
+      --above <VALUE>          Compute each series' statistics over its points strictly above VALUE
       --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
@@ -1202,12 +1206,40 @@ widening first to the union span when the two came from different
 acquisition tables. Queries with no rate() and no histogram have no band
 to show.
 
+The query is evaluated at the multiples of --step (counted from the
+Unix epoch) from --start to --end: by default every second of the
+recording (a coarser whole-second step on a recording of more than a
+million seconds). A query combining samplers of different cadence is
+evaluated at the slower one's rows instead, and histogram_quantile()
+and the other histogram functions without a stride argument give one
+point per row that holds observations, wherever the step falls (a
+gauge histogram gives one per step; histogram_quantiles([q], h, STEP)
+gives one per step). irate() is the rate over one step, so a
+larger step also averages over a longer interval; a rate() at --start
+reads data from before it. No point after the recording's last row is
+printed. A rate() or irate() at --end over a sampler whose rows are
+further apart than 120 s (or two of the recording's finest row
+interval, when that is longer; or a million steps, when that is
+shorter) is computed without its next row.
+
+Each series prints its point count, its first and last points, and
+lines Min:, Max:, Mean:, p50:, p90: and p99: over all its points that
+are not NaN (percentiles by nearest rank). With --above VALUE those
+statistics are over the points strictly above VALUE, and a line
+"Active: K of N points above VALUE" comes first. A series with no
+such point (none above VALUE, or every point NaN) prints no statistics
+lines.
+
 EXAMPLES:
     # Total cycles per second across all CPUs
     rezolus mcp query out.dendro 'sum(irate(cpu_cycles[1m]))'
 
     # A ratio: both operands' bands are combined
     rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'
+
+    # Block IO throughput over the seconds above 500 MB/s, in a window
+    rezolus mcp query out.dendro 'sum(irate(blockio_bytes[1m]))' \
+        --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --above 5e8
 
 Usage: rezolus mcp query [OPTIONS] <FILE> <QUERY>
 
@@ -1219,6 +1251,18 @@ Arguments:
           PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')
 
 Options:
+      --start <TIME>
+          Start of the window: Unix seconds or RFC 3339 (default: the recording's start)
+
+      --end <TIME>
+          End of the window, included: Unix seconds or RFC 3339 (default: the recording's end)
+
+      --step <DURATION>
+          Time between evaluations: seconds or humantime such as 10s (default: 1s, coarser past a million seconds)
+
+      --above <VALUE>
+          Compute each series' statistics over its points strictly above VALUE
+
       --recording <KEY=VALUE>
           Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one

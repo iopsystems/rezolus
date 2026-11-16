@@ -133,9 +133,20 @@
         "name": "detect_anomalies"
       },
       {
-        "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window.",
+        "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window. Points are at the multiples of step (counted from the Unix epoch) from start to end: by default every second of the recording, or a coarser whole-second step on a recording of more than a million seconds. A query combining samplers of different cadence is evaluated at the slower one's rows instead, and histogram_quantile() and the other histogram functions without a stride argument give one point per row that holds observations, wherever the step falls (a gauge histogram gives one per step); histogram_quantiles([q], h, STEP) gives one per step. With summarize, each series is returned as statistics (points, active, min, max, mean, p50, p90, p99) instead of its points; above restricts the statistics to points above a threshold, such as the seconds a workload was running.",
         "inputSchema": {
           "properties": {
+            "above": {
+              "description": "With summarize (refused without it): the active points are those strictly above this value, so the statistics leave out idle seconds. Without it, every point that is not NaN is active. NaN is never active.",
+              "type": "number"
+            },
+            "end": {
+              "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned. A rate() or irate() at end over a sampler whose rows are further apart than 120 s (or two of the recording's finest row interval, when that is longer; or a million steps, when that is shorter) is computed without its next row.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
             "parquet_file": {
               "description": "Path to the recording (.dendro)",
               "type": "string"
@@ -150,6 +161,24 @@
               },
               "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
+            },
+            "start": {
+              "description": "Start of the window: an RFC 3339 string or Unix seconds as a JSON number (a digit-only string is refused). Defaults to the recording's start. A rate() at start reads data from before it.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "step": {
+              "description": "Time between evaluations: a humantime string (10s, 500ms, 1m) or seconds as a JSON number, fractional allowed (a digit-only string is refused). Defaults to 1 second, or a coarser whole number of seconds that keeps the window within 1,000,000 points. irate() is the rate over one step, so a larger step also averages over a longer interval.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "summarize": {
+              "description": "Return each series as statistics over its points instead of the points: resultType summary, with start, end and step, and per series its labels (metric), points, active, and min, max, mean, p50, p90 and p99 over the active points (left out when active is 0). A percentile is the nearest rank. Defaults to false.",
+              "type": "boolean"
             }
           },
           "required": [
