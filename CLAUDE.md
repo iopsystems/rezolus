@@ -248,10 +248,12 @@ target/release/rezolus mcp query run.dendro "sum(irate(blockio_bytes[1m]))" --st
 #   src/mcp/window.rs, shared with the MCP query tool (start/end/step; summarize=true [+ above] returns
 #   resultType "summary" with those statistics per series instead of the points). window::query asks the engine
 #   for the part of the window the recording covers, extended past end by max(120 s, 2 x reader.interval()) (at
-#   least one step, at most 1e6 steps), and drops points outside [start, end]: metriken-query 0.50 reads no row after
-#   the end it is given, so a rate at a point equal to end would miss the row after it. reader.interval() is the
-#   finest table's, so the 120 s floor is what covers a slower sampler read alone; one whose rows are further
-#   apart is still computed at end without its next row. Points after the recording's last row are dropped too.
+#   least one step, at most 1e6 steps), and drops points outside [start, end]. A grid rate()/irate() reads each
+#   series' first row after the end it is given (metriken-query 0.50.2), but the strided histogram functions
+#   (histogram_quantiles([q], h, STEP); histogram_mean/count/sum/heatmap with a STEP) read no row after it, so the
+#   read past end is for them: over a sampler whose rows are further apart than that reach, their points near end
+#   can be missing, the last one at that sampler's last row read, off the step grid. Points after the
+#   recording's last row are dropped too.
 # query prints an acquisition-window uncertainty band [lo, hi] beside rate()/irate() values
 # (scalar ops scale the band, e.g. rate(x)*k; series-op-series combines both operands'
 # bands by interval arithmetic; non-rate/non-histogram queries have no band to show)
