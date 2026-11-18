@@ -217,7 +217,7 @@ fn read_tools() -> Vec<Value> {
                     },
                     "end": {
                         "type": ["string", "number"],
-                        "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned. A rate() or irate() at end over a sampler whose rows are further apart than 120 s (or two of the recording's finest row interval, when that is longer; or a million steps, when that is shorter) is computed without its next row."
+                        "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned. Over a sampler whose rows are further apart than 120 s (or two of the recording's finest row interval, when that is longer; or a million steps, when that is shorter), the points of the strided histogram functions (histogram_quantiles([q], h, STEP), and histogram_mean, histogram_count, histogram_sum and histogram_heatmap with a STEP) near end can be missing, and the last one can fall at that sampler's last row read, off the step grid, with only the part of a step before that row."
                     },
                     "step": {
                         "type": ["string", "number"],
@@ -2600,6 +2600,185 @@ mod tests {
                     .find(|(x, _)| (x - t).abs() < 1e-6)
                     .map(|(_, v)| *v);
                 assert_eq!(Some(*v), w, "end t0 + {end}, at {}", t - t0);
+            }
+        }
+    }
+
+    /// A recording with a `fast` sampler, one row a second, and a `slow`
+    /// one, a row every 300 s, whose counter grows 1 a second until t0 +
+    /// 1500.5 and 5 a second after.
+    fn fast_and_very_slow(path: &std::path::Path) {
+        use ::rez::fixtures::{counter, map, snap, write_dendro, Finish, Source, ANCHOR};
+        let rows = (0..2700u64)
+            .map(|t| {
+                let ts = ANCHOR + t * 1_000_000_000 + 500_000_000;
+                let w = Some(metriken::Window::new(ts - 1_000_000, ts));
+                let mut counters = vec![counter("fast", "fast", t, w)];
+                if t % 300 == 0 {
+                    let slow = if t <= 1500 { t } else { 1500 + 5 * (t - 1500) };
+                    counters.push(counter("slow", "slow", slow, w));
+                }
+                (snap(ts, counters, vec![]), ts)
+            })
+            .collect();
+        write_dendro(
+            path,
+            &[Source {
+                labels: map(&[("source", "rezolus")]),
+                metadata: map(&[("source", "rezolus")]),
+                rows,
+            }],
+            None,
+            Finish::Finalized,
+        );
+    }
+
+    /// A rate over a sampler whose rows are further apart than the read past
+    /// the window's end (`window::ROW_REACH`) has at the window's end the
+    /// value a wider window has there: the engine reads its row after the
+    /// end.
+    #[tokio::test]
+    async fn a_very_slow_samplers_rate_at_a_windows_end_is_that_of_a_wider_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("very-slow.dendro");
+        fast_and_very_slow(&path);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let t0 = ::rez::fixtures::ANCHOR as f64 / 1e9;
+        let points = |end: f64, query: &'static str| {
+            let server = &server;
+            async move {
+                let out: Value = serde_json::from_str(
+                    &server
+                        .execute_query(&json!({
+                            "parquet_file": file, "query": query,
+                            "start": t0 + 1200.0, "end": end, "step": 10,
+                        }))
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                out["result"][0]["values"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+                    .collect::<Vec<_>>()
+            }
+        };
+        for query in ["sum(rate(slow[600s]))", "sum(irate(slow[600s]))"] {
+            let wide = points(t0 + 2400.0, query).await;
+            for end in [1560.0, 1620.0] {
+                let narrow = points(t0 + end, query).await;
+                let last = *narrow.last().unwrap();
+                assert!(
+                    (last.0 - (t0 + end)).abs() < 1e-6,
+                    "{query}: a point at end"
+                );
+                let want = wide
+                    .iter()
+                    .find(|(t, _)| (t - last.0).abs() < 1e-6)
+                    .map(|(_, v)| *v);
+                assert_eq!(Some(last.1), want, "{query} at end t0 + {end}");
+            }
+        }
+    }
+
+    /// A recording whose `slow` sampler holds histogram `h` in a row every
+    /// 10 s, at x.5 s: one value a second up to t0 + 50.5 s, of 10, and of
+    /// 1000 after.
+    fn slow_histogram(path: &std::path::Path) {
+        use ::rez::fixtures::{map, write_dendro, Finish, Source, ANCHOR};
+        use metriken_exposition::{Snapshot, SnapshotV2};
+        let mut h = ::histogram::Histogram::new(7, 64).unwrap();
+        let rows = (0..10u64)
+            .map(|k| {
+                let t = 10 * k;
+                let ts = ANCHOR + t * 1_000_000_000 + 500_000_000;
+                if k > 0 {
+                    h.add(if t <= 50 { 10 } else { 1000 }, 10).unwrap();
+                }
+                let meta: HashMap<String, String> = [
+                    ("metric", "h"),
+                    ("sampler", "slow"),
+                    ("grouping_power", "7"),
+                    ("max_value_power", "64"),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+                let hist = metriken_exposition::Histogram::new("h".to_string(), h.clone(), meta)
+                    .with_window(Some(metriken::Window::new(ts - 1_000_000, ts)));
+                let snap = Snapshot::V2(SnapshotV2 {
+                    systemtime: std::time::SystemTime::UNIX_EPOCH
+                        + std::time::Duration::from_nanos(ts),
+                    duration: std::time::Duration::ZERO,
+                    metadata: HashMap::new(),
+                    counters: Vec::new(),
+                    gauges: Vec::new(),
+                    histograms: vec![hist],
+                    gauge_histograms: Vec::new(),
+                });
+                (snap, ts)
+            })
+            .collect();
+        write_dendro(
+            path,
+            &[Source {
+                labels: map(&[("source", "rezolus")]),
+                metadata: map(&[("source", "rezolus")]),
+                rows,
+            }],
+            None,
+            Finish::Finalized,
+        );
+    }
+
+    /// A strided histogram function over a sampler slower than the step has
+    /// at a window's end the points a wider window has there: the read past
+    /// the end (`window::ROW_REACH`) reaches the row after them.
+    #[tokio::test]
+    async fn a_strided_histograms_points_at_a_windows_end_are_those_of_a_wider_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hist.dendro");
+        slow_histogram(&path);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let t0 = ::rez::fixtures::ANCHOR as f64 / 1e9;
+        let points = |start: f64, end: f64, step: f64| {
+            let server = &server;
+            async move {
+                let out: Value = serde_json::from_str(
+                    &server
+                        .execute_query(&json!({
+                            "parquet_file": file,
+                            "query": format!("histogram_quantiles([0.5], h, {step})"),
+                            "start": start, "end": end, "step": step,
+                        }))
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                out["result"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|s| s["values"].as_array().unwrap().clone())
+                    .map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap()))
+                    .collect::<Vec<_>>()
+            }
+        };
+        for step in [1.0, 10.0] {
+            let wide = points(t0 + 20.0, t0 + 85.0, step).await;
+            for end in [50.0, 55.0] {
+                let narrow = points(t0 + 20.0, t0 + end, step).await;
+                let want: Vec<(f64, f64)> = wide
+                    .iter()
+                    .copied()
+                    .filter(|(t, _)| *t <= t0 + end + 1e-6)
+                    .collect();
+                assert!(!want.is_empty(), "step {step}: the wide window has points");
+                assert_eq!(narrow, want, "step {step}, end t0 + {end}");
             }
         }
     }

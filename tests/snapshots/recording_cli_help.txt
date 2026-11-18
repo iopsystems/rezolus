@@ -1217,10 +1217,14 @@ gauge histogram gives one per step; histogram_quantiles([q], h, STEP)
 gives one per step). irate() is the rate over one step, so a
 larger step also averages over a longer interval; a rate() at --start
 reads data from before it. No point after the recording's last row is
-printed. A rate() or irate() at --end over a sampler whose rows are
-further apart than 120 s (or two of the recording's finest row
-interval, when that is longer; or a million steps, when that is
-shorter) is computed without its next row.
+printed. Over a sampler whose rows are further apart than 120 s (or
+two of the recording's finest row interval, when that is longer; or a
+million steps, when that is shorter), the points of the strided
+histogram functions (histogram_quantiles([q], h, STEP), and
+histogram_mean, histogram_count, histogram_sum and histogram_heatmap
+with a STEP) near --end can be missing, and the last one can fall at
+that sampler's last row read, off the step grid, with only the part of
+a step before that row.
 
 Each series prints its point count, its first and last points, and
 lines Min:, Max:, Mean:, p50:, p90: and p99: over all its points that

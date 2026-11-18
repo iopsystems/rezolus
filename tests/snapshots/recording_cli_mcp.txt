@@ -141,7 +141,7 @@
               "type": "number"
             },
             "end": {
-              "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned. A rate() or irate() at end over a sampler whose rows are further apart than 120 s (or two of the recording's finest row interval, when that is longer; or a million steps, when that is shorter) is computed without its next row.",
+              "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned. Over a sampler whose rows are further apart than 120 s (or two of the recording's finest row interval, when that is longer; or a million steps, when that is shorter), the points of the strided histogram functions (histogram_quantiles([q], h, STEP), and histogram_mean, histogram_count, histogram_sum and histogram_heatmap with a STEP) near end can be missing, and the last one can fall at that sampler's last row read, off the step grid, with only the part of a step before that row.",
               "type": [
                 "string",
                 "number"
