@@ -1310,7 +1310,7 @@ cost, not the size of that endpoint's response. The native stream sends
 schemas/occupants as needed and deduplicates unchanged acquisition windows.
 The sampler remains opt-in because collection, retained state, and full
 snapshot exports add overhead. See the
-[design review and historical 5.x measurements](journal/2026-10-23-cgroup-memory.md).
+[design notes and measurements](journal/2026-10-23-cgroup-memory.md).
 
 Cgroup v1 and the hierarchy root are not supported. The memory controller
 must be available; Rezolus does not enable controllers or change limits.
@@ -1341,8 +1341,9 @@ hierarchy is a successful sweep and removes the previous groups.
 The interval is counted from the end of the previous sweep, and a sweep starts
 only when a scrape finds the interval elapsed. A consumer that polls at exactly
 the configured interval therefore gets a new reading every other poll, about
-every two intervals. Poll more often than the interval, or set the interval
-below the poll period, to read once per interval.
+every two intervals. To read on every poll, set the interval below the poll
+period minus the sweep time. Polling more often than the interval brings the
+read period to within one poll of the interval.
 
 The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc`,

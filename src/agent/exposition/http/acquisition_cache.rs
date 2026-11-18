@@ -433,6 +433,34 @@ mod tests {
                 "{count} groups"
             );
         }
+        // Only a float value differs from the cached group: the cached bytes
+        // must not stand in for it.
+        let mut cache = V3Builder::new();
+        cache.wide.insert(
+            group.name.clone(),
+            Cached {
+                revision: 2,
+                snapshot: Some(group.clone()),
+                encoding: Default::default(),
+            },
+        );
+        let primed = |groups| {
+            Snapshot::V3(SnapshotV3 {
+                systemtime: SystemTime::UNIX_EPOCH,
+                duration: Duration::ZERO,
+                metadata: HashMap::new(),
+                groups,
+            })
+        };
+        encode_snapshot(&primed(vec![group.clone()]), &cache).unwrap();
+        let mut float_changed = group.clone();
+        float_changed.float_gauges[0] = Some(2.5);
+        let snapshot = primed(vec![float_changed]);
+        assert_eq!(
+            encode_snapshot(&snapshot, &cache).unwrap(),
+            rmp_serde::to_vec(&snapshot).unwrap()
+        );
+
         let legacy = Snapshot::V2(SnapshotV2 {
             systemtime: SystemTime::now(),
             duration: Duration::from_secs(1),

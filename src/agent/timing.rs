@@ -256,6 +256,10 @@ impl AcquisitionGroup {
     /// for an in-progress snapshot copy. Scrapes only try the read lock.
     /// Every change to values, membership or metadata must be inside this
     /// group's acquire/drop bracket, including failed reads and removals.
+    /// A discarded acquisition must leave values and metadata unchanged:
+    /// `/metrics/stream` skips a group whose window did not advance, so a
+    /// change made under `discard()` would reach `/metrics/binary` and never a
+    /// stream subscriber.
     /// Reader-stamped/mmap groups cannot use this: their writers run outside
     /// the acquisition bracket. Groups built with other constructors are not cached.
     pub(crate) const fn new_cached_sparse(sampler: &'static str, name: &'static str) -> Self {

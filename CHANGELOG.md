@@ -33,9 +33,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   configurable interval (60s default), and the cgroups dashboard plots every
   kind for the selected cgroups. A host without cgroup v2 or without the
   memory controller reports the sampler as unsupported, not failed.
-  `/metrics/binary` reuses a sampler-stamped acquisition group's encoded bytes
-  across scrapes until its sampler writes again, so idle cgroup series cost a
-  copy rather than a re-encode per scrape. (#1537)
+  `/metrics/binary` reuses the `memory_cgroup` group's encoded bytes across
+  scrapes until its next sweep, so between sweeps its series cost a copy
+  rather than a re-encode per scrape. (#1537)
 
 - **A time window and per-series statistics on `query`.** The MCP `query`
   tool takes `start`, `end` (RFC 3339 or Unix seconds) and `step`
