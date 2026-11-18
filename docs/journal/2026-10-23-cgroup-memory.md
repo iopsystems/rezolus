@@ -442,8 +442,8 @@ the response (about 120k optional values at capacity), which is the likely
 
 ## Merged with main (2026-11-18)
 
-Main had moved 94 commits on (`6.0.0-alpha.143`), so the branch merges it and
-moves to `6.0.0-alpha.144`. The merge needed these changes beyond resolving
+Main had moved 95 commits on (`6.0.0-alpha.144`), so the branch merges it and
+moves to `6.0.0-alpha.145`. The merge needed these changes beyond resolving
 text:
 
 - `metriken-model` 0.3 added `float_counters` and `float_gauges` to
