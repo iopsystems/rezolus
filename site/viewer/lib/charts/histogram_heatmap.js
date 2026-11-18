@@ -1,1 +1,0 @@
-../../../../src/viewer/assets/lib/charts/histogram_heatmap.js

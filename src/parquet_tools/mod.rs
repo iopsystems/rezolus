@@ -3,6 +3,7 @@ pub(crate) mod annotate;
 pub(crate) mod check;
 mod cli;
 pub(crate) mod combine;
+mod combined_parquet;
 mod convert;
 pub(crate) mod events;
 mod filter;

@@ -38,11 +38,18 @@
           "description": "Where allocated memory is going — kernel buffers, page cache, anonymous use — with overall utilization.",
           "plots": [
             {
-              "kind": "gauge",
-              "title": "Buffers",
-              "id": "buffers",
-              "unit": "bytes",
-              "query": "memory_buffers"
+              "when": {
+                "present": "memory_buffers"
+              },
+              "then": [
+                {
+                  "kind": "gauge",
+                  "title": "Buffers",
+                  "id": "buffers",
+                  "unit": "bytes",
+                  "query": "memory_buffers"
+                }
+              ]
             },
             {
               "kind": "gauge",
@@ -251,10 +258,17 @@
                   ]
                 }
               ]
-            },
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_anon"
+          },
+          "then": [
             {
               "name": "Anonymous",
-              "description": "Process heaps, stacks and private data by LRU list, plus memory the kernel cannot reclaim at all.",
+              "description": "Process heaps, stacks and private data, with the anonymous active and inactive LRU lists and memory the kernel cannot reclaim where the recording has them. A macOS agent records only Anonymous, because macOS does not split its active and inactive queues into anonymous and file pages.",
               "plots": [
                 {
                   "kind": "gauge",
@@ -264,25 +278,39 @@
                   "query": "memory_anon"
                 },
                 {
-                  "kind": "gauge",
-                  "title": "Active (anon)",
-                  "id": "active-anon",
-                  "unit": "bytes",
-                  "query": "memory_active{kind=\"anon\"}"
+                  "when": {
+                    "present": "memory_active"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Active (anon)",
+                      "id": "active-anon",
+                      "unit": "bytes",
+                      "query": "memory_active{kind=\"anon\"}"
+                    },
+                    {
+                      "kind": "gauge",
+                      "title": "Inactive (anon)",
+                      "id": "inactive-anon",
+                      "unit": "bytes",
+                      "query": "memory_inactive{kind=\"anon\"}"
+                    }
+                  ]
                 },
                 {
-                  "kind": "gauge",
-                  "title": "Inactive (anon)",
-                  "id": "inactive-anon",
-                  "unit": "bytes",
-                  "query": "memory_inactive{kind=\"anon\"}"
-                },
-                {
-                  "kind": "gauge",
-                  "title": "Unevictable",
-                  "id": "unevictable",
-                  "unit": "bytes",
-                  "query": "memory_unevictable"
+                  "when": {
+                    "present": "memory_unevictable"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Unevictable",
+                      "id": "unevictable",
+                      "unit": "bytes",
+                      "query": "memory_unevictable"
+                    }
+                  ]
                 }
               ]
             }
@@ -429,25 +457,46 @@
                   "query": "memory_swap_total - memory_swap_free"
                 },
                 {
-                  "kind": "gauge",
-                  "title": "Swap Cached",
-                  "id": "swap-cached",
-                  "unit": "bytes",
-                  "query": "memory_swap_cached"
+                  "when": {
+                    "present": "memory_swap_cached"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Swap Cached",
+                      "id": "swap-cached",
+                      "unit": "bytes",
+                      "query": "memory_swap_cached"
+                    }
+                  ]
                 },
                 {
-                  "kind": "gauge",
-                  "title": "Committed",
-                  "id": "committed",
-                  "unit": "bytes",
-                  "query": "memory_committed"
+                  "when": {
+                    "present": "memory_committed"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Committed",
+                      "id": "committed",
+                      "unit": "bytes",
+                      "query": "memory_committed"
+                    }
+                  ]
                 },
                 {
-                  "kind": "gauge",
-                  "title": "Commit Limit",
-                  "id": "commit-limit",
-                  "unit": "bytes",
-                  "query": "memory_commit_limit"
+                  "when": {
+                    "present": "memory_commit_limit"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Commit Limit",
+                      "id": "commit-limit",
+                      "unit": "bytes",
+                      "query": "memory_commit_limit"
+                    }
+                  ]
                 },
                 {
                   "when": {
@@ -476,12 +525,183 @@
         },
         {
           "when": {
+            "any": [
+              {
+                "present": "memory_wired"
+              },
+              {
+                "present": "memory_purgeable"
+              },
+              {
+                "present": "memory_speculative"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "Wired and Purgeable",
+              "description": "Wired is wire_count: memory that cannot be paged out or compressed, plus throttled pages and free low-memory pages. Purgeable is anonymous memory in volatile objects that the kernel may discard without saving. Speculative is file read-ahead not yet used. Purgeable and speculative are counted in Available.",
+              "plots": [
+                {
+                  "when": {
+                    "present": "memory_wired"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Wired",
+                      "id": "wired",
+                      "unit": "bytes",
+                      "query": "memory_wired"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "memory_purgeable"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Purgeable",
+                      "id": "purgeable",
+                      "unit": "bytes",
+                      "query": "memory_purgeable"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "memory_speculative"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Speculative",
+                      "id": "speculative",
+                      "unit": "bytes",
+                      "query": "memory_speculative"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "any": [
+              {
+                "present": "memory_compressed"
+              },
+              {
+                "present": "memory_compressed_stored"
+              },
+              {
+                "present": "memory_compressions"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "Compressor",
+              "description": "macOS compresses anonymous pages in memory before swapping them. Compressed is the space the compressed data occupies in memory; Stored is the uncompressed size of every page the compressor holds, including pages in segments swapped out. Compressions and decompressions are pages per second.",
+              "plots": [
+                {
+                  "when": {
+                    "present": "memory_compressed"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Compressed",
+                      "id": "compressed",
+                      "unit": "bytes",
+                      "query": "memory_compressed"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "memory_compressed_stored"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Stored",
+                      "id": "compressed-stored",
+                      "unit": "bytes",
+                      "query": "memory_compressed_stored"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "memory_compressions"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Compressions",
+                      "id": "compressions",
+                      "unit": "count",
+                      "query": "sum(irate(memory_compressions[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "Decompressions",
+                      "id": "decompressions",
+                      "unit": "count",
+                      "query": "sum(irate(memory_decompressions[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_pageins"
+          },
+          "then": [
+            {
+              "name": "Paging",
+              "description": "Page faults count every call into the fault handler, including zero-fill and copy-on-write faults that need no I/O and faults made to wire memory. Page-ins are file pages read from disk on a fault or by read-ahead; pages a read() call fetches directly are not counted. Page-outs are dirty file pages the pageout daemon wrote back to free memory; write(), fsync and msync writeback are not counted. Anonymous memory is not counted here: it is compressed (Compressions, Decompressions), and the compressor writes it to swap (Swap In, Swap Out, in pages of compressed data). All three charts are pages per second.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Page Faults",
+                  "id": "page-faults",
+                  "unit": "count",
+                  "query": "sum(irate(memory_page_faults[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Page Ins",
+                  "id": "pageins",
+                  "unit": "count",
+                  "query": "sum(irate(memory_pageins[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Page Outs",
+                  "id": "pageouts",
+                  "unit": "count",
+                  "query": "sum(irate(memory_pageouts[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
             "present": "memory_reclaim_scanned"
           },
           "then": [
             {
               "name": "Reclaim",
-              "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Major faults are synchronous reads from storage.",
+              "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Page Faults counts every fault, minor and major; Major Faults are the ones that read from storage, each a synchronous read on the faulting thread.",
               "plots": [
                 {
                   "kind": "counter",
@@ -503,6 +723,29 @@
                   "id": "allocation-stalls",
                   "unit": "count",
                   "query": "sum(irate(memory_allocation_stalls[5m]))"
+                },
+                {
+                  "when": {
+                    "all": [
+                      {
+                        "present": "memory_page_faults"
+                      },
+                      {
+                        "not": {
+                          "present": "memory_pageins"
+                        }
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Page Faults",
+                      "id": "page-faults",
+                      "unit": "count",
+                      "query": "sum(irate(memory_page_faults[5m]))"
+                    }
+                  ]
                 },
                 {
                   "kind": "counter",
@@ -635,53 +878,60 @@
       ]
     },
     {
-      "name": "NUMA",
-      "id": "numa",
-      "subgroups": [
+      "when": {
+        "present": "memory_numa_local"
+      },
+      "then": [
         {
-          "name": "Local vs Remote",
-          "description": "Allocations by where the allocating task ran: local allocations were made on the task's own node (fast); remote ones on another node, across the interconnect (slow). The two sum to every allocation.",
-          "plots": [
+          "name": "NUMA",
+          "id": "numa",
+          "subgroups": [
             {
-              "kind": "counter",
-              "title": "Local Rate",
-              "id": "numa-local-rate",
-              "unit": "rate",
-              "query": "irate(memory_numa_local[5m])"
+              "name": "Local vs Remote",
+              "description": "Allocations by where the allocating task ran: local allocations were made on the task's own node (fast); remote ones on another node, across the interconnect (slow). The two sum to every allocation.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Local Rate",
+                  "id": "numa-local-rate",
+                  "unit": "rate",
+                  "query": "irate(memory_numa_local[5m])"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Remote Rate",
+                  "id": "numa-remote-rate",
+                  "unit": "rate",
+                  "query": "irate(memory_numa_other[5m])"
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "Remote Rate",
-              "id": "numa-remote-rate",
-              "unit": "rate",
-              "query": "irate(memory_numa_other[5m])"
-            }
-          ]
-        },
-        {
-          "name": "Memory Policy",
-          "description": "Allocations by whether the intended node (the memory policy's choice, or the node the caller asked for) served them. Hits were served by the intended node; misses by another node, usually because the intended node was short of free pages. Interleave counts allocations under the interleave policy that landed on their intended node.",
-          "plots": [
-            {
-              "kind": "counter",
-              "title": "Hit Rate",
-              "id": "numa-hit-rate",
-              "unit": "rate",
-              "query": "irate(memory_numa_hit[5m])"
-            },
-            {
-              "kind": "counter",
-              "title": "Miss Rate",
-              "id": "numa-miss-rate",
-              "unit": "rate",
-              "query": "irate(memory_numa_miss[5m])"
-            },
-            {
-              "kind": "counter",
-              "title": "Interleave Rate",
-              "id": "numa-interleave-rate",
-              "unit": "rate",
-              "query": "irate(memory_numa_interleave[5m])"
+              "name": "Memory Policy",
+              "description": "Allocations by whether the intended node (the memory policy's choice, or the node the caller asked for) served them. Hits were served by the intended node; misses by another node, usually because the intended node was short of free pages. Interleave counts allocations under the interleave policy that landed on their intended node.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Hit Rate",
+                  "id": "numa-hit-rate",
+                  "unit": "rate",
+                  "query": "irate(memory_numa_hit[5m])"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Miss Rate",
+                  "id": "numa-miss-rate",
+                  "unit": "rate",
+                  "query": "irate(memory_numa_miss[5m])"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Interleave Rate",
+                  "id": "numa-interleave-rate",
+                  "unit": "rate",
+                  "query": "irate(memory_numa_interleave[5m])"
+                }
+              ]
             }
           ]
         }

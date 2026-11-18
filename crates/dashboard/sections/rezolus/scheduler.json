@@ -116,6 +116,35 @@
           ]
         },
         {
+          "name": "Uninterruptible Sleep",
+          "description": "Time tasks spent off-CPU in uninterruptible sleep (D state): waiting on disk IO, some locks, or page faults on slow storage. A sleep is added in full when the task next runs, so Tasks is the mean number of tasks in D state only over windows much longer than the sleeps: a long sleep shows as a spike when it ends, and a task still blocked is not counted yet.",
+          "plots": [
+            {
+              "rate_mean": {
+                "title": "Uninterruptible",
+                "id": "uninterruptible-time",
+                "selector": "scheduler_uninterruptible",
+                "mean_unit": "time"
+              }
+            },
+            {
+              "kind": "latency",
+              "title": "Uninterruptible Time",
+              "id": "uninterruptible-time",
+              "axis_label": "Time",
+              "unit_system": "time",
+              "query": "scheduler_uninterruptible"
+            },
+            {
+              "kind": "counter",
+              "title": "Tasks",
+              "id": "uninterruptible-tasks",
+              "unit": "count",
+              "query": "sum(irate(scheduler_uninterruptible_wait[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
           "name": "Context Switches",
           "description": "Involuntary context-switch rate, aggregate and per-core.",
           "plots": [

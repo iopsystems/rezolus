@@ -1,0 +1,565 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Usage",
+      "id": "usage",
+      "subgroups": [
+        {
+          "name": "Capacity",
+          "description": "How much memory exists and how much of it is unclaimed.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total",
+                "id": "total",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_total"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Available",
+                "id": "available",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_available"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Free",
+                "id": "free",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_free"
+            }
+          ]
+        },
+        {
+          "name": "Breakdown",
+          "description": "Where allocated memory is going — kernel buffers, page cache, anonymous use — with overall utilization.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Buffers",
+                "id": "buffers",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_buffers"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Cached",
+                "id": "cached",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_cached"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Used",
+                "id": "used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_total - memory_available"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Utilization %",
+                "id": "utilization-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "(memory_total - memory_available) / memory_total"
+            }
+          ]
+        },
+        {
+          "name": "Page Cache",
+          "description": "File-backed memory by LRU list: inactive is reclaimed first, active last. A working set that fits shows a stable active list; Shmem and Mapped are the parts of the cache that are tmpfs or mmap'd into processes. tmpfs Used splits the tmpfs part by mount.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Active (file)",
+                "id": "active-file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_active{kind=\"file\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Inactive (file)",
+                "id": "inactive-file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_inactive{kind=\"file\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Shmem",
+                "id": "shmem",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_shmem"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Mapped",
+                "id": "mapped",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_mapped"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "tmpfs Used",
+                "id": "tmpfs-used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_tmpfs_used)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "tmpfs Used %",
+                "id": "tmpfs-used-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_tmpfs_used) / sum by (mount) (filesystem_tmpfs_size)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "tmpfs Inodes Used %",
+                "id": "tmpfs-inodes-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_tmpfs_inodes_used) / sum by (mount) (filesystem_tmpfs_inodes_total)"
+            }
+          ]
+        },
+        {
+          "name": "Reclaim",
+          "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Page Faults counts every fault, minor and major; Major Faults are the ones that read from storage, each a synchronous read on the faulting thread.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Scanned",
+                "id": "reclaim-scanned",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(memory_reclaim_scanned[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Reclaimed",
+                "id": "reclaim-reclaimed",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(memory_reclaim_reclaimed[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Allocation Stalls",
+                "id": "allocation-stalls",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_allocation_stalls[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Page Faults",
+                "id": "page-faults",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_page_faults[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Major Faults",
+                "id": "major-faults",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_major_page_faults[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "OOM Kills",
+                "id": "oom-kills",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_oom_kills[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "NUMA",
+      "id": "numa",
+      "subgroups": [
+        {
+          "name": "Local vs Remote",
+          "description": "Allocations by where the allocating task ran: local allocations were made on the task's own node (fast); remote ones on another node, across the interconnect (slow). The two sum to every allocation.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Local Rate",
+                "id": "numa-local-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_local[5m])"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Remote Rate",
+                "id": "numa-remote-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_other[5m])"
+            }
+          ]
+        },
+        {
+          "name": "Memory Policy",
+          "description": "Allocations by whether the intended node (the memory policy's choice, or the node the caller asked for) served them. Hits were served by the intended node; misses by another node, usually because the intended node was short of free pages. Interleave counts allocations under the interleave policy that landed on their intended node.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Hit Rate",
+                "id": "numa-hit-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_hit[5m])"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Miss Rate",
+                "id": "numa-miss-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_miss[5m])"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Interleave Rate",
+                "id": "numa-interleave-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_interleave[5m])"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

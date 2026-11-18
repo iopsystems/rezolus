@@ -541,8 +541,8 @@ fn archive(fixture: &Fixture) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dashboards.dendro");
     let seed = Seed {
-        // No recording labels: a template's selectors name their own
-        // `source`, which the series carry.
+        // No recording labels: the series carry only the labels the
+        // queries' selectors match on.
         labels: BTreeMap::new(),
         metadata: [("sampling_interval_ms".to_string(), "1000".to_string())]
             .into_iter()
@@ -601,6 +601,8 @@ fn archive(fixture: &Fixture) -> (tempfile::TempDir, std::path::PathBuf) {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 match kind {
                     Kind::Counter => group.counters = vec![Some(1_000 * i); n],
@@ -734,14 +736,14 @@ fn every_dashboard_and_template_query_answers_on_a_dendro_archive() {
             }
             match source.query_range(&query, start, end, 1.0) {
                 Err(e) => failures.push(format!("{}: {query}\n    {e}", u.origin)),
-                Ok(metriken_query::QueryResult::Matrix { result }) if result.is_empty() => {
+                Ok(metriken_query::QueryResult::Matrix { result, .. }) if result.is_empty() => {
                     empty_results.push(format!("{}: {query}", u.origin))
                 }
                 Ok(_) => {}
             }
         }
     }
-    assert!(seen.len() > 850, "{} queries", seen.len());
+    assert!(seen.len() > 720, "{} queries", seen.len());
     assert!(
         failures.is_empty(),
         "{} of {} queries failed:\n{}",

@@ -21,7 +21,7 @@ host-level series are unchanged.
 | `cpu_usage` | on | `cgroup_cpu_usage`, `cgroup_cpu_usage_exited_tasks` |
 | `cpu_perf` | on | `cgroup_cpu_cycles`, `cgroup_cpu_instructions` (off also drops the `sched_switch` program) |
 | `cpu_tlb_flush` | on | `cgroup_cpu_tlb_flush` |
-| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
+| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_uninterruptible_wait`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
 | `syscall` | on | `cgroup_syscall` |
 | `ext4_ops` | off | `cgroup_ext4_ops`, `cgroup_ext4_op_time` |
 | `xfs_log` | off | `cgroup_xfs_log_waits`, `cgroup_xfs_log_wait_time` |
@@ -80,7 +80,8 @@ cgroup has no CPU controller of its own is counted under the nearest
 ancestor that has one, usually its slice.
 
 `task_attribution` and `process_attribution` are the per-task and
-per-process counterparts, for `cpu_usage` only, off by default: see
+per-process counterparts, for `cpu_usage` only, off by default
+(`process_attribution` follows `task_attribution` unless set): see
 [cpu_usage](#cpu_usage).
 
 ## Table of Contents
@@ -111,6 +112,8 @@ per-process counterparts, for `cpu_usage` only, off by default: see
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
+  - [gpu_amd_sysfs](#gpu_amd_sysfs)
+  - [gpu_apple](#gpu_apple)
 - [Memory](#memory)
   - [memory_cgroup](#memory_cgroup)
   - [memory_meminfo](#memory_meminfo)
@@ -119,11 +122,14 @@ per-process counterparts, for `cpu_usage` only, off by default: see
   - [memory_vmstat](#memory_vmstat)
   - [memory_writeback](#memory_writeback)
 - [Network](#network)
+  - [network_efa](#network_efa)
+  - [network_ethtool](#network_ethtool)
   - [network_interfaces](#network_interfaces)
   - [network_traffic](#network_traffic)
 - [Scheduler](#scheduler)
   - [scheduler](#scheduler-1)
 - [Hardware Sensors](#hardware-sensors)
+  - [thermal_pressure](#thermal_pressure)
 - [Syscall](#syscall)
   - [syscall](#syscall-1)
 - [TCP](#tcp)
@@ -209,6 +215,9 @@ normalizing other CPU metrics.
 |--------|-------------|----------|
 | `cpu_cores` | The total number of logical cores that are currently online | |
 
+On macOS there is no `cpu_cores` sampler; the `cpu_usage` sampler sets
+`cpu_cores`.
+
 ### cpu_frequency
 
 Gets CPU frequency data from special CPU registers (MSRs). This lets you check
@@ -224,6 +233,46 @@ Running Frequency = rate(TSC) * (rate(APERF) / rate(MPERF))
 | `cpu_aperf` | APERF register value | |
 | `cpu_mperf` | MPERF register value | |
 | `cpu_tsc` | TSC register value | |
+
+On macOS, see [cpu_frequency on macOS](#cpu_frequency-on-macos).
+
+#### cpu_frequency on macOS
+
+Apple silicon has no APERF or MPERF, so there the sampler reads IOReport's
+`CPU Core Performance States` channels, which count, per core, the ticks of
+the 24 MHz system counter spent in each performance state, idle and powered
+down. The device tree's power manager lists each cluster's state
+frequencies in a `voltage-states<n>-sram` table, and its `perf-domains`
+property gives each cluster's `n` (on an M4 Max, 1 for the E cluster and 5
+and 13 for the two P clusters). Cluster 0 of a kind `perf-domains` does not
+list reads `voltage-states1-sram` (E) or `voltage-states5-sram` (P). A cluster
+`perf-domains` does not list reads cluster 0's table of its kind. A cluster
+left with no table, or whose state count differs from its table's length, is
+not published.
+The sampler publishes the same three counters as on Linux, per
+logical CPU, so the formula above gives each core's average frequency while
+running:
+
+- `cpu_tsc` is the system counter (`CLOCK_UPTIME_RAW` in 24 MHz ticks), so
+  its rate is 24 MHz on every core.
+- `cpu_mperf` is the ticks spent in any performance state.
+- `cpu_aperf` is the ticks in each performance state times that state's
+  frequency over 24 MHz.
+
+`cpu_aperf` is not a count of cycles. IOReport brings a core's
+residencies up to date when the core changes state, so between two reads
+`cpu_mperf` can advance by more or less than the core ran in that interval,
+by up to a second on a P core. `cpu_aperf` lags with it, so their ratio is
+the frequency over the time counted.
+
+IOReport is a private framework with no published interface; it is the one
+`powermetrics` reads, and it needs no privileges. Rezolus loads it when the
+sampler starts; on a macOS release without it, or without one of the
+functions Rezolus binds, `cpu_frequency`, `cpu_power` and `gpu_apple` report
+themselves unsupported and the other samplers run. A cluster type whose
+frequency table does not have one entry per performance state is not
+published, and the sampler reports itself unsupported when no core can be
+read. An Intel Mac, whose CPUs have no `cluster-type`, reports it unsupported.
 
 ### cpu_l3
 
@@ -268,6 +317,7 @@ default for this sampler.
 Reports CPU energy and idle-state residency from the perf PMUs the kernel
 exposes for them. Everything is read through perf; the sampler needs
 `CAP_PERFMON` but not `CAP_SYS_RAWIO`, and does not open `/dev/cpu/*/msr`.
+On macOS, see [cpu_power on macOS](#cpu_power-on-macos).
 
 Four PMUs are consulted, each optional and each discovered at runtime from
 `/sys/bus/event_source/devices`:
@@ -338,6 +388,37 @@ landing mid-interval would read a stale value, and at integer-milliwatt
 resolution a domain drawing microwatts (an idle iGPU) would read `0` while its
 energy counter still advanced.
 
+#### cpu_power on macOS
+
+On Apple silicon the sampler reads IOReport's `Energy Model` channels, which
+count the energy each block of the SoC has used since boot. On an Intel Mac it
+reports itself unsupported. It needs no
+privileges; IOReport is the private framework `powermetrics` reads. Each
+channel is counted in mJ, uJ or nJ and converted to microjoules.
+
+| Metric | IOReport channel |
+|--------|------------------|
+| `cpu_cores_energy` (id `0`) | `CPU Energy`: every CPU core |
+| `cpu_core_energy` | `EACC_CPU<n>` and `PACC<c>_CPU<n>`: one core, at its logical CPU id |
+| `cpu_igpu_energy` (id `0`) | `GPU Energy` |
+| `cpu_dram_energy` (id `0`) | `DRAM` |
+| `cpu_soc_energy` | every other channel, labelled with its name as `block` |
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `cpu_soc_energy` | Cumulative energy of an SoC block other than the CPU cores, GPU and DRAM. macOS only. | block: the IOReport channel name, less a trailing ` Energy`; unit: `microjoules` |
+
+The blocks vary by chip. An M4 Max reports 14: `AFR`, `AMCC`, `ANE` (the
+Neural Engine), `AVE` (the video encoder), `DCS`, `DISP` and `DISPEXT` (the
+display pipelines), `ISP` (the image signal processor), `MSR`, `PCIe Port 0`,
+`PCIe Port 1` and `apciec0` to `apciec2`. Not published:
+the clusters' totals (`EACC_CPU`, `PACC<c>_CPU`), which `cpu_core_energy`
+sums to, the clusters' SRAM and CPM channels, the `ECPUDTL` and `PCPUDTL`
+channels, and `GPU`, a second GPU channel in mJ, which read about 1% above
+`GPU Energy` over 20 s on an M4 Max. The `Energy Model` group has no package
+or platform channel, so `cpu_package_energy` and `cpu_platform_energy` are not
+set, and there are no C-state residencies.
+
 ### cpu_tlb_flush
 
 Instruments TLB (Translation Lookaside Buffer) flush events. TLB flushes are
@@ -359,14 +440,22 @@ optimizing workloads.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `cpu_usage` | The amount of CPU time spent in different CPU states | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}` |
-| `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}`, `name`: the name of the cgroup |
+| `cpu_usage` | The amount of CPU time spent in different CPU states | `state={user,system}`, `id`: the CPU |
+| `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,system}`, `name`: the name of the cgroup |
 | `softirq` | The count of softirqs | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `softirq_time` | The time spent in softirq handlers | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on; includes the CPU a thread used under its own thread id before it exec'd from outside the group leader | `id` |
 | `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
 | `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
-| `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `process_attribution = true` | `tgid`, `comm`, `cgroup` |
+| `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `process_attribution = true`, or with `task_attribution = true` and `process_attribution` unset | `tgid`, `comm`, `cgroup` |
+
+On Linux, `user` is each task's `utime`, which includes niced and guest
+time, and `system` is its `stime`. Idle and steal time are not recorded.
+Interrupt and softirq time are in `system` only when the kernel does not
+account interrupt time separately (`CONFIG_IRQ_TIME_ACCOUNTING`, which the
+kernel can still disable at boot). Softirqs run by `ksoftirqd` are in that
+thread's `system` time either way. `softirq_time` measures softirq handlers
+directly.
 
 The sampler accounts CPU per task in every configuration: the per-CPU and
 per-cgroup deltas are computed from each thread's `utime`/`stime` whether
@@ -376,12 +465,41 @@ change the host or cgroup totals. Exporting that per-task accounting as
 costs a task-metadata event per new thread (comm and three cgroup names)
 and per rename, an exit event per thread, a walk of the per-pid map's
 populated slots each time a snapshot is served, and one series per thread
-plus one per rename in every recording, which on a host with thread churn
-or frequent renames is most of the recording. Set `task_attribution = true`
+still running at a snapshot after it has lived `task_min_lifetime`, plus
+one per rename after its series appears, in every recording. On a host with many threads that live longer than that, or with
+frequent renames, those series are most of the recording. Set `task_attribution = true`
 in `[samplers.cpu_usage]` (or `[defaults]`) to get it.
 
-`process_cpu_usage` is the option `process_attribution`, off by default
-and independent of `task_attribution`: one series per process (thread
+A thread gets a `task_cpu_usage` series only once it has lived
+`task_min_lifetime` (a humantime string, default `"1s"`; `"0s"` turns the
+minimum off). The age is checked each time a snapshot is taken, when the
+sampler drains its event rings. A thread still running at the first
+snapshot after it reaches that age gets its series in that snapshot. The
+series' first value is the thread's CPU since it started, or since the
+agent first saw it for a thread that predates the agent. A thread that
+execs from outside the group leader takes the leader's pid and start time,
+so its age is the process's, and its CPU before the exec is in
+`cpu_usage_exited_tasks` under its old thread id, not in this series. A
+thread without a series has its CPU in `cpu_usage`, and in
+`cpu_usage_exited_tasks` once it exits. Unless `cgroup_attribution = false`,
+it is also in `cgroup_cpu_usage`, and in `cgroup_cpu_usage_exited_tasks`
+once it exits. When `process_cpu_usage` is exported, it is in
+`process_cpu_usage` until its process exits. Renames
+before the series first appears add no series; the series has the newest
+name. With `snapshot_format = "v2"` the minimum is 0: a V2 snapshot lists
+every non-zero slot, labelled or not, so a thread held back would appear
+with only its `id`. With either snapshot format, a value that does not
+parse as a humantime duration stops the agent at startup. The rates of a
+process's `task_cpu_usage` series sum to at most its CPU, and usually less. They leave out threads
+that never got a series, each thread's CPU before its series' first sample,
+and each thread's CPU after its last sample. `process_cpu_usage` includes
+all three.
+
+`process_cpu_usage` is the option `process_attribution`. Set in neither
+`[samplers.cpu_usage]` nor `[defaults]`, it takes the value
+`task_attribution` resolves to, so it is off by default and on with
+per-task series. Set `process_attribution = false` to keep only the per-task series, or
+`true` to have it without them. It is one series per process (thread
 group), keyed by `tgid`. Every CPU delta credited to `cpu_usage` for
 a thread of the process is added to it, until the exit of its last thread,
 including the CPU of threads that have exited. So `rate(process_cpu_usage)` is the process's
@@ -394,14 +512,22 @@ runs. The series ends within one snapshot interval of the process's last
 thread exiting. As with `task_cpu_usage`, a process that exits between a
 drain and the snapshot that follows it has a last sample of 0, so read it
 with `rate()` or `increase()`. It costs two per-pid arrays (64 MiB of
-kernel memory), a 256 KiB ring, a metadata event per new process and per
-leader rename, an exit event per process when `task_attribution` is off,
-the `task_rename` program (one run per thread rename), and two marker
-reads and a counter add per accounting event that adds CPU. A process's counter is written by every CPU running one of
-its threads: with 48 threads of one process spinning on a 56-vCPU host
-at HZ=250, each run of the `cpu_usage` BPF programs took about 310 ns,
-against about 200 ns with 48 one-thread processes and 170 ns without
-`process_cpu_usage`.
+kernel memory), a 256 KiB ring, a 256 KiB table of busy processes, a
+metadata event per new process and per leader rename, an exit event per
+process when `task_attribution` is off, the `task_rename` program (one run
+per thread rename), and per accounting event that adds CPU a marker read,
+a table lookup and a counter add, plus a second marker read when the
+process holds no table entry.
+
+A labelled process using at least half a CPU over a refresh is given an
+entry in the table when its bucket is free. The table has 16 copies,
+assigned from the L3 topology where sysfs reports it, so the CPUs
+running its threads do not all write one counter. The agent adds the table's counts to
+`process_cpu_usage` at each refresh, before it builds the snapshot. With 48
+threads of one process spinning on a 56-vCPU host at HZ=250, each run of
+the `cpu_usage` BPF programs took about 210 ns, against about 320 ns with
+one counter and about 190 ns without `process_cpu_usage`. Two busy processes
+whose tgids share a table bucket leave one of them on the shared counter.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is
@@ -418,6 +544,14 @@ cgroup continues the first A series after a gap. `rate()` or `increase()` over a
 spans the gap counts the CPU used under B in the A series as well. Rezolus
 recordings keep the two A series apart.
 
+On macOS the sampler reads `host_processor_info`, unprivileged, once per
+refresh. It sets `cpu_usage` per CPU with `state={user,system}`, and
+`cpu_cores`; the other metrics in this section are absent. Niced time is
+counted as `user`, as on Linux. The kernel counts each state in ticks of
+10 ms (`CLK_TCK` is 100), so the counters move in steps of 10 ms. Each tick
+count is 32 bits and wraps after about 497 days in one state; a wrap reads
+as a counter reset.
+
 ## Drive
 
 Metrics related to physical drive health.
@@ -429,8 +563,9 @@ drive via **read-only pass-through ioctls** — the same mechanism `smartctl` an
 `hddtemp` use, with **no kernel module** (temperature has no BPF or perf hook;
 this is the deliberate device-read exception in `docs/principles.md`). SATA uses
 `SG_IO` ATA PASS-THROUGH (`SMART READ DATA`, attribute 194); NVMe uses the admin
-Get Log Page 0x02 (Composite Temperature). Drives are enumerated once at startup
-from `/sys/block` and `/sys/class/nvme`.
+Get Log Page 0x02 (Composite Temperature, Temperature Sensors 1 to 8, and the
+thermal-throttle counters below). Drives are enumerated once at startup from
+`/sys/block` and `/sys/class/nvme`.
 
 On macOS the sampler reads NVMe drives only, through IOKit's NVMe SMART user
 client (Get Log Page 0x02, unprivileged), from the block storage devices whose
@@ -697,6 +832,8 @@ in `[samplers.filesystem]`. Measured cost (release, 87-line mount table, 3
 local filesystems): a 330–570 µs sweep once per interval, most of it the
 kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
 
+On macOS, see [Filesystem on macOS](#filesystem-on-macos).
+
 `filesystem_available` is the number `df` reports as available and the one to
 alert on; `filesystem_free` also counts the blocks reserved for the superuser.
 Inode exhaustion is the other way a disk fills, and comes from the same call.
@@ -786,6 +923,48 @@ cap) in <us> us (read <us> us, parse <us> us, statvfs+publish <us> us)`.
 | `filesystem_tmpfs_size` | The mount's size limit in bytes (`size=`); a limit only, not memory held | `mount`, `fstype`, `devnum` |
 | `filesystem_tmpfs_inodes_used` | Files, directories and links on the mount; absent with no inode limit | `mount`, `fstype`, `devnum` |
 | `filesystem_tmpfs_inodes_total` | The mount's inode limit (`nr_inodes=`) | `mount`, `fstype`, `devnum` |
+
+#### Filesystem on macOS
+
+On macOS the sampler lists the mounts with `getfsstat(MNT_NOWAIT)`,
+unprivileged, and samples those that are local (`MNT_LOCAL`), report a
+nonzero size, and are not `devfs`, `autofs` or macFUSE: APFS and HFS+ volumes,
+including the system's hidden volumes under `/System/Volumes`, and mounted
+disk images. Network mounts are left out.
+
+The counters `getfsstat(MNT_NOWAIT)` returns are the ones each mount's last
+refresh left (a `statfs`, or a `getfsstat` without `MNT_NOWAIT`, by any
+process), so on a volume nothing else reads they can be hours old. Each
+selected volume is therefore read again with `statfs` and `getattrlist` on its
+mount point, and a reading where either call reports a device other than the
+listed one, because the mount was replaced or unmounted, is dropped. A
+`getattrlist` that fails leaves only `filesystem_volume_used` unset. Each call
+looks the path up, which walks every mount above it, so a volume mounted
+beneath a network, autofs or macFUSE mount is skipped. The sweep runs on a
+blocking thread at most once per `interval` (60s by default); one still
+running after three intervals is logged as a warning. With 10 volumes,
+`getfsstat` and the `statfs` and `getattrlist` calls took 36 µs in a debug
+build, 12 µs of it `getattrlist`.
+
+`filesystem_total`, `filesystem_free`, `filesystem_available`,
+`filesystem_inodes_total`, `filesystem_inodes_free` and `filesystem_readonly`
+are set, with the same labels as on Linux: `devnum` is the `major:minor` of the
+volume's device node and `block_device` its BSD name, such as `disk3s5`.
+`filesystem_readonly` is the mount's `MNT_RDONLY` flag, so the sealed system
+volume at `/` reads 1. `filesystem_errors`, `filesystem_written_bytes` and the
+`filesystem_tmpfs_*` series are not set.
+
+The volumes of an APFS container share its space. A volume without a quota or
+reserve reports the container's size as its total and the container's free
+space as its free and available bytes, so total minus free is the space used
+in the whole container, not by the volume. The volume's own use is
+`getattrlist(ATTR_VOL_SPACEUSED)`, the number `df` reports as used, published
+as `filesystem_volume_used`. HFS+, FAT and exFAT volumes report it as total
+minus free. APFS reports an inode total that moves with free space.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `filesystem_volume_used` | Bytes the volume itself uses (`ATTR_VOL_SPACEUSED`); macOS only | `mount`, `fstype`, `devnum`, `block_device` |
 
 ## XFS
 
@@ -1016,6 +1195,88 @@ busy time with frequency to distinguish "busy but downclocked" from genuinely
 saturated. EU-level detail requires the separate i915 perf/OA interface, and
 there is no VRAM bandwidth counter in this PMU.
 
+### gpu_amd_sysfs
+
+AMD APU telemetry from `/sys/class/drm/card*/device/gpu_metrics` and
+`pp_dpm_fclk`. It needs only the amdgpu driver, so it covers an APU host with
+no ROCm. amdgpu's `hwmon` voltages, power and edge temperature come from
+[hw_sensors](#hardware-sensors).
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `gpu_clock` | Clock speed in Hz; `fabric` is the current DPM level | `clock={graphics,compute,memory,soc,fabric}` |
+| `gpu_power_usage` | Socket power in milliwatts, including the CPU cores | |
+| `gpu_rail_power` | Rail power in milliwatts | `rail={vdd,soc}` |
+| `gpu_temperature` | Temperature in degrees Celsius | `sensor={graphics,soc}` |
+| `gpu_utilization` | Graphics engine busy percentage | |
+| `gpu_throttle_status` | The firmware's throttle status bitmask | |
+
+A GPU is read only if its `gpu_metrics` is format v2.1, the only format
+checked against a capture (a Radeon 780M, SMU 13.0.4). A discrete card, or an
+APU on a newer format, is left out. It is named in the unsupported reason when
+no card is kept, and at debug level otherwise. A GPU that is resetting when
+the agent starts is kept and read once the reset ends; one whose format then
+turns out not to be v2.1 logs one warning and stays unread, holding its id.
+A runtime-suspended GPU is left out. amdgpu suspends only discrete cards, which
+this sampler does not read.
+
+The sampler reports unsupported when `gpu_amd_smi` is enabled and ROCm SMI
+finds a GPU, because both number GPUs from 0 under `vendor="amd"` and every
+shared series would be doubled by a `sum by (id, vendor)`. Set
+`[samplers.gpu_amd_smi] enabled = false` to use this sampler on such a host.
+
+The clock, activity and power fields are named `average_*`, but the driver
+fills most of them from unfiltered firmware fields and the firmware's update
+period is not exposed, so a limit that lasts a moment can show as a small dip
+or not at all. `gpu_power_usage` is a 16-bit milliwatt field and cannot report
+above 65.5 W. `compute` and `graphics` are the same clock. `vdd` is the
+`average_gfx_power` field, which SMU 13.0.4 fills from the VDD rail, and it
+carries more than the graphics engine.
+
+`gpu_throttle_status` is published raw because its bits are defined per SMU
+firmware. On SMU 13.0.4 (`smu13_driver_if_v13_0_4.h`), bit 0 is SPL, 1 FPPT,
+2 SPPT, 3 SPPT_APU, 4 THM_CORE, 5 THM_GFX, 6 THM_SOC, 7 TDC_VDD, 8 TDC_SOC,
+9 PROCHOT_CPU, 10 PROCHOT_GFX, 11 EDC_CPU and 12 EDC_GFX.
+
+### Cadence
+
+This sampler reads on its own interval (`[samplers.gpu_amd_sysfs] interval`,
+default 1s), dispatched via `spawn_blocking`, and serves cached values in
+between. On a Radeon 780M a `gpu_metrics` read took about 0.3 ms, 2.3 ms at
+worst, and a `pp_dpm_fclk` read about 0.04 ms, 0.5 ms at worst.
+
+### gpu_apple
+
+Produces the Apple silicon GPU's utilization, clock and power from IOReport,
+the private framework `powermetrics` reads. It needs no privileges. On an
+Intel Mac, or a macOS release without IOReport, it reports itself unsupported.
+Every metric carries `vendor="apple"` and `id="0"`.
+
+| Metric | Type | Description | IOReport source |
+|--------|------|-------------|-----------------|
+| `gpu_utilization` | gauge | Percentage of time in a performance state, rather than `OFF`, since the previous refresh (0-100) | `GPU Stats` / `GPU Performance States` / `GPUPH` |
+| `gpu_clock` | gauge | Average frequency in Hz over the time in a performance state since the previous refresh; 0 when the GPU was off throughout. `clock="graphics"` | the same residencies, with the device tree's `voltage-states9` frequency table |
+| `gpu_power_usage` | gauge | Average power in milliwatts since the previous refresh | `Energy Model` / `GPU Energy` |
+| `gpu_energy_consumption` | counter | Energy in millijoules since boot | `Energy Model` / `GPU Energy` |
+
+`GPUPH` counts the 24 MHz system-counter ticks the GPU has spent in `OFF` and
+in each performance state `P1`, `P2`, ...; state `P<k>` runs at entry `k` of
+`voltage-states9`. A machine whose state count differs from that table's
+length is not supported, and only the first `GPUPH` channel is read.
+`GPU Energy` is the channel `cpu_power` publishes as `cpu_igpu_energy`.
+
+The three gauges average over the time since the last refresh that published
+them, whichever consumer made it. A refresh less than 200 ms after that one,
+or one in which IOReport counted no residency, publishes nothing and stamps no
+window, so the gauges always cover at least 200 ms. `GPU Energy` advances
+about every 15 ms on an M4 Max, which is 7.5% of 200 ms; `rate()` of
+`gpu_energy_consumption` over a longer window reads power more closely.
+
+On an M4 Max, against `powermetrics --samplers gpu_power` over 10-second
+phases of a Metal compute load at 0%, 5%, 20%, 50% and 100% duty, phase means
+excluding each phase's first and last second agreed within 0.35 percentage points
+of utilization, 3.1% of power and 2.1% of clock.
+
 ## Memory
 
 Metrics related to system memory usage.
@@ -1154,6 +1415,29 @@ utilized across the system.
 A line the running kernel does not print (`HardwareCorrupted` without
 `CONFIG_MEMORY_FAILURE`, the huge-page lines without the corresponding
 config) leaves its gauge absent from the snapshot rather than at 0.
+
+On macOS the sampler reads the `vm.page_*` and `vm.compressor` sysctls and
+`hw.memsize` and `vm.swapusage`, unprivileged. It sets
+`memory_total`, `memory_free`, `memory_available`, `memory_cached`,
+`memory_anon`, `memory_swap_total` and `memory_swap_free`, and the macOS-only
+gauges below; the rest are absent. `memory_free` excludes speculative pages,
+as `vm_stat`'s "Pages free" does. `memory_cached` is the file-backed pages.
+`memory_anon` omits anonymous pages on the per-CPU local queues, so
+`vm_stat`'s "Anonymous pages" can read slightly higher.
+`memory_available` has the Linux meaning, memory that can be handed out
+without compressing or swapping anonymous memory: free, file-backed and
+purgeable pages. `memory_active` and `memory_inactive` are absent because
+macOS does not split those lists into file and anonymous pages.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `memory_purgeable` | Unwired anonymous memory in objects marked volatile, which the kernel may discard without saving; counted in `memory_anon` and `memory_available` | |
+| `memory_speculative` | File pages read ahead and not yet used; counted in `memory_cached` and `memory_available` | |
+| `memory_compressed` | Compressed data the compressor holds in memory, in bytes; excludes segments swapped out and unused space within segments | |
+| `memory_compressed_stored` | Uncompressed size of every page the compressor holds, including pages in segments swapped out (`vm_stat`'s "Pages stored in compressor") | |
+
+The two compressor gauges cover different pages, so their ratio is not the
+compression ratio. Each is set only when its sysctl is readable.
 
 ### memory_pagecache
 
@@ -1331,6 +1615,31 @@ line the running kernel does not print (NUMA counters without NUMA, THP
 counters without `CONFIG_TRANSPARENT_HUGEPAGE`, the working-set split before
 5.9) leaves its metric absent rather than 0.
 
+On macOS the sampler reads `host_statistics64` (the call `vm_stat` makes),
+unprivileged, for the values with no sysctl in Apple's published kernel
+source. It sets `memory_page_faults`, `memory_swap_in` and `memory_swap_out`,
+and the macOS-only metrics below; the rest are absent.
+Swap on macOS holds compressed memory, so the swap counters are kernel pages
+(16 KiB on Apple silicon) of compressed data moved to and from the swap files,
+not pages of memory as on Linux. There is no major-fault count;
+`memory_pageins` is file pages only.
+
+`host_statistics64` is rate-limited for every process that is not an Apple
+platform binary: together they get 2 to 10 calls a second, and a call over
+that returns the last result any of them fetched. A read is published only if
+it has more faults than the sampler's last published read and none of its
+counters is lower; otherwise that interval has no point, rather than a rate
+of zero or a counter going backwards. A newer copy fetched by another process
+cannot be detected; it is from the current one-second window.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `memory_wired` | Memory wired down: it cannot be paged out or compressed (`wire_count`, which on macOS also counts throttled pages and free low-memory pages); a gauge, in bytes | |
+| `memory_compressions` | Pages compressed into the compressor | |
+| `memory_decompressions` | Pages decompressed out of the compressor | |
+| `memory_pageins` | File pages read from disk on a fault or by read-ahead; pages a `read()` call fetches directly are not counted | |
+| `memory_pageouts` | Dirty file pages the pageout daemon wrote back to free memory; `write()`, `fsync` and `msync` writeback are not counted | |
+
 ### memory_writeback
 
 BPF sampler on the kernel's page-cache writeback tracepoints. Reports the
@@ -1390,6 +1699,92 @@ across agent restarts for an unchanged set of interfaces. Adding or removing a
 NIC renumbers the ones after it — use `interface` to follow a series across
 that.
 
+### network_efa
+
+AWS Elastic Fabric Adapter (EFA) counters from sysfs. An EFA device is listed
+under `/sys/class/infiniband` (named `rdmap*`) with `efa` as its driver; other
+RDMA drivers are not read. On a host with no EFA device the sampler reports as
+unsupported and produces nothing.
+
+Port counters come from `ports/<n>/hw_counters/` and carry `device` (the
+device name, e.g. `rdmap0s27`) and `port` labels. `id` numbers the ports from
+0 in device-name and port-number order.
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `network_efa_tx_bytes` | Bytes transmitted by an EFA port | `device`, `port`, `id` |
+| `network_efa_tx_pkts` | Packets transmitted by an EFA port | `device`, `port`, `id` |
+| `network_efa_rx_bytes` | Bytes received by an EFA port | `device`, `port`, `id` |
+| `network_efa_rx_pkts` | Packets received by an EFA port | `device`, `port`, `id` |
+| `network_efa_rx_drops` | Packets an EFA port dropped on receive | `device`, `port`, `id` |
+| `network_efa_send_bytes` | Bytes in send work requests (two-sided messages) on an EFA port | `device`, `port`, `id` |
+| `network_efa_send_wrs` | Send work requests on an EFA port | `device`, `port`, `id` |
+| `network_efa_recv_bytes` | Bytes in receive work requests (two-sided messages) on an EFA port | `device`, `port`, `id` |
+| `network_efa_recv_wrs` | Receive work requests on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_read_wrs` | RDMA read work requests this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_read_bytes` | Bytes read by RDMA reads this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_read_wr_err` | RDMA read work requests this host issued on an EFA port that completed with an error | `device`, `port`, `id` |
+| `network_efa_rdma_read_resp_bytes` | Bytes an EFA port sent in response to RDMA reads issued by remote hosts | `device`, `port`, `id` |
+| `network_efa_rdma_write_wrs` | RDMA write work requests this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_write_bytes` | Bytes written by RDMA writes this host issued on an EFA port | `device`, `port`, `id` |
+| `network_efa_rdma_write_wr_err` | RDMA write work requests this host issued on an EFA port that completed with an error | `device`, `port`, `id` |
+| `network_efa_rdma_write_recv_bytes` | Bytes an EFA port received from RDMA writes issued by remote hosts | `device`, `port`, `id` |
+| `network_efa_retrans_bytes` | Bytes an EFA port retransmitted | `device`, `port`, `id` |
+| `network_efa_retrans_pkts` | Packets an EFA port retransmitted | `device`, `port`, `id` |
+| `network_efa_retrans_timeout_events` | Retransmission timeouts on an EFA port | `device`, `port`, `id` |
+| `network_efa_unresponsive_remote_events` | Events an EFA port counted as a remote host not responding | `device`, `port`, `id` |
+| `network_efa_impaired_remote_conn_events` | Events an EFA port counted as an impaired connection to a remote host | `device`, `port`, `id` |
+
+Device counters come from the device's own `hw_counters/` and carry a
+`device` label. `id` numbers the devices from 0 in name order.
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `network_efa_cmds_err` | Admin commands to an EFA device that completed with an error | `device`, `id` |
+| `network_efa_no_completion_cmds` | Admin commands to an EFA device that got no completion | `device`, `id` |
+| `network_efa_alloc_pd_err` | Protection domain allocations on an EFA device that failed | `device`, `id` |
+| `network_efa_alloc_mr_err` | Memory region allocations on an EFA device that failed | `device`, `id` |
+| `network_efa_alloc_ucontext_err` | User context allocations on an EFA device that failed | `device`, `id` |
+| `network_efa_create_ah_err` | Address handle creations on an EFA device that failed | `device`, `id` |
+| `network_efa_create_cq_err` | Completion queue creations on an EFA device that failed | `device`, `id` |
+| `network_efa_create_qp_err` | Queue pair creations on an EFA device that failed | `device`, `id` |
+| `network_efa_get_dma_mr_err` | DMA memory region requests on an EFA device that failed | `device`, `id` |
+| `network_efa_mmap_err` | Memory mappings of an EFA device's queues that failed | `device`, `id` |
+| `network_efa_reg_mr_err` | Memory region registrations on an EFA device that failed | `device`, `id` |
+
+The files present differ by driver version. Mainline drivers before 6.17
+(Amazon's before r2.17.0) lack the `retrans_*`, `unresponsive_remote_events`
+and `impaired_remote_conn_events` files; before 6.6 (r2.5.0) they also lack
+`rdma_write_*`. On a device without RDMA write support the `rdma_write_*`
+files exist and read 0. Amazon's out-of-tree driver also has `alloc_mr_err`
+and `get_dma_mr_err`. A counter whose file is missing publishes nothing.
+`lifespan`, `submitted_cmds`, `completed_cmds` and `keep_alive_rcvd` are not
+read.
+
+An EFA device has one port, and the driver fetches its port counters for the
+whole device. On a host with an EFA PCI function the sampler waits for the
+`efa` module, so a module that loads after the agent starts is read. On a host
+without one the sampler reports unsupported at start. Discovery runs once: a
+device unbound, or whose module is reloaded, after discovery is not read again
+until the agent restarts, and the agent logs a warning.
+
+#### Cadence
+
+Reading a port's counters makes the driver send three to five admin commands
+to the device, by driver version and device. The RDMA core then serves every
+file of that port from the result for `hw_counters/lifespan` milliseconds (10
+by default). On an im4gn.16xlarge sending about 55 Gbit/s over EFA, the first
+file read took 1.8 ms at p50 and 2.8 ms at worst, and the other 21 files about
+0.5 ms together. So this sampler reads on its own interval
+(`[samplers.network_efa] interval`, default 1s), dispatched via
+`spawn_blocking`, and serves cached values in between. A port read that
+returns an error ends that port's read for the interval, because the RDMA core
+caches only a successful fetch and each further file would send the stats
+commands again. At start, the agent warns when a port's `lifespan` is above
+100 ms: a value fetched for another reader can then be that much older than
+the window it is published in. Mainline drivers before 5.15 fetch the device
+counters with admin commands too.
+
 ### network_interfaces
 
 Produces network interface statistics from /sys/class/net for TX/RX errors.
@@ -1413,6 +1808,8 @@ Basic network traffic statistics.
 | `network_packets` | Packets transferred, counted once per interface traversed — **reads high on stacked interfaces**, see below | `direction={receive,transmit}` |
 | `network_host_bytes` | Bytes crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
 | `network_host_packets` | Packets crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
+| `network_interface_errors` | Errors reported by network interfaces (macOS only) | `direction={receive,transmit}` |
+| `network_interface_drops` | Packets dropped at an interface's input or send queue (macOS only) | `direction={receive,transmit}` |
 
 #### Which pair to use
 
@@ -1471,6 +1868,52 @@ Known scope limits:
   consuming link bandwidth. Seeing real link utilization under SR-IOV requires
   PF-side hardware counters, which Rezolus does not yet collect.
 
+#### network_traffic on macOS
+
+On macOS the sampler reads each interface's counters, unprivileged, with the
+`IFMIB_IFDATA` sysctl (`net.link.generic.ifdata`).
+`network_bytes` and `network_packets` sum every interface: loopback, bridges,
+`utun` tunnels and the `vmenet` interfaces of virtual machines included, so
+a packet that crosses a bridge and its member interface is counted on each.
+`network_host_bytes` and `network_host_packets` sum two kinds of interface:
+
+- the `IONetworkInterface` entries in the I/O registry that have no
+  `IOResources` ancestor: wifi, Ethernet on PCIe, Thunderbolt or USB, and
+  Thunderbolt networking;
+- the interfaces with no delegate interface whose functional type is wifi
+  or cellular, which adds `awdl0` (Apple Wireless Direct Link, used by
+  AirDrop), `llw0` (low-latency WLAN) and `ap1`, all on the wifi radio.
+
+They exclude `lo0`, bridges and `utun` tunnels, which have no
+`IONetworkInterface`, and `vmenet` interfaces, which are software devices
+under `IOResources`. A tunnel delegated to a wifi interface reports wifi as
+its functional type, and is excluded because it has a delegate.
+
+`network_interface_errors` sums the input errors (`ifi_ierrors`, receive) and
+output errors (`ifi_oerrors`, transmit). `network_interface_drops` sums the
+input queue drops (`ifi_iqdrops`, receive) and send queue drops
+(`ifmd_snd_drops`, transmit). Both sum every interface, loopback included,
+except those with an `IOResources` ancestor in the I/O registry. On macOS
+26.6 these are the `vmenet` interfaces of virtual machines, whose
+`ifi_iqdrops` grows in steps of about 0xAAAAAAAA that are not drops. `ifmd_snd_drops` is 32 bits; when it wraps, that read adds only
+its new value.
+
+An interface that is neither hardware-backed nor under `IOResources` when
+first listed (`lo0`, bridges, `utun`, or an interface `if_nameindex` lists
+before the I/O registry does) is classified again on the first read at least
+2 seconds later, and on each read after that until a classification
+succeeds. Its errors and drops are held until then: discarded if it is found
+under `IOResources` or goes away first, added to the sums otherwise. An
+interface found hardware-backed then is in `network_host_bytes` and
+`network_host_packets` from that read on. A `vmenet` interface the I/O
+registry has not listed by then is counted, and its `ifi_iqdrops` steps go
+into `network_interface_drops`.
+
+The counters start at zero when the sampler starts and add each interface's
+increase since the previous read. An interface first listed after the
+sampler started adds its whole count. When an interface goes away, its
+traffic after the last read before that is not counted.
+
 ## Scheduler
 
 Metrics related to the Linux kernel scheduler. The scheduler is responsible for
@@ -1497,11 +1940,28 @@ how frequently they're switched out. High runqueue latencies can indicate CPU
 contention or scheduling inefficiencies that directly impact application
 performance and responsiveness.
 
+On kernels whose BTF shows `sched_switch` with a `prev_state` argument
+(mainline 5.18 and later, built with BTF), whether a switch was voluntary and
+whether the task went into uninterruptible sleep come from that argument,
+the state `__schedule()` read from the task before deciding whether to block
+it. A sleep cancelled by a pending signal counts as involuntary, since the
+task stays queued. Otherwise the state is read from the task, where a wakeup that lands
+during the switch may already have replaced it. There
+`scheduler_uninterruptible` and the `*_uninterruptible_wait` counters can
+undercount short uninterruptible sleeps by an amount that depends on the
+workload.
+
+On every kernel, a switch that preempts the task counts as involuntary
+whatever the task's state, as the kernel counts it: a preempted task stays on
+the runqueue, and its runqueue latency is measured from the preemption.
+
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `scheduler_runqueue_latency` | Distribution of the amount of time tasks were waiting in the runqueue | |
 | `scheduler_running` | Distribution of the amount of time tasks were on-CPU | |
 | `scheduler_offcpu` | Distribution of the amount of time tasks were off-CPU | |
+| `scheduler_uninterruptible` | Distribution of the amount of time tasks were off-CPU in uninterruptible sleep (D state), a subset of `scheduler_offcpu` | |
+| `scheduler_uninterruptible_wait` | Time tasks spent in uninterruptible sleep, added in full when a task next runs, on the CPU it runs on. Over windows much longer than the sleeps, the rate summed across CPUs is the mean number of tasks in D state; a long sleep shows as a spike when it ends | `id`: the CPU |
 | `scheduler_context_switch` | The number of involuntary context switches | `kind=involuntary` |
 
 The migrations part tracks when tasks move from one CPU to another, per CPU
@@ -1526,6 +1986,8 @@ interval = "5s"
 # enabled = false
 ```
 
+On macOS, see [hw_sensors on macOS](#hw_sensors-on-macos).
+
 Reads run in a nonoverlapping blocking task, dispatched by consumer activity
 at most once per interval (5 seconds by default). Discovery runs every 60
 seconds during sampling; descriptive metadata is cached between passes.
@@ -1538,8 +2000,8 @@ background worker time on every sweep, not the scrape path. `nvme` and
 `drivetemp` hwmon chips and ACPI `Processor` cooling devices (one per logical
 CPU) are not read. Each drive hwmon read sends the drive a command, and
 `drivehealth` reads each drive's temperature at its own interval; for NVMe that
-is the Composite temperature, and the per-sensor temperatures the `nvme` hwmon
-chip also exposes are not collected. `drivehealth` needs root to open the drive
+is the Composite temperature and Temperature Sensors 1 to 8
+(`drive_temperature_sensor`). `drivehealth` needs root to open the drive
 devices, so an agent that does not run as root has no drive temperatures. A
 family holds at most 256 sensor identities; a host with more temperature
 channels than that, such as `coretemp` on a 256-core part, logs a warning and
@@ -1566,6 +2028,50 @@ takes about 300 ms, and the rest about 30 µs; its NIC's MAC temperature adds
 about 18 ms. About 2.8 ms of each sweep is CPU; the
 rest is the worker waiting.
 
+A Corsair AXi power supply is read through its Corsair Link USB dongle, USB ID
+`1b1c:1c02`, which the `cp210x` driver exposes as `/dev/ttyUSBn`. Only an
+AX1500i has been tested; another AXi model whose dongle has a different USB ID
+is not found. Each PSU publishes input power, input voltage and input current
+(the AC side, RMS), two temperatures and its fan speed, with
+`source=corsair_axi`, `chip` set to the model the PSU reports (`AX1500i`) and
+`device` the USB port (`1-13`). To leave the dongle alone:
+
+```toml
+[samplers.hw_sensors]
+corsair_axi = false
+```
+
+The agent needs read-write access to the tty. Before opening it, the agent
+checks in sysfs that the tty still belongs to a device with the dongle's USB
+ID. It refuses the port if another process has set `TIOCEXCL` on it or holds a
+`flock` on it, and otherwise locks it with `flock` before changing the port's
+settings. The dongle is sent read requests and a setup command whose effect is
+undocumented; no PSU register is written. The PSU's PMBus page is read when the
+port is opened and again before a reading at most once a second. A page other
+than 0 fails the port, and the agent does not switch it back, so the PSU's
+readings stay absent until the page is 0 again. `cpsumon` sets page 0 at the
+start of a readout and leaves page 2 at the end; no tool is known to leave it
+on 0, and whether a power cycle resets it is not known. A process that already
+has the port open without setting `TIOCEXCL` or taking a `flock`, such as
+CyberPower's `pwrstatd` probing serial ports for a UPS, takes the PSU's
+replies, and discovery reports an error (`no reply`, or a reply that does not
+decode).
+
+A reading does not reopen a port for 60 seconds after a failed open; discovery
+tries again every 60 seconds. A failed reading, including a lost reply to the
+page check, closes the port, and that register is not read for 1 second,
+doubling on each consecutive failure up to 60 seconds. The port is closed on a
+separate thread, because usb-serial's close can wait up to 30 seconds for
+output to drain. A reading waits up to 100 ms for a previous close to return;
+if it has not, readings of the port fail without waiting for the next second,
+so a close that is draining costs at most 100 ms per second, and the 60-second
+backoff does not apply. If discovery runs while that close is pending, the PSU
+has no series until the next discovery. On an AX1500i the six readings and the
+page check add about 35 ms to each sweep (two serial exchanges per register),
+and a discovery that opens the port 42–46 ms. On the tested AX1500i the fan
+reported 0 rpm up to 371 W input. Corsair HXi/RMi power supplies use other USB
+IDs and are read by the kernel's `corsair-psu` hwmon driver.
+
 `asusec` reports -40 °C for a temperature header with nothing connected.
 Such a channel gets no slot and is not read on each sweep; discovery reads it
 every 60 seconds and adds it once it reports another value.
@@ -1591,9 +2097,9 @@ each family supports at most 256 lifetime identities, reporting overflow.
 | Metric | Type | Stored unit / interpretation |
 | --- | --- | --- |
 | `sensor_temperature` | Gauge | Millidegrees Celsius per temperature channel; signed |
-| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading or checked INA3221 voltage × current |
-| `sensor_voltage` | Gauge | Millivolts per bus-voltage channel; excludes INA3221 shunt-voltage channels |
-| `sensor_current` | Gauge | Milliamps per current channel |
+| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading, checked INA3221 voltage × current, or Corsair AXi input power |
+| `sensor_voltage` | Gauge | Millivolts per bus-voltage channel, or Corsair AXi AC input (RMS); excludes INA3221 shunt-voltage channels |
+| `sensor_current` | Gauge | Milliamps per current channel, or Corsair AXi AC input (RMS) |
 | `sensor_fan_speed` | Gauge | Measured revolutions per minute, including NVIDIA `pwm_tach/rpm` |
 | `sensor_fan_pwm` | Gauge | Fan command on a 0–255 scale, not measured rotation |
 | `sensor_cooling_state` | Gauge | Driver-defined cooling-state index, not a throttling percentage |
@@ -1615,6 +2121,137 @@ This first sampler does not record configurable limits, trip points, fan modes,
 or overcurrent event histories. A zero cooling state does not establish the
 absence of every form of hardware throttling. See [hardware validation and
 inventory commands](sensors-validation.md) for the remaining validation work.
+
+### hw_sensors on macOS
+
+On macOS the sampler reads two sources, and neither needs root:
+
+- Temperatures, from the IOHIDEventSystem services on vendor usage page
+  `0xff00`, usage 5. On Apple silicon these are the power manager's die and
+  device sensors (`PMU tdie1`, `PMU tdev1`, ...), the battery gas gauge and
+  the NAND. `IOHIDEventSystemClient` is private API: IOKit exports it, but
+  the SDK has no header for it.
+- Fan speeds, power-manager rail voltage, current and power, the charger
+  input, system power and battery discharge power, from the System
+  Management Controller (SMC) through the `AppleSMC` user client.
+
+The sampler finds its sensors once, at startup; a sensor it does not find
+then has no series. Reads are dispatched by consumer activity at most once
+per `interval` (5 seconds by default), in a blocking task, as on Linux. A
+read that fails is absent. Each sensor has `sensor` (the SMC key, or the HID
+service's four-character location code), `name`, and `source` (`hid` or
+`smc`). In a recording, `source` appears as `exported_source`, because the
+recording's own `source` label takes precedence.
+
+| Metric | Read from | `name` |
+| --- | --- | --- |
+| `sensor_temperature` | Each HID temperature service, one per location code (the SMC publishes some sensors as two services) | The service's `Product` |
+| `sensor_fan_speed` | `F<n>Ac` for each of the `FNum` fans, at most ten | `fan <n>` |
+| `sensor_voltage` | `VD0R`, and each rail's `V` key | `DC in`, and the rail |
+| `sensor_current` | `ID0R`, and each rail's `I` key | `DC in`, and the rail |
+| `sensor_power` | `PDTR`, `PSTR`, `PPBR`, and each rail's `P` key | `DC in`, `system`, `battery`, and the rail |
+
+A rail is one that a HID voltage or current service on usage page `0xff08`
+names. The service named `PMU vbuck0` at location `VP0b` is rail `PMU buck0`,
+and its voltage, current and power are the SMC keys `VP0b`, `IP0b` and
+`PP0b`. A voltage service's location must start with `V` and a current
+service's with `I`. A location that is `VD0R` or `ID0R`, or whose power key
+would be `PDTR`, `PSTR` or `PPBR`, is not a rail. The sampler does not read a
+key the SMC does not have or that is not a 32-bit float; on an M4 Max, 14 of
+the candidate keys are not read. When several sensors of one metric have the
+same name, each has its `sensor` appended, as in `gas gauge battery (TG0B)`.
+
+Apple does not document the SMC keys. `PDTR` (power from the charger), `VD0R`
+and `ID0R` (its voltage and current) carry the meanings open-source SMC tools
+give them. On an M4 Max on AC power, `VD0R` × `ID0R` matched `PDTR` within
+0.5% in seven reads from 31 to 50 W, and each rail's power key equalled its
+voltage times its current. The SMC updates these keys about once a second,
+so a value can be up to a second older than the read that returned it.
+
+`system` (`PSTR`) is the power the Mac consumes, from the charger and the
+battery, not counting power going into the battery. `battery` (`PPBR`) is the
+power the battery supplies. With the battery idle on AC power, `PSTR` equals
+the previous second's `PDTR`, and `PPBR` reads about 0.4 W.
+
+On an M4 Max on a Thunderbolt dock that held `PDTR` at about 57 W, with the
+battery discharging under load, `PSTR` (about 97 W) read `PDTR` + `PPBR` +
+1.2 W at the median over 116 one-second reads. The battery's own gauge
+(`Voltage` × `InstantAmperage` of `AppleSmartBattery` in `ioreg`) updates
+about once a minute while the current is steady, and every second or few
+while it changes, holding each reading until the next. It read 36.1 W of
+discharge at one update, and `PPBR` read 34.2 W in that second.
+
+While the battery charges, `PPBR` reads about 0.4 W (up to 7.6 W for a few
+seconds at a load step), so charging is not visible in `battery`. `DC in`
+minus `system` is the power going into the battery: at the four gauge updates
+before a load step, the gauge read 36.4, 72.6, 66.6 and 65.3 W, and the
+previous second's `PDTR` minus the current `PSTR` read 36.3, 72.5, 66.3 and
+65.4 W. At the seven updates during and after the step, the previous second's
+`PDTR` minus the current `PSTR` reached each gauge reading one to two seconds
+later. Because `PSTR` trails `PDTR` by a second, a single read of `DC in`
+minus `system` is off by the change in `PDTR` over that second: 42 W at the
+load step, and 46 W when charging stopped. Average it over a minute.
+
+The SMC has many more temperature keys (281 reading between 10 and 120 °C on
+an M4 Max), but their names are undocumented and differ between chips, so
+they are not read. `sensor_fan_pwm` and `sensor_cooling_state` have no macOS
+source. The sampler has not been run on an Intel Mac or on a Mac without a
+battery.
+
+On an M4 Max, with only `hw_sensors` and `rezolus_rusage` enabled at a 5
+second interval and one scrape per second for 150 seconds, the sampler read
+the 76 sensors other than `system` and `battery` per sweep in 34.5 ms at the
+median, 38.0 ms at the 90th percentile and 324 ms at most (60 sweeps; four
+took between 76 and 324 ms). The agent used 40 to 60 ms more CPU per run
+than with the sampler off (0.03 to 0.04% of a core; two runs each). Thirty
+back-to-back sweeps of the 78 sensors, `system` and `battery` included, took
+33.0 ms at the median and 35.8 ms at most. Each SMC read takes about 165 µs
+and each HID temperature read about 1 ms, nearly all of it waiting rather
+than on CPU.
+
+### thermal_pressure
+
+macOS only. `thermal_pressure` is the thermal pressure level the operating
+system reports to applications, from the `notify(3)` state of
+`com.apple.system.thermalpressurelevel`. It needs no root. Each refresh calls
+`notify_check`, a shared-memory check (16 to 50 ns on an M4 Max, varying with
+the machine's load), and calls `notify_get_state` (10 to 34 µs) only when
+`notify_check` reports a post, at startup, or after a failed check or read.
+Over 1,200 one-second reads on an M4 Max, `notify_check` reported each of the
+level's two rises and two falls. The levels are those of
+`OSThermalPressureLevel` in `<libkern/OSThermalNotification.h>`:
+
+| Value | Level |
+| --- | --- |
+| 0 | nominal |
+| 1 | moderate |
+| 2 | heavy |
+| 3 | trapping |
+| 4 | sleeping |
+
+The level is the operating system's classification, not a measure of
+throttling. Use `cpu_frequency` to see whether the CPU ran slower. On an
+M4 Max with every CPU busy and a compute kernel on the GPU, read once a
+second:
+
+- Starting from cold, the level rose from 0 to 1 after 115 seconds of load
+  in one run and 132 seconds in another, and to 2 two seconds later. In two
+  later runs, started while the Mac was still warm, it reached 1 after 38 and
+  51 seconds and 2 about 35 seconds after that. In the second run the fans
+  averaged about 5,550 RPM when the level reached 2.
+- In the second run, at level 0 under load, the performance cores'
+  10-second medians were 4.47 to 4.51 GHz, except from 40 to 70 seconds into
+  the load, when they were 3.50, 3.67 and 4.27 GHz. For the first minute at
+  level 2 they were between 3.85 and 4.51 GHz, and after that between 2.75
+  and 3.2 GHz. The efficiency cores ran at 2.59 GHz throughout.
+- The level went back to 1 while the load continued (after 249 seconds of
+  load in the first run, 242 in the second), and in the second run to 0 after
+  301 seconds. In the last 20 seconds of that run's load, at level 0, the
+  performance cores' 10-second medians were 2.64 and 3.26 GHz.
+
+`NSProcessInfo.thermalState` read 1 (fair) at both level 1 and level 2. The
+sampler has not been run on an Intel Mac or on Apple silicon other than the
+M4 Max, and levels 3 and 4 have not been seen.
 
 ## Syscall
 
@@ -1662,14 +2299,50 @@ Metrics related to TCP connections and performance.
 
 ### tcp_connect_latency
 
-Measures the latency for establishing TCP connections. High connect latencies
-may indicate network congestion, DNS resolution problems, or overloaded servers.
-These metrics are particularly valuable for monitoring client-side connection
-performance.
+Measures the time from `connect()` on a TCP socket to the end of its
+handshake, labeled by how the handshake ended. The start is the entry to
+`tcp_v4_connect` or `tcp_v6_connect`; the end is the socket leaving
+`SYN_SENT` (the `inet_sock_set_state` tracepoint). With
+`TCP_FASTOPEN_CONNECT`, when the kernel will put data in the SYN, it sends the
+SYN at the first write, so the time includes the wait before that write. The
+`outcome` label is read at that transition:
+
+- `established`: the socket became `ESTABLISHED`. A connect in `TCP_REPAIR`
+  mode, as in a checkpoint restore, becomes `ESTABLISHED` with no handshake
+  and is counted here.
+- `refused`: the connect failed with `ECONNREFUSED`: a RST in reply to the
+  SYN, or an ICMP port unreachable, which an iptables `REJECT` rule sends by
+  default.
+- `timeout`: the SYN retries ran out (`ETIMEDOUT`; `net.ipv4.tcp_syn_retries`,
+  or the socket's `TCP_SYNCNT` or `TCP_USER_TIMEOUT`).
+- `error`: the socket closed with another error, such as an ICMP host or
+  network unreachable.
+- `aborted`: the socket closed with no error: the caller closed it before an
+  answer, or `connect()` failed after the socket entered `SYN_SENT`, such as
+  with `EADDRNOTAVAIL` when no local port is free.
+
+An ICMP error that arrives while a system call holds the socket lock, as
+during `connect()`, does not close the socket. The kernel keeps its errno, as
+it does for a route lookup that fails when a SYN is retransmitted. If the SYN
+retries then run out, the connect is counted under the kept errno (`refused`
+for a port unreachable, `error` otherwise), not `timeout`.
+
+A `connect()` that fails before the socket enters `SYN_SENT`, such as one with
+no route, is not counted, nor is a simultaneous open, which leaves `SYN_SENT`
+for `SYN_RECV`. A later `connect()` on the same socket is timed from that call.
+Agents before 6.0.0-alpha.120 time it from the failed call, or, on a socket
+disconnected after a simultaneous open, from the connect that began that open.
+The count of each histogram is the number of connects with that outcome while
+fewer than 10,240 sockets have a connect in progress, a failed connect or a
+simultaneous open not yet closed; connects beyond that are not counted. A query
+over `tcp_connect_latency` without an `outcome` matcher merges every outcome,
+including timeouts of seconds. Agents before 6.0.0-alpha.103 record one
+unlabeled histogram, which also counts refused connects and ends the time at
+the first segment received in `SYN_SENT`.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `tcp_connect_latency` | Distribution of latency for establishing outbound connections (active open) | |
+| `tcp_connect_latency` | Distribution of the time from `connect()` to the end of the handshake, in nanoseconds | `outcome`: `established`, `refused`, `timeout`, `error`, `aborted` |
 
 ### tcp_mib
 
@@ -1719,6 +2392,8 @@ the agent's network namespace and include IPv4 and IPv6 together.
 | `tcp_segments_retransmitted` | Segments retransmitted, in TSO/GSO segments, including tail loss probes and SYN-ACK retransmissions (`RetransSegs`) | |
 | `tcp_established_connections` | Connections in ESTABLISHED or CLOSE-WAIT, a gauge (`CurrEstab`) | |
 
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
 `tcp_segments_retransmitted` and `tcp_retransmit` (below) count different
 things. The kernel adds to `RetransSegs` the segments of each retransmission
 it hands to the transmit path, from every path including tail loss probes and
@@ -1765,6 +2440,8 @@ performance and efficiency.
 |--------|-------------|----------|
 | `tcp_retransmit` | The number of TCP packets that were re-transmitted | |
 
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
 ### tcp_traffic
 
 Samples TCP traffic to get metrics for TX/RX bytes and packets. These metrics
@@ -1778,6 +2455,61 @@ behavior with network activity.
 | `tcp_bytes` | The number of bytes transferred over TCP | `direction={receive,transmit}` |
 | `tcp_packets` | The number of packets transferred over TCP | `direction={receive,transmit}` |
 | `tcp_size` | Distribution of the size of TCP packets | `direction={receive,transmit}` |
+
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
+#### TCP on macOS
+
+On macOS, `tcp_mib`, `tcp_retransmit` and `tcp_traffic` read the kernel's
+TCP statistics, the `net.inet.tcp.stats` sysctl that `netstat -s -p tcp`
+prints, on each refresh and, while `tcp_traffic` runs, every 250 ms. The
+kernel returns zeros to a process not running as root while
+`net.inet.tcp.disable_access_to_stats` is set, which is the default, so the
+agent needs root for them; without it the three samplers report themselves
+unsupported. The counters cover IPv4 and IPv6 together.
+
+| Metric | XNU counter |
+|--------|-------------|
+| `tcp_retransmit`, `tcp_segments_retransmitted` | `tcps_sndrexmitpack`: retransmissions of data sent |
+| `tcp_delayed_acks` | `tcps_delack`: delayed-ACK timer firings that sent an ACK |
+| `tcp_rto_expirations` | `tcps_rexmttimeo`: retransmission timer expirations |
+| `tcp_checksum_errors` | `tcps_rcvbadsum`: segments received with a bad checksum |
+| `tcp_input_errors` | `tcps_rcvbadsum`, `tcps_rcvbadoff` and `tcps_rcvshort`: a bad checksum, a bad data offset, or a segment shorter than its header or not pulled up for lack of mbufs |
+| `tcp_bytes{direction="transmit"}` | `tcps_sndbyte`: data bytes sent for the first time |
+| `tcp_bytes{direction="receive"}` | `tcps_rcvbyte` and `tcps_rcvoobyte`: data bytes of segments received in order with nothing queued for reassembly, and of segments received out of order |
+
+The other metrics of these samplers are not set.
+
+- `tcps_sndrexmitpack` counts a retransmission sent with TSO once however
+  many segments it spans, so after an RTO it can be lower than the segments
+  sent again, and it counts data only, so a retransmitted SYN or SYN-ACK is
+  not included.
+- `tcp_bytes{direction="receive"}` leaves out a segment that starts at the
+  next expected byte while later data is queued for reassembly, mostly a
+  retransmission from the peer or a reordered original, so it undercounts
+  while the connection is losing or reordering packets. An
+  out-of-order segment is counted in full before the kernel trims its
+  overlap with segments already queued after it, so overlapping bytes are
+  counted twice.
+- `tcp_bytes` counts bytes when segments are sent and received; Linux counts
+  them at the socket calls. `tcp_packets` and `tcp_size` count socket calls
+  on Linux, which the macOS kernel does not count, and are not set.
+
+The kernel's counters are 32 bits wide, and it updates them without
+atomics, so a read can be higher than the next one. The agent keeps one
+64-bit total per counter, shared by the three samplers, which starts at
+zero at the first read and adds the increase since the previous read. A
+fall of less than 256 MiB (2^28) is taken as a read lower than the previous
+one and adds nothing, so a total is exact while its counter advances by less
+than 2^32 - 2^28 between two reads. A larger advance loses a multiple of
+2^32, and when it ends within 2^28 short of a multiple of 2^32 the total
+holds until the counter advances by up to 256 MiB more. Reads happen when
+the agent is scraped or streamed, and, while `tcp_traffic` runs, every 250
+ms on a thread of the agent's own, which keeps the totals exact below 128
+Gbit/s, less when the thread is delayed. Without `tcp_traffic`, the
+counters `tcp_mib` and `tcp_retransmit` read count events, which stay far
+below 2^32 between reads at any regular scrape or stream interval; an agent
+left unread for days can lose a multiple of 2^32 on a busy counter.
 
 ## Rezolus
 

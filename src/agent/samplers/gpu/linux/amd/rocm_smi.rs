@@ -130,6 +130,15 @@ unsafe fn optional<T>(lib: &Library, name: &[u8]) -> Option<Symbol<'static, T>> 
     Some(std::mem::transmute::<Symbol<T>, Symbol<'static, T>>(sym))
 }
 
+/// Whether ROCm SMI runs on this host and finds a GPU, the condition under
+/// which `gpu_amd_smi` publishes.
+pub fn reports_gpus() -> bool {
+    RocmSmi::new()
+        .ok()
+        .and_then(|smi| smi.num_devices().ok())
+        .is_some_and(|devices| devices > 0)
+}
+
 impl RocmSmi {
     /// Load the library, resolve symbols, and call `rsmi_init(0)`.
     pub fn new() -> anyhow::Result<Self> {

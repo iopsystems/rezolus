@@ -13,10 +13,10 @@ pub(crate) use crate::parquet_tools::select::{
 pub mod anomaly_detection;
 pub mod correlation;
 mod describe_metrics;
-mod export;
 mod install;
 mod link;
 mod server;
+mod window;
 
 use chrono::{DateTime, Utc};
 use metriken_query::{MetricsSource, QueryResult};
@@ -513,7 +513,7 @@ pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> Strin
          End Time: {} (epoch: {:.0}){}",
         file_path,
         version,
-        data.source(),
+        ::dashboard::identity::display_source(data),
         duration_str,
         duration_seconds,
         start_datetime,
@@ -595,7 +595,14 @@ pub fn run(config: Config) {
         Mode::DescribeRecording { file } => run_describe_recording(file, &recording),
         Mode::DescribeMetrics { file } => run_describe_metrics(file, &recording),
         Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query, &recording),
-        Mode::Query { file, query } => run_query(file, query, &recording),
+        Mode::Query {
+            file,
+            query,
+            start,
+            end,
+            step,
+            above,
+        } => run_query(file, query, &recording, start, end, step, above),
         Mode::ExtractFeatures { file } => run_extract_features(file, &recording),
         Mode::Install(opts) => std::process::exit(install::run(&opts)),
     }
@@ -1034,7 +1041,15 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
     }
 }
 
-fn run_query(file: PathBuf, query: String, selector: &RecordingSelector) {
+fn run_query(
+    file: PathBuf,
+    query: String,
+    selector: &RecordingSelector,
+    start: Option<f64>,
+    end: Option<f64>,
+    step: Option<f64>,
+    above: Option<f64>,
+) {
     let reader = match open_source_selected(&file, selector) {
         Ok(r) => r,
         Err(e) => {
@@ -1043,12 +1058,21 @@ fn run_query(file: PathBuf, query: String, selector: &RecordingSelector) {
         }
     };
 
-    let (start_time, end_time) = reader.time_range().unwrap_or((0.0, 0.0));
-    let step = 1.0;
+    let window = match window::resolve(reader.time_range(), reader.interval(), start, end, step) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("Query failed: {e}");
+            std::process::exit(1);
+        }
+    };
 
-    match reader.query_range(&query, start_time, end_time, step) {
+    match window::query(reader.as_ref(), &query, &window) {
         Ok(result) => {
-            println!("{}", format_query_result(&result));
+            println!(
+                "Window: {} to {} (Unix seconds), step {} s\n",
+                window.start, window.end, window.step
+            );
+            println!("{}", format_query_result(&result, above));
         }
         Err(e) => {
             eprintln!("Query failed: {e}");
@@ -1089,12 +1113,12 @@ fn run_extract_features(file: PathBuf, selector: &RecordingSelector) {
     }
 }
 
-fn format_query_result(result: &QueryResult) -> String {
+fn format_query_result(result: &QueryResult, above: Option<f64>) -> String {
     use std::fmt::Write;
     let mut output = String::new();
 
     match result {
-        QueryResult::Vector { result } => {
+        QueryResult::Vector { result, .. } => {
             writeln!(&mut output, "Instant Vector Result:").unwrap();
             writeln!(&mut output, "======================").unwrap();
             if result.is_empty() {
@@ -1103,19 +1127,19 @@ fn format_query_result(result: &QueryResult) -> String {
             for sample in result {
                 let bound = sample
                     .interval
-                    .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                    .map(|(lo, hi)| format!("  [{}, {}]", fixed6(lo), fixed6(hi)))
                     .unwrap_or_default();
                 writeln!(
                     &mut output,
                     "{} = {}{}",
                     format_metric(&sample.metric),
-                    sample.value.1,
+                    num(sample.value.1),
                     bound
                 )
                 .unwrap();
             }
         }
-        QueryResult::Matrix { result } => {
+        QueryResult::Matrix { result, .. } => {
             writeln!(&mut output, "Range Vector Result:").unwrap();
             writeln!(&mut output, "====================").unwrap();
             if result.is_empty() {
@@ -1136,14 +1160,14 @@ fn format_query_result(result: &QueryResult) -> String {
                     let ivl = series.intervals.as_ref();
                     let bound = |i: usize| -> String {
                         ivl.and_then(|v| v.get(i))
-                            .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                            .map(|(lo, hi)| format!("  [{}, {}]", fixed6(*lo), fixed6(*hi)))
                             .unwrap_or_default()
                     };
                     writeln!(
                         &mut output,
                         "  First: {} = {}{}",
                         first.0,
-                        first.1,
+                        num(first.1),
                         bound(0)
                     )
                     .unwrap();
@@ -1151,7 +1175,7 @@ fn format_query_result(result: &QueryResult) -> String {
                         &mut output,
                         "  Last:  {} = {}{}",
                         last.0,
-                        last.1,
+                        num(last.1),
                         bound(series.values.len() - 1)
                     )
                     .unwrap();
@@ -1161,24 +1185,46 @@ fn format_query_result(result: &QueryResult) -> String {
                     }
 
                     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
-                    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-                    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                    let sum: f64 = values.iter().sum();
-                    let mean = sum / values.len() as f64;
-
-                    writeln!(&mut output, "  Min:   {}", min).unwrap();
-                    writeln!(&mut output, "  Max:   {}", max).unwrap();
-                    writeln!(&mut output, "  Mean:  {}", mean).unwrap();
+                    let stats = window::stats(&values, above);
+                    if let Some(t) = above {
+                        writeln!(
+                            &mut output,
+                            "  Active: {} of {} points above {}",
+                            stats.active,
+                            stats.points,
+                            num(t)
+                        )
+                        .unwrap();
+                    }
+                    if let Some(v) = &stats.values {
+                        writeln!(&mut output, "  Min:   {}", num(v.min)).unwrap();
+                        writeln!(&mut output, "  Max:   {}", num(v.max)).unwrap();
+                        writeln!(&mut output, "  Mean:  {}", num(v.mean)).unwrap();
+                        writeln!(&mut output, "  p50:   {}", num(v.p50)).unwrap();
+                        writeln!(&mut output, "  p90:   {}", num(v.p90)).unwrap();
+                        writeln!(&mut output, "  p99:   {}", num(v.p99)).unwrap();
+                    }
+                    // A +Inf quantile is one past the histogram's highest
+                    // finite bucket (metriken-query 0.47); say how many.
+                    let inf = values.iter().filter(|v| **v == f64::INFINITY).count();
+                    if inf > 0 {
+                        writeln!(
+                            &mut output,
+                            "  +Inf:  {inf} of {} points (above the histogram's highest finite bucket)",
+                            values.len()
+                        )
+                        .unwrap();
+                    }
                 }
                 writeln!(&mut output).unwrap();
             }
         }
-        QueryResult::Scalar { result } => {
+        QueryResult::Scalar { result, .. } => {
             writeln!(&mut output, "Scalar Result:").unwrap();
             writeln!(&mut output, "==============").unwrap();
-            writeln!(&mut output, "{} = {}", result.0, result.1).unwrap();
+            writeln!(&mut output, "{} = {}", result.0, num(result.1)).unwrap();
         }
-        QueryResult::HistogramHeatmap { result } => {
+        QueryResult::HistogramHeatmap { result, .. } => {
             writeln!(&mut output, "Histogram Heatmap Result:").unwrap();
             writeln!(&mut output, "=========================").unwrap();
             writeln!(
@@ -1197,8 +1243,39 @@ fn format_query_result(result: &QueryResult) -> String {
             .unwrap();
         }
     }
+    // What the query's result says about itself (a conflict between two
+    // sources of one process, say), one JSON object a line as the MCP
+    // `query` tool returns them.
+    if !result.notices().is_empty() {
+        writeln!(&mut output, "Notices:").unwrap();
+        for notice in result.notices() {
+            let line = serde_json::to_string(notice).unwrap_or_default();
+            writeln!(&mut output, "  {line}").unwrap();
+        }
+    }
 
     output
+}
+
+/// A value as the query JSON writes it: `+Inf`, `-Inf` and `NaN` as
+/// Prometheus spells them (Rust's `Display` gives `inf`), finite values as
+/// `Display` gives them.
+fn num(v: f64) -> String {
+    match v {
+        f64::INFINITY => "+Inf".to_string(),
+        f64::NEG_INFINITY => "-Inf".to_string(),
+        v if v.is_nan() => "NaN".to_string(),
+        v => v.to_string(),
+    }
+}
+
+/// `num`, with a finite value to six decimal places.
+fn fixed6(v: f64) -> String {
+    if v.is_finite() {
+        format!("{v:.6}")
+    } else {
+        num(v)
+    }
 }
 
 fn format_metric(metric: &std::collections::HashMap<String, String>) -> String {
@@ -1236,6 +1313,10 @@ pub enum Mode {
     Query {
         file: PathBuf,
         query: String,
+        start: Option<f64>,
+        end: Option<f64>,
+        step: Option<f64>,
+        above: Option<f64>,
     },
     /// Extract structured features from a recording as JSON
     ExtractFeatures {
@@ -1345,7 +1426,27 @@ impl TryFrom<ArgMatches> for Config {
                     .get_one::<String>("QUERY")
                     .ok_or("Query argument is required")?
                     .clone();
-                Mode::Query { file, query }
+                let instant = |key: &str| {
+                    sub_args
+                        .get_one::<String>(key)
+                        .map(|s| window::instant_of_str(s, &format!("--{key}")))
+                        .transpose()
+                };
+                let start = instant("start")?;
+                let end = instant("end")?;
+                let step = sub_args
+                    .get_one::<String>("step")
+                    .map(|s| window::step_of_str(s))
+                    .transpose()?;
+                let above = sub_args.get_one::<f64>("above").copied();
+                Mode::Query {
+                    file,
+                    query,
+                    start,
+                    end,
+                    step,
+                    above,
+                }
             }
             Some(("extract-features", sub_args)) => {
                 let file = sub_args
@@ -1357,20 +1458,11 @@ impl TryFrom<ArgMatches> for Config {
             Some(("install", sub_args)) => {
                 let server = server::ServerOptions {
                     allow_mutating: sub_args.get_flag("INSTALL_ALLOW_MUTATING"),
-                    export_dir: sub_args.get_one::<PathBuf>("INSTALL_EXPORT_DIR").cloned(),
                     viewer_url: sub_args
                         .get_one::<String>("INSTALL_VIEWER_URL")
                         .map(|u| link::validate_base(u))
                         .transpose()?,
                 };
-                if let Some(dir) = &server.export_dir {
-                    if !dir.is_dir() {
-                        return Err(format!(
-                            "--export-dir {}: not a directory (create it first)",
-                            dir.display()
-                        ));
-                    }
-                }
                 Mode::Install(install::InstallOptions {
                     scope: install::Scope::parse(
                         sub_args
@@ -1392,13 +1484,11 @@ impl TryFrom<ArgMatches> for Config {
 
         let mut server = server::ServerOptions {
             allow_mutating: args.get_flag("ALLOW_MUTATING"),
-            export_dir: args.get_one::<PathBuf>("EXPORT_DIR").cloned(),
             viewer_url: args.get_one::<String>("VIEWER_URL").cloned(),
         };
         if !matches!(mode, Mode::Server) {
             let set = [
                 (server.allow_mutating, "--allow-mutating"),
-                (server.export_dir.is_some(), "--export-dir"),
                 (server.viewer_url.is_some(), "--viewer-url"),
             ];
             if let Some((_, flag)) = set.iter().find(|(on, _)| *on) {
@@ -1409,15 +1499,6 @@ impl TryFrom<ArgMatches> for Config {
         }
         if let Some(url) = &server.viewer_url {
             server.viewer_url = Some(link::validate_base(url)?);
-        }
-        if let Some(dir) = &server.export_dir {
-            if !dir.is_dir() {
-                return Err(format!(
-                    "--export-dir {}: not a directory (create it first; exports are refused \
-                     rather than written somewhere else)",
-                    dir.display()
-                ));
-            }
         }
 
         Ok(Config {
@@ -1448,7 +1529,7 @@ fn recording_arg() -> clap::Arg {
         // here without `wrap_help`, so it prints this verbatim (one endless
         // line otherwise) and `-h` leads with that first line.
         .help(
-            "Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)\n\
+            "Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)\n\
              Repeatable: the pairs are ANDed and must together name exactly one\n\
              recording. Matching none or several is an error, never a guess.\n\
              Without it, the recordings of one run are read together, each series\n\
@@ -1482,8 +1563,7 @@ pub fn command() -> Command {
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
              The stdio server also has tools with no CLI form: add_event marks an instant\n\
              or range in the recording, run_checks evaluates its KPI checks (and writes the\n\
-             verdicts with annotate=true), export_query writes a range query as CSV or\n\
-             parquet under --export-dir, viewer_link builds a link that opens a running\n\
+             verdicts with annotate=true), viewer_link builds a link that opens a running\n\
              viewer at a section and time range (a full URL with --viewer-url), and, only\n\
              with --allow-mutating, remove_events takes events out again.\n\n\
              EXAMPLES:\n    \
@@ -1514,18 +1594,6 @@ pub fn command() -> Command {
                      unless the operator starting the server says otherwise. Server mode only.",
                 )
                 .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            clap::Arg::new("EXPORT_DIR")
-                .long("export-dir")
-                .value_name("DIR")
-                .value_parser(clap::value_parser!(PathBuf))
-                .help(
-                    "Directory the export_query tool may write files into (server mode only)\n\
-                     Without it the tool is listed but refuses every call, naming this flag.\n\
-                     Files land under a bare name the agent chooses (or one derived from the\n\
-                     query), never over an existing file, never outside this directory.",
-                ),
         )
         .arg(
             clap::Arg::new("VIEWER_URL")
@@ -1655,11 +1723,36 @@ pub fn command() -> Command {
                      widening first to the union span when the two came from different\n\
                      acquisition tables. Queries with no rate() and no histogram have no band\n\
                      to show.\n\n\
+                     The query is evaluated at the multiples of --step (counted from the\n\
+                     Unix epoch) from --start to --end: by default every second of the\n\
+                     recording (a coarser whole-second step on a recording of more than a\n\
+                     million seconds). A query combining samplers of different cadence is\n\
+                     evaluated at the slower one's rows instead, and histogram_quantile()\n\
+                     and the other histogram functions without a stride argument give one\n\
+                     point per row that holds observations, wherever the step falls (a\n\
+                     gauge histogram gives one per step; histogram_quantiles([q], h, STEP)\n\
+                     gives one per step). irate() is the rate over one step, so a\n\
+                     larger step also averages over a longer interval; a rate() at --start\n\
+                     reads data from before it. No point after the recording's last row is\n\
+                     printed. A rate() or irate() at --end over a sampler whose rows are\n\
+                     further apart than 120 s (or two of the recording's finest row\n\
+                     interval, when that is longer; or a million steps, when that is\n\
+                     shorter) is computed without its next row.\n\n\
+                     Each series prints its point count, its first and last points, and\n\
+                     lines Min:, Max:, Mean:, p50:, p90: and p99: over all its points that\n\
+                     are not NaN (percentiles by nearest rank). With --above VALUE those\n\
+                     statistics are over the points strictly above VALUE, and a line\n\
+                     \"Active: K of N points above VALUE\" comes first. A series with no\n\
+                     such point (none above VALUE, or every point NaN) prints no statistics\n\
+                     lines.\n\n\
                      EXAMPLES:\n    \
                      # Total cycles per second across all CPUs\n    \
                      rezolus mcp query out.dendro 'sum(irate(cpu_cycles[1m]))'\n\n    \
                      # A ratio: both operands' bands are combined\n    \
-                     rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'"
+                     rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'\n\n    \
+                     # Block IO throughput over the seconds above 500 MB/s, in a window\n    \
+                     rezolus mcp query out.dendro 'sum(irate(blockio_bytes[1m]))' \\\n        \
+                     --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --above 5e8"
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -1673,6 +1766,41 @@ pub fn command() -> Command {
                         .help("PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')")
                         .required(true)
                         .index(2),
+                )
+                .arg(
+                    clap::Arg::new("start")
+                        .long("start")
+                        .value_name("TIME")
+                        .help(
+                            "Start of the window: Unix seconds or RFC 3339 (default: the recording's start)",
+                        ),
+                )
+                .arg(
+                    clap::Arg::new("end")
+                        .long("end")
+                        .value_name("TIME")
+                        .help(
+                            "End of the window, included: Unix seconds or RFC 3339 (default: the recording's end)",
+                        ),
+                )
+                .arg(
+                    clap::Arg::new("step")
+                        .long("step")
+                        .value_name("DURATION")
+                        .help("Time between evaluations: seconds or humantime such as 10s (default: 1s, coarser past a million seconds)"),
+                )
+                .arg(
+                    clap::Arg::new("above")
+                        .long("above")
+                        .value_name("VALUE")
+                        .value_parser(|s: &str| {
+                            s.parse::<f64>()
+                                .ok()
+                                .filter(|v| v.is_finite())
+                                .ok_or_else(|| format!("{s:?} is not a finite number"))
+                        })
+                        .allow_negative_numbers(true)
+                        .help("Compute each series' statistics over its points strictly above VALUE"),
                 )
                 .arg(recording_arg()),
         )
@@ -1721,11 +1849,11 @@ pub fn command() -> Command {
                      Claude Code resolves a server name local > project > user. When another scope's\n\
                      rezolus entry would win over the one written, install says so and names the\n\
                      command that removes it.\n\n\
-                     The server flags given here (--allow-mutating, --export-dir, --viewer-url) are\n\
+                     The server flags given here (--allow-mutating, --viewer-url) are\n\
                      baked into the registered command, so the server the client starts has them.\n\n\
                      EXAMPLES:\n    \
                      rezolus mcp install\n    \
-                     rezolus mcp install --scope project --export-dir ./exports\n    \
+                     rezolus mcp install --scope project\n    \
                      rezolus mcp install --dry-run",
                 )
                 .arg(
@@ -1741,13 +1869,6 @@ pub fn command() -> Command {
                         .long("allow-mutating")
                         .help("Register the server with --allow-mutating (enables remove_events)")
                         .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("INSTALL_EXPORT_DIR")
-                        .long("export-dir")
-                        .value_name("DIR")
-                        .value_parser(clap::value_parser!(PathBuf))
-                        .help("Register the server with --export-dir DIR (enables export_query); must exist"),
                 )
                 .arg(
                     clap::Arg::new("INSTALL_VIEWER_URL")
@@ -1787,17 +1908,73 @@ pub(crate) mod tests {
                 MatrixSample::new(metric.clone(), vec![(1.0, 300.0), (2.0, 310.0)])
                     .with_intervals(Some(vec![(291.26, 306.12), (300.0, 320.0)])),
             ],
+            notices: Vec::new(),
         };
-        let s = format_query_result(&with);
+        let s = format_query_result(&with, None);
         assert!(s.contains("[291.26"), "expected bound in output: {s}");
         assert!(s.contains("acquisition-window uncertainty"), "{s}");
 
         // No intervals → no bound text.
         let without = QueryResult::Matrix {
             result: vec![MatrixSample::new(metric, vec![(1.0, 300.0)])],
+            notices: Vec::new(),
         };
-        let s2 = format_query_result(&without);
+        let s2 = format_query_result(&without, None);
         assert!(!s2.contains('['), "no bounds expected: {s2}");
+    }
+
+    /// A +Inf quantile prints as `+Inf`, as the query JSON writes it, not
+    /// as Rust's `inf`, with its open band and a count of such points.
+    #[test]
+    fn format_query_result_prints_infinity_as_prometheus_does() {
+        use metriken_query::{MatrixSample, QueryResult};
+        let result = QueryResult::Matrix {
+            result: vec![MatrixSample::new(
+                HashMap::new(),
+                vec![(1.0, 2.5e9), (2.0, f64::INFINITY)],
+            )
+            .with_intervals(Some(vec![(2.0e9, 2.5e9), (1.0e10, f64::INFINITY)]))],
+            notices: Vec::new(),
+        };
+        let s = format_query_result(&result, None);
+        assert!(
+            s.contains("Last:  2 = +Inf  [10000000000.000000, +Inf]"),
+            "{s}"
+        );
+        assert!(s.contains("Max:   +Inf"), "{s}");
+        assert!(s.contains("+Inf:  1 of 2 points"), "{s}");
+        assert!(!s.contains(" inf") && !s.contains("[inf"), "{s}");
+
+        let scalar = QueryResult::Scalar {
+            result: (1.0, f64::NAN),
+            notices: Vec::new(),
+        };
+        assert!(format_query_result(&scalar, None).contains("1 = NaN"));
+    }
+
+    /// A result's notices follow the table, one JSON object a line; a
+    /// result without any prints no notices heading.
+    #[test]
+    fn format_query_result_shows_notices() {
+        use metriken_query::{MatrixSample, Notice, QueryResult};
+        let notice = Notice::conflict(
+            [("__name__".to_string(), "c".to_string())].into(),
+            vec!["u0".to_string(), "u1".to_string()],
+            1.0,
+            2,
+        );
+        let with = QueryResult::Matrix {
+            result: vec![MatrixSample::new(HashMap::new(), vec![(1.0, 300.0)])],
+            notices: vec![notice.clone()],
+        };
+        let s = format_query_result(&with, None);
+        let line = serde_json::to_string(&notice).unwrap();
+        assert!(s.contains(&format!("Notices:\n  {line}\n")), "{s}");
+        let without = QueryResult::Matrix {
+            result: vec![MatrixSample::new(HashMap::new(), vec![(1.0, 300.0)])],
+            notices: Vec::new(),
+        };
+        assert!(!format_query_result(&without, None).contains("Notices"));
     }
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
@@ -1832,8 +2009,8 @@ pub(crate) mod tests {
             .enumerate()
             .map(|(i, labels)| ::rez::fixtures::Source {
                 labels: labels.clone(),
-                // Mirrors what `record` puts in each recording's metadata:
-                // the same `source` as in the labels. Tests identify which
+                // A `source` metadata key equal to the label, as a recorder
+                // before metriken-recorder 0.6 wrote it. Tests identify which
                 // arm came back by reading it, so a helper that left it
                 // empty would make that check vacuous.
                 metadata: labels
@@ -2085,7 +2262,7 @@ pub(crate) mod tests {
         // What the CHANGELOG points a single-host query at.
         let (start, end) = reader.time_range().unwrap();
         let per_host = |q: &str| match reader.query_range(q, start, end, 1.0).unwrap() {
-            metriken_query::QueryResult::Matrix { result } => result.len(),
+            metriken_query::QueryResult::Matrix { result, .. } => result.len(),
             other => panic!("{q}: {other:?}"),
         };
         assert_eq!(
@@ -2734,6 +2911,23 @@ pub(crate) mod tests {
         assert!(command()
             .try_get_matches_from(["mcp", "--recording", "source=redis"])
             .is_err());
+    }
+
+    /// `--export-dir` went with `export_query` (6.x writes `.dendro` only);
+    /// the server and `install` both refuse it as an unknown argument.
+    #[test]
+    fn the_export_dir_flag_is_refused() {
+        for argv in [
+            vec!["mcp", "--export-dir", "/tmp"],
+            vec!["mcp", "install", "--export-dir", "/tmp"],
+        ] {
+            let err = command().try_get_matches_from(&argv).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{argv:?}"
+            );
+        }
     }
 
     // ── recording attribution (issue #1195) ─────────────────────────────────

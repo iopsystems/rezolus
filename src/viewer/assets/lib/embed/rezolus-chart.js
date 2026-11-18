@@ -2,10 +2,11 @@
 //
 // Mounts the viewer's real `Chart` (same configureChartByType path)
 // instead of reimplementing config, so every style renders identically.
-// Needs echarts + mithril (window.m) as host globals and the rezolus
-// CSS tokens on document.documentElement (link /lib/style.css), which
-// COLORS reads. `plot.data` is the viewer spec shape, e.g.
-// [timestamps_s, values].
+// Needs echarts as a host global and the rezolus CSS tokens on
+// document.documentElement (link /lib/style.css), which COLORS reads.
+// `plot.data` is the viewer spec shape, e.g. [timestamps_s, values].
+// Anything else a chart can use (a data layer, events) comes from
+// charts/host.js; without it the chart draws the data in `plot`.
 import { LitElement, html, css } from '../lit/lit.js';
 import { Chart, ChartsState } from '../charts/chart.js';
 
@@ -50,7 +51,7 @@ class RezolusChart extends LitElement {
         this.plot = null;
         this.interval = 1;
         this._mountHost = null;
-        this._mounted = false;
+        this._chart = null;
         this._themeObserver = null;
     }
 
@@ -80,17 +81,14 @@ class RezolusChart extends LitElement {
     }
 
     _unmount() {
-        // null mount → Chart.onremove (dispose + cleanup + de-register).
-        if (this._mounted && this._mountHost && window.m) {
-            window.m.mount(this._mountHost, null);
-        }
-        this._mounted = false;
+        // destroy() disposes the echart, cleans up and de-registers.
+        this._chart?.destroy();
+        this._chart = null;
+        if (this._mountHost) this._mountHost.textContent = '';
     }
 
     _remount() {
         if (!this._mountHost) return;
-        const m = window.m;
-        if (!m) { this._mountHost.textContent = 'mithril not loaded'; return; }
         if (typeof window.echarts === 'undefined') {
             this._mountHost.textContent = 'echarts not loaded';
             return;
@@ -108,11 +106,11 @@ class RezolusChart extends LitElement {
 
         // Remount fresh: Chart reads spec on construct.
         this._unmount();
-        const interval = this.interval;
-        window.m.mount(this._mountHost, {
-            view: () => m(Chart, { spec, chartsState: embedChartsState, interval }),
-        });
-        this._mounted = true;
+        const el = document.createElement('div');
+        el.className = 'chart';
+        this._mountHost.appendChild(el);
+        this._chart = new Chart({ spec, chartsState: embedChartsState, interval: this.interval });
+        this._chart.mount(el);
     }
 
     render() {

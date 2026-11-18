@@ -372,7 +372,7 @@
       "subgroups": [
         {
           "name": "Power Draw",
-          "description": "Instantaneous power consumption, total and per-GPU.",
+          "description": "Power consumption, total and per-GPU. An AMD APU reports its whole socket, including the CPU cores.",
           "plots": [
             {
               "data": [],
@@ -456,7 +456,7 @@
       "subgroups": [
         {
           "name": "Clock Frequencies",
-          "description": "Per-device clock speeds for graphics, memory, compute, and video engines.",
+          "description": "Per-device clock speeds for graphics, memory, compute, video, SoC and data fabric.",
           "plots": [
             {
               "data": [],
@@ -525,6 +525,40 @@
                 }
               },
               "promql_query": "sum by (id, vendor) (gpu_clock{clock=\"video\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "SoC",
+                "id": "clock-soc",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (gpu_clock{clock=\"soc\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Data Fabric",
+                "id": "clock-fabric",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (gpu_clock{clock=\"fabric\"})"
             }
           ]
         }

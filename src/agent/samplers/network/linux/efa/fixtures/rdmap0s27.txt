@@ -1,0 +1,43 @@
+# /sys/class/infiniband/rdmap0s27 on an im4gn.16xlarge, kernel
+# 6.18.51-120.163.amzn2023.aarch64, efa driver 3.3.1a: one device whose
+# driver is efa, with one port (state 4: ACTIVE, rate 100 Gb/sec, link_layer
+# Unknown) and no ports/1/counters directory. Captured idle on 2026-11-10.
+# Each line is a file under the device directory and its contents.
+hw_counters/alloc_mr_err 0
+hw_counters/alloc_pd_err 0
+hw_counters/alloc_ucontext_err 0
+hw_counters/cmds_err 0
+hw_counters/completed_cmds 26318
+hw_counters/create_ah_err 0
+hw_counters/create_cq_err 0
+hw_counters/create_qp_err 0
+hw_counters/get_dma_mr_err 0
+hw_counters/keep_alive_rcvd 1746
+hw_counters/lifespan 10
+hw_counters/mmap_err 0
+hw_counters/no_completion_cmds 0
+hw_counters/reg_mr_err 0
+hw_counters/submitted_cmds 26318
+ports/1/hw_counters/impaired_remote_conn_events 0
+ports/1/hw_counters/lifespan 10
+ports/1/hw_counters/rdma_read_bytes 0
+ports/1/hw_counters/rdma_read_resp_bytes 7408504012800
+ports/1/hw_counters/rdma_read_wr_err 0
+ports/1/hw_counters/rdma_read_wrs 0
+ports/1/hw_counters/rdma_write_bytes 0
+ports/1/hw_counters/rdma_write_recv_bytes 19274743980032
+ports/1/hw_counters/rdma_write_wr_err 0
+ports/1/hw_counters/rdma_write_wrs 0
+ports/1/hw_counters/recv_bytes 0
+ports/1/hw_counters/recv_wrs 0
+ports/1/hw_counters/retrans_bytes 1017167872
+ports/1/hw_counters/retrans_pkts 124166
+ports/1/hw_counters/retrans_timeout_events 1515
+ports/1/hw_counters/rx_bytes 19274743980032
+ports/1/hw_counters/rx_drops 204
+ports/1/hw_counters/rx_pkts 2469410120
+ports/1/hw_counters/send_bytes 0
+ports/1/hw_counters/send_wrs 0
+ports/1/hw_counters/tx_bytes 7408504012800
+ports/1/hw_counters/tx_pkts 904358400
+ports/1/hw_counters/unresponsive_remote_events 0

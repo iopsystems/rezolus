@@ -10,7 +10,7 @@
 
 use crate::agent::timing::{AcquisitionGroup, AcquisitionGuard};
 
-use metriken::{MetricEntry, Window};
+use metriken::{MetricEntry, Value, Window};
 use metriken_exposition::group_builder::{
     Acquisition, GroupId, Membership, ReadGuard, Route, Router, GROUP_METADATA_KEY,
 };
@@ -74,6 +74,17 @@ pub(super) fn group_registry() -> &'static GroupRegistry {
 /// A registered group no metric routes to is absent from the snapshot, not
 /// empty.
 ///
+/// A histogram in a declared group that has never been stamped is left out,
+/// so a histogram no sampler on this host reads, such as one from a Linux
+/// `stats.rs` compiled on macOS, is absent rather than a member with no
+/// value. A BPF histogram's group is stamped by the refresh that reads it,
+/// so the histogram appears from that refresh on.
+///
+/// A declared group must hold only histograms or no histograms (a test
+/// checks the registry). A mixed group would be published without its
+/// histograms until its first stamp, and dropped from the build in which
+/// that stamp lands between the builder's identity pass and its walk.
+///
 /// # Membership
 ///
 /// - reader-stamped group ([`AcquisitionGroup::is_reader_stamped`], the
@@ -119,7 +130,7 @@ impl RezolusRouter {
         }
     }
 
-    fn sampler(&self, metric: &MetricEntry) -> &'static str {
+    pub(super) fn sampler(&self, metric: &MetricEntry) -> &'static str {
         let module = metric.module();
         let mut cache = self.attribution.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sampler) = cache.get(module) {
@@ -164,6 +175,14 @@ impl Router for RezolusRouter {
                 .lock()
                 .unwrap()
                 .contains(&(ag.sampler, ag.name))
+        {
+            return None;
+        }
+        if matches!(
+            metric.value(),
+            Some(Value::Histogram(_) | Value::GaugeHistogram(_))
+        ) && !ag.is_reader_stamped()
+            && ag.window().is_none()
         {
             return None;
         }

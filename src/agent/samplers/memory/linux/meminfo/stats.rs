@@ -3,23 +3,27 @@ use metriken::*;
 use crate::agent::timing::AcquisitionGroup;
 use linkme::distributed_slice;
 
-// Registered here (not in mod.rs) because this file is also `include!`d
-// directly on non-Linux platforms (see `memory/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
-// identity stable across platforms, while `mod.rs`'s sampler code is
-// Linux-only. A metric declaring `acq_group = "memory_meminfo_read"` must
-// find its group registered on every platform that compiles this file, not
-// just the one that actually drives it — see
-// `crate::agent::samplers::bpf_sampler_name`'s doc comment (the mechanism
-// applies to any sampler whose `stats.rs` is compiled cross-platform for
-// metric-identity continuity, not just BPF ones).
-//
-/// Brackets the single `/proc/meminfo` read + parse (single writer: this
-/// sampler's own `refresh()`).
-pub static MEMINFO_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("memory_meminfo"),
-    "memory_meminfo_read",
-);
+// Registered here (not in mod.rs) because this file is compiled three ways:
+// as the Linux sampler's `stats` module, inside the macOS sampler
+// (`memory/macos/meminfo/mod.rs`), and on every other platform under
+// `memory/mod.rs`'s fallback `mod stats`, which keeps metric identity stable
+// across platforms. A metric declaring `acq_group = "memory_meminfo_read"`
+// must find its group registered on every platform that compiles this file.
+
+/// The sampler this group belongs to. Where a `memory_meminfo` sampler exists
+/// (Linux, macOS) the metrics below attribute to it, so the group must name
+/// it; elsewhere the metrics attribute to `unattributed`, and so does the
+/// group (see `crate::agent::samplers::bpf_sampler_name`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "memory_meminfo";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("memory_meminfo");
+
+/// Brackets the sampler's single read (`/proc/meminfo` on Linux,
+/// `host_statistics64` and two sysctls on macOS); its `refresh()` is the
+/// only writer.
+pub static MEMINFO_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "memory_meminfo_read");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static MEMINFO_ACQ_REG: &'static AcquisitionGroup = &MEMINFO_ACQ;

@@ -28,7 +28,14 @@ the file if you were not given one; `rezolus record -o out.dendro` writes one.
    Read it before forming hypotheses; it needs at least 10 s of data.
 4. **`query`**, **`detect_anomalies`**, **`analyze_correlation`** to test
    specific hypotheses. `detect_anomalies` and a check need ONE series:
-   aggregate with `sum()` / `avg()` or add label matchers.
+   aggregate with `sum()` / `avg()` or add label matchers. A `query`
+   returns one point per second of the recording by default: pass `start`
+   and `end` (from `describe_recording` or an event's time) to read a
+   window, and `summarize: true` to get min, max, mean, p50, p90 and p99
+   per series instead of the points. `above` restricts that summary to the
+   points over a threshold, which leaves out startup, teardown and idle
+   seconds. `irate()` is the rate over one `step`, so a coarser step also
+   smooths the series and lowers its peaks.
 5. Write back what you found (below), and hand the person a link.
 
 Rules that hold on every recording:
@@ -43,7 +50,7 @@ Rules that hold on every recording:
   precision.
 - Correlation does not establish causation. Report it as co-movement.
 - On a multi-recording archive of one run, the tools read every recording
-  together unless a `recording` selector (e.g. `{"source": "redis"}`) names
+  together unless a `recording` selector (e.g. `{"alias": "redis"}`) names
   one: each series carries its recording's labels, so `sum by (host)`
   answers per host and `{host="web-01"}` selects one. `extract_features`
   needs a selector, and so does every tool on a comparison (recordings
@@ -66,13 +73,6 @@ Rules that hold on every recording:
 - **`run_checks`** evaluates the recording's KPI checks (or a
   ServiceExtension object you pass as `queries`) and returns each verdict
   with its violation windows; `annotate: true` writes them as events.
-- **`export_query`** writes a range query as CSV or parquet (long form:
-  series, timestamp, value, lo, hi) for analysis outside PromQL. It works
-  only when the server was started with `--export-dir`. `filename` is a
-  bare name (no directories) and an existing file is never overwritten;
-  `step` defaults to 1 s; results over a million rows are refused, so raise
-  `step` or aggregate; a heatmap is refused, so export
-  `histogram_quantile(...)` of it.
 - **`viewer_link`** builds a link into a running `rezolus view`: a
   `section` (`cpu`, `memory`, ..., or `service/<name>`), optional
   `chart_id`, `from`/`to`, and the rest of the view state. With

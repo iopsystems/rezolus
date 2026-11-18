@@ -196,6 +196,9 @@ impl MetricsSource for RezReader {
     fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
         self.0.columns(query)
     }
+    fn metric_unit(&self, name: &str) -> Option<String> {
+        self.0.metric_unit(name)
+    }
     fn counter_names(&self) -> Vec<String> {
         self.0.counter_names()
     }
@@ -684,12 +687,12 @@ mod tests {
 
     /// End-to-end check of the segmented conflict policy's escape hatch through
     /// the *front door*. `RezReader` routes every query through `columns()`
-    /// first, and `columns()` requires every filter key to be present on the
-    /// label set — so a `__run__`-qualified selector that `column_map` does not
-    /// tag is rejected as "references no metric present in this archive" long
-    /// before `query_range` sees it. A dashboard pinning `__run__="0"` for
-    /// stability across an A/B pair must keep working on the side that never
-    /// drifted.
+    /// first, and `columns()` decides a selector against the label sets it
+    /// knows, an absent key as `""` — so a `__run__`-qualified selector that
+    /// `column_map` does not tag is rejected as "references no metric present
+    /// in this archive" long before `query_range` sees it. A dashboard
+    /// pinning `__run__="0"` for stability across an A/B pair must keep
+    /// working on the side that never drifted.
     ///
     /// Segmented tables only: `__run__` is a segment-splice concept, so a
     /// single-segment table (sealed only at finalize, or a slow sampler that
@@ -1085,7 +1088,7 @@ mod tests {
             let reader = legacy::open_with_pool(out, pool).unwrap();
             let (start, end) = reader.time_range().unwrap();
 
-            let QueryResult::Matrix { result } = reader
+            let QueryResult::Matrix { result, .. } = reader
                 .query_range(
                     &format!("sum by (arm) (irate({counter}[2s]))"),
                     start,
@@ -1112,7 +1115,7 @@ mod tests {
 
             // A single-recording archive of the same data gives that series.
             let single = legacy::open_with_pool(single, BufferPool::new(64 * 1024 * 1024)).unwrap();
-            let QueryResult::Matrix { result } = single
+            let QueryResult::Matrix { result, .. } = single
                 .query_range(&format!("sum(irate({counter}[2s]))"), start, end, 1.0)
                 .unwrap()
             else {
@@ -1592,7 +1595,7 @@ mod tests {
             let out = reader
                 .query_range("rate(cpu_cycles[3s])", 1.0, 7.0, 1.0)
                 .expect("the untouched table must still answer");
-            let QueryResult::Matrix { result } = out else {
+            let QueryResult::Matrix { result, .. } = out else {
                 panic!("a range query over a counter is a matrix");
             };
             assert!(
@@ -2159,6 +2162,8 @@ mod tests {
                 gauges: Vec::new(),
                 histograms: Vec::new(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -2182,6 +2187,8 @@ mod tests {
                     .collect(),
                 histograms: Vec::new(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -2206,6 +2213,8 @@ mod tests {
                     })
                     .collect(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -2232,6 +2241,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2359,6 +2370,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2369,6 +2382,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2525,6 +2540,8 @@ mod tests {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let freq = GroupSnapshot {
                     name: "cpu_usage/freq".to_string(),
@@ -2535,6 +2552,8 @@ mod tests {
                     gauges: vec![Some(2_000 + i as i64)],
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let sched = GroupSnapshot {
                     name: "cpu_usage/sched".to_string(),
@@ -2545,6 +2564,8 @@ mod tests {
                     gauges: Vec::new(),
                     histograms: vec![Some(h)],
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let s = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2647,6 +2668,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2657,6 +2680,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2771,6 +2796,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2781,6 +2808,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2890,6 +2919,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     },
                     GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2900,6 +2931,8 @@ mod tests {
                         gauges: Vec::new(),
                         histograms: Vec::new(),
                         gauge_histograms: Vec::new(),
+                        float_counters: Vec::new(),
+                        float_gauges: Vec::new(),
                     },
                 ];
                 let s = Snapshot::V3(SnapshotV3 {
@@ -2941,43 +2974,31 @@ mod tests {
         }
     }
 
-    /// Two samplers publishing the same metric name must not be reported as a
-    /// corrupt archive.
+    /// Two samplers publishing the same metric name are read together, each
+    /// sampler's series under its own `sampler` label.
     ///
     /// Shipped example: `gpu_amd_smi` and `gpu_nvidia` both publish
     /// `gpu_utilization`, `gpu_temperature` and six more vendor-neutral names,
-    /// because only one of them ever populates on a given host. The dashboard
-    /// queries `avg(gpu_utilization)` in 16 places.
-    ///
-    /// Unioning across samplers made those queries reach
-    /// `UnionMetricsSource`'s disjointness check, whose message said the names
-    /// were in two group tables "of the same sampler" and that this "should
-    /// never happen". Both halves were false, and it blamed the operator's
-    /// archive for a deliberate design property. The query is still ambiguous
-    /// and still refused — it just has to say so truthfully.
+    /// because only one of them ever populates on a given host. The
+    /// dashboard's GPU section queries `avg(gpu_utilization)`.
     #[test]
-    fn two_samplers_sharing_a_metric_name_is_not_reported_as_a_corrupt_archive() {
+    fn two_samplers_sharing_a_metric_name_are_read_together() {
         let (_d, path) = two_sampler_rez_sharing_a_metric_name();
         let pool = BufferPool::new(64 * 1024 * 1024);
         let reader = RezReader::open_with_pool(&path, pool).unwrap();
 
-        let err = reader
-            .query_range("shared_metric", 0.0, 10.0, 1.0)
-            .unwrap_err();
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("more than one sampler"),
-            "the error must name the real cause — two samplers, one name: {msg}"
-        );
-        assert!(
-            !msg.contains("should never happen"),
-            "this DOES happen, by design, and saying otherwise sends the \
-             operator hunting a corrupt archive: {msg}"
-        );
-        assert!(
-            msg.contains("sampler_a") && msg.contains("sampler_b"),
-            "the error must name which samplers collide: {msg}"
-        );
+        let QueryResult::Matrix { result, .. } = reader
+            .query_range("rate(shared_metric[3s])", 0.0, 10.0, 1.0)
+            .unwrap()
+        else {
+            panic!("a range query answers a matrix");
+        };
+        let mut samplers: Vec<(&str, f64)> = result
+            .iter()
+            .map(|s| (s.metric["sampler"].as_str(), s.values[0].1))
+            .collect();
+        samplers.sort_by(|a, b| a.0.cmp(b.0));
+        assert_eq!(samplers, [("sampler_a", 10.0), ("sampler_b", 20.0)]);
     }
 
     /// A `.rez` whose two samplers run at genuinely different cadences, with
@@ -3027,7 +3048,7 @@ mod tests {
         let reader = RezReader::open_with_pool(&path, Arc::clone(&pool)).unwrap();
 
         let times = |r: QueryResult| -> Vec<f64> {
-            let QueryResult::Matrix { result } = r else {
+            let QueryResult::Matrix { result, .. } = r else {
                 panic!("expected a matrix");
             };
             result
@@ -3096,7 +3117,7 @@ mod tests {
         let result = reader
             .query_range("rate(cpu_cycles[2s]) + rate(reads[4s])", 0.0, 14.0, 1.0)
             .expect("a cross-cadence query must answer");
-        let QueryResult::Matrix { result } = result else {
+        let QueryResult::Matrix { result, .. } = result else {
             panic!("expected a matrix, got {result:?}");
         };
         let times: Vec<f64> = result
@@ -3179,7 +3200,7 @@ mod tests {
         let result = reader
             .query_range("rate(cpu_cycles[2s])", 0.0, 14.0, 1.0)
             .expect("a single-sampler query must answer");
-        let QueryResult::Matrix { result } = result else {
+        let QueryResult::Matrix { result, .. } = result else {
             panic!("expected a matrix, got {result:?}");
         };
         let times: Vec<f64> = result
@@ -3270,7 +3291,7 @@ mod tests {
         assert!(opened(&reader).is_empty());
 
         let (start, end) = composed.time_range().unwrap();
-        let QueryResult::Matrix { result } = composed
+        let QueryResult::Matrix { result, .. } = composed
             .query_range("rate(cpu_cycles[1s])", start, end + 1.0, 1.0)
             .unwrap()
         else {
@@ -3342,6 +3363,8 @@ mod tests {
                 gauges: Vec::new(),
                 histograms: Vec::new(),
                 gauge_histograms: Vec::new(),
+                float_counters: Vec::new(),
+                float_gauges: Vec::new(),
             }
         }
 
@@ -3394,6 +3417,8 @@ mod tests {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 };
                 let snap = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts(tick)),
@@ -3445,7 +3470,7 @@ mod tests {
             let r = reader
                 .query_range("rate(fake_ops[2s])", start, end, 1.0)
                 .expect("the query must resolve");
-            let QueryResult::Matrix { result } = r else {
+            let QueryResult::Matrix { result, .. } = r else {
                 panic!("a range query over a counter is a matrix");
             };
             let mut out: Vec<_> = result

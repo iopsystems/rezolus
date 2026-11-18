@@ -163,6 +163,9 @@ struct Fixture {
     /// the metadata read after the stream opens asks for those; the probe of
     /// an endpoint that cannot stream yet asks for `/status`.
     on_hang: Option<std::path::PathBuf>,
+    /// Stamp every streamed row before the Unix epoch, which the recorder
+    /// cannot read.
+    before_epoch: bool,
 }
 
 /// The fake agent's accept loop; see [`spawn_fake_agent`].
@@ -341,6 +344,8 @@ fn serve_stream(
         gauges: Vec::new(),
         histograms: Vec::new(),
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     for seq in 0u64.. {
         if frames.is_some_and(|n| seq >= n) {
@@ -358,6 +363,8 @@ fn serve_stream(
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(
             &group,
@@ -372,7 +379,7 @@ fn serve_stream(
                 index_state: dendro::replicate::NO_INDEX_STATE,
                 rows: vec![dendro::archive::WalRow {
                     stream: "fake/ops".to_string(),
-                    ts: ts as i64,
+                    ts: if fixture.before_epoch { -1 } else { ts as i64 },
                     wall_offset: 0,
                     row,
                 }],
@@ -496,8 +503,8 @@ fn a_prometheus_endpoint_records_into_a_dendro() {
         "the scrape must land in its own acquisition group table: {stdout}"
     );
     assert!(
-        stdout.contains("source=svc"),
-        "the recording keeps its source label: {stdout}"
+        stdout.contains("alias=svc"),
+        "the recording keeps its alias label: {stdout}"
     );
 
     let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
@@ -701,7 +708,7 @@ fn several_prometheus_endpoints_each_become_their_own_recording() {
         .expect("failed to run rezolus mcp describe-recording");
     let listing = String::from_utf8_lossy(&described.stdout);
     assert!(
-        listing.contains("source=alpha") && listing.contains("source=beta"),
+        listing.contains("alias=alpha") && listing.contains("alias=beta"),
         "both targets must be recordings in the archive: {listing}"
     );
 
@@ -784,7 +791,7 @@ fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive(
     for (source, table) in [("agent", "fake/ops"), ("svc", "prometheus/scrape")] {
         let recording = sources
             .iter()
-            .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+            .find(|s| s.labels.get("alias").map(String::as_str) == Some(source))
             .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
         assert!(recording.complete, "{source} is finalized");
         let tables = catalog.tables(recording.id).unwrap();
@@ -844,7 +851,7 @@ fn a_dendro_records_agents_serving_legacy_and_metriken_stream_names() {
     for source in ["legacy", "current"] {
         let recording = sources
             .iter()
-            .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+            .find(|s| s.labels.get("alias").map(String::as_str) == Some(source))
             .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
         assert!(recording.complete, "{source} is finalized");
         let sealed = catalog
@@ -861,9 +868,9 @@ fn a_dendro_records_agents_serving_legacy_and_metriken_stream_names() {
 }
 
 /// An agent that restarts mid-recording is recorded in the archive's
-/// metadata: `producer_epochs` gains the new process from its first row, and
-/// `producer_epoch` and `version` name the new process, which reports a new
-/// version.
+/// metadata: the recorder layer gains an entry for the new process from its
+/// first row, carrying the new version, and the recording's `version` is the
+/// new process's.
 #[test]
 fn an_agent_restart_is_written_into_the_recording_metadata() {
     use metriken_storage::Catalog;
@@ -900,31 +907,40 @@ fn an_agent_restart_is_written_into_the_recording_metadata() {
     assert_eq!(sources.len(), 1, "{sources:?}");
     let metadata = &sources[0].metadata;
     assert_eq!(
-        metadata.get("producer_epoch").map(String::as_str),
-        Some(AFTER_RESTART.0),
-        "{metadata:?}"
-    );
-    assert_eq!(
         metadata.get("version").map(String::as_str),
         Some(AFTER_RESTART.1),
         "{metadata:?}"
     );
-    let epochs: serde_json::Value = serde_json::from_str(
-        metadata
-            .get("producer_epochs")
-            .unwrap_or_else(|| panic!("no producer_epochs: {metadata:?}")),
-    )
-    .unwrap();
-    let epochs = epochs.as_array().unwrap();
+    let epochs = recorded_epochs(metadata);
     assert_eq!(epochs.len(), 2, "{epochs:?}");
-    assert_eq!(epochs[0]["epoch"], BEFORE_RESTART.0);
-    assert_eq!(epochs[0]["version"], BEFORE_RESTART.1);
-    assert_eq!(epochs[1]["epoch"], AFTER_RESTART.0);
-    assert_eq!(epochs[1]["version"], AFTER_RESTART.1);
-    assert!(
-        epochs[1]["from_ts"].as_u64() > epochs[0]["from_ts"].as_u64(),
-        "the new epoch starts after the first: {epochs:?}"
+    assert_eq!(epochs[0].0, BEFORE_RESTART.0);
+    assert_eq!(
+        epochs[0].1, None,
+        "the opening epoch covers from the first row"
     );
+    assert_eq!(epochs[1].0, AFTER_RESTART.0);
+    assert!(epochs[1].1.is_some(), "the restart starts at its first row");
+    assert_eq!(epochs[1].2.as_deref(), Some(AFTER_RESTART.1));
+}
+
+/// The producer epochs a recording's recorder layer records, in the order
+/// they were appended: each epoch's id, its `from_ts` (none for the one the
+/// recording opened with), and the `version` its entry carries.
+fn recorded_epochs(
+    metadata: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, Option<u64>, Option<String>)> {
+    let layers = metriken_storage::layers::Layers::read(metadata)
+        .expect("the layers parse")
+        .expect("the recording has identity layers");
+    layers
+        .recorder
+        .entries
+        .iter()
+        .filter_map(|e| {
+            let epoch = e.epoch.clone()?;
+            Some((epoch, e.from_ts, e.metadata.get("version").cloned()))
+        })
+        .collect()
 }
 
 /// An agent that cannot serve `/metrics/stream` (older than 5.21.0) is
@@ -1309,7 +1325,7 @@ fn view_refuses_a_recording_selector_it_cannot_resolve() {
     let (code, text) = view(&["--baseline", "source=nope"]);
     assert_eq!(code, Some(1), "a dead selector must exit non-zero: {text}");
     assert!(
-        text.contains("source=redis") && text.contains("source=valkey"),
+        text.contains("alias=redis") && text.contains("alias=valkey"),
         "the refusal must list the archive's recordings: {text}"
     );
     assert!(
@@ -1620,7 +1636,8 @@ fn the_interval_the_dendro_command_exited_in_is_recorded() {
 
 /// An agent that comes up after the recording started, and cannot serve its
 /// stream, is refused on its own: the other endpoints keep recording and the
-/// archive is finalized, and the run exits 1 so a pipeline notices.
+/// archive is finalized, and the run exits 0: the archive was saved, and
+/// the end-of-run lines name the endpoint left out.
 ///
 /// Regression: the refusal ended the whole run and left the archive
 /// unfinalized.
@@ -1652,7 +1669,7 @@ fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
         .output()
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
     for needle in [
         "Rezolus 5.20.0",
         "predates",
@@ -1705,9 +1722,90 @@ fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
     );
 }
 
+/// An agent whose streamed rows cannot be read (stamped before the Unix
+/// epoch) stops recording alone: `record` names it at once and at the end
+/// of the run, the exporter beside it records on, the archive is finalized,
+/// and the run exits 0.
+#[test]
+fn an_endpoint_whose_rows_cannot_be_recorded_stops_alone() {
+    use metriken_storage::Catalog;
+
+    let exporter = spawn_fake_exporter_named("http_requests_total");
+    let agent = spawn_fixture(
+        Streams::Always,
+        Some("6.0.0"),
+        Names::Metriken,
+        Fixture {
+            before_epoch: true,
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("failed.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=bad"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("2s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
+    let who = format!("http://127.0.0.1:{agent}/ (bad)");
+    // rezolus's own line, which starts with `error:`, from the reason to
+    // its end; metriken-recorder logs the reason too.
+    let immediate = stderr
+        .lines()
+        .find(|l| l.starts_with(&format!("error: {who}: a streamed frame could not be read")))
+        .unwrap_or_else(|| panic!("the immediate line in:\n{stderr}"));
+    assert!(
+        immediate.contains("before the epoch") && immediate.ends_with("; it stopped recording"),
+        "{immediate}"
+    );
+    let summary = format!(
+        "error: {who} stopped recording during the run because its rows could not be \
+         recorded; {} holds its rows up to the failure",
+        output.display()
+    );
+    assert!(stderr.contains(&summary), "{summary:?} in:\n{stderr}");
+    assert!(
+        !stderr.contains("recording failed"),
+        "the recording itself did not fail:\n{stderr}"
+    );
+
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert!(
+        sources.iter().all(|s| s.complete),
+        "every recording is finalized: {sources:?}"
+    );
+    let svc = sources
+        .iter()
+        .find(|s| s.labels.values().any(|v| v == "svc"))
+        .unwrap_or_else(|| panic!("the exporter is recorded: {sources:?}"));
+    let rows = catalog
+        .segment_span(svc.id, "prometheus/scrape")
+        .unwrap()
+        .1
+        .rows
+        + catalog
+            .live_wal_span(svc.id, "prometheus/scrape")
+            .unwrap()
+            .rows;
+    assert!(rows > 2, "the exporter kept recording: {rows} rows");
+}
+
 /// An agent that streamed, then answers its reconnect with a 404, is refused
 /// on its own as a late agent is: its recording stops with the rows it had
-/// and is finalized, the other endpoint keeps recording, and the run exits 1.
+/// and is finalized, the other endpoint keeps recording, and the run exits 0.
 ///
 /// Regression: a refusal on a reconnect ended the whole run.
 #[test]
@@ -1734,7 +1832,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
         .output()
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
     let dropped = format!(
         "error: http://127.0.0.1:{agent}/ (agent) was refused mid-run and has no rows in {} after ",
         output.display()
@@ -1760,7 +1858,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
     let by_source = |name: &str| {
         sources
             .iter()
-            .find(|s| s.labels.get("source").map(String::as_str) == Some(name))
+            .find(|s| s.labels.get("alias").map(String::as_str) == Some(name))
             .unwrap_or_else(|| panic!("a recording for {name}: {sources:?}"))
     };
     let agent_src = by_source("agent");
@@ -1786,7 +1884,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
 /// A run whose every endpoint has been refused mid-run ends on its own: with
 /// no `--duration` it would otherwise record nothing until ctrl-c. The
 /// archive is finalized with the rows the agent streamed before its
-/// reconnect was refused, and the run exits 1.
+/// reconnect was refused, and the run exits 0.
 #[test]
 fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
     use metriken_storage::Catalog;
@@ -1829,7 +1927,11 @@ fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
         .unwrap()
         .read_to_string(&mut stderr)
         .unwrap();
-    assert_eq!(status.code(), Some(1), "exits 1:\n{stderr}");
+    assert_eq!(status.code(), Some(0), "exits 0:\n{stderr}");
+    assert!(
+        stderr.contains("no endpoint is left recording; finalizing the recording"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("1 of 1 endpoints refused; the archive holds the rest and is finalized"),
         "{stderr}"
@@ -1843,6 +1945,93 @@ fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
     let rows = catalog.segment_span(id, "fake/ops").unwrap().1.rows
         + catalog.live_wal_span(id, "fake/ops").unwrap().rows;
     assert!((1..=3).contains(&rows), "the rows it streamed: {rows}");
+}
+
+/// A `--duration` run outlives its only endpoint: the agent's reconnect is
+/// refused about two seconds in, the run records on to its duration, and it
+/// exits 0.
+#[test]
+fn a_duration_run_runs_on_after_its_only_endpoint_is_refused() {
+    let agent = spawn_fake_agent_that_stops_streaming(3);
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("duration.dendro");
+
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("5s")
+        .output()
+        .expect("failed to run rezolus record");
+    let elapsed = started.elapsed();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "exits 0:\n{stderr}");
+    assert!(
+        elapsed >= Duration::from_secs(5),
+        "the run was not cut short: {elapsed:?}\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("no endpoint is left recording"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 1 endpoints refused; the archive holds the rest and is finalized"),
+        "{stderr}"
+    );
+}
+
+/// A wrapped command outlives its only endpoint: the agent's reconnect is
+/// refused about two seconds in, the command runs on to its own exit, and
+/// the run exits with the command's status, not 1.
+#[test]
+fn a_wrapped_command_runs_on_after_its_only_endpoint_is_refused() {
+    use metriken_storage::Catalog;
+
+    let agent = spawn_fake_agent_that_stops_streaming(3);
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("wrapped.dendro");
+
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg("sleep 4; exit 3")
+        .output()
+        .expect("failed to run rezolus record");
+    let elapsed = started.elapsed();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the command's status:\n{stderr}"
+    );
+    assert!(
+        elapsed >= Duration::from_secs(4),
+        "the command was not cut short: {elapsed:?}\n{stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 1 endpoints refused; the archive holds the rest and is finalized"),
+        "{stderr}"
+    );
+
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    assert!(sources[0].complete, "the archive is finalized");
 }
 
 /// A Prometheus exporter that serves `/metrics` and answers 404 to every
@@ -2013,8 +2202,9 @@ fn the_recording(output: &std::path::Path, table: &str) -> Recording {
 
 /// A Prometheus endpoint given by its root URL, with no source, is detected
 /// by stream: its stream route 404s, `/status` and `/` answer without naming
-/// an agent, and it is scraped at `/metrics` under a source inferred from the
-/// URL. GO check 3 of metriken's recorder entry.
+/// an agent, and it is scraped at `/metrics`. Its recording is labelled by
+/// the URL it was scraped from (`endpoint`) and has no `source`, since the
+/// recorder infers none. GO check 3 of metriken's recorder entry.
 #[test]
 fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
     let port = spawn_strict_exporter();
@@ -2041,12 +2231,19 @@ fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
         )),
         "{stderr}"
     );
+    assert!(
+        stderr.contains(&format!(
+            "http://127.0.0.1:{port}/ was given no alias and its producer declares no source"
+        )),
+        "{stderr}"
+    );
     let (labels, _, rows) = the_recording(&output, "prometheus/scrape");
     assert_eq!(
-        labels.get("source").map(String::as_str),
-        Some(format!("127.0.0.1-{port}").as_str()),
+        labels.get("endpoint").map(String::as_str),
+        Some(format!("http://127.0.0.1:{port}/").as_str()),
         "{labels:?}"
     );
+    assert!(!labels.contains_key("source"), "{labels:?}");
     assert!(rows > 0, "the scrapes were recorded");
 }
 
@@ -2105,12 +2302,62 @@ fn an_endpoint_answering_5xx_is_pending_then_streamed() {
     assert_eq!(sources.len(), 2, "{sources:?}");
     let late = sources
         .iter()
-        .find(|s| s.labels.get("source").map(String::as_str) == Some("late"))
+        .find(|s| s.labels.get("alias").map(String::as_str) == Some("late"))
         .unwrap_or_else(|| panic!("a recording for the late endpoint: {sources:?}"));
     assert!(late.complete, "finalized");
     let rows = catalog.segment_span(late.id, "fake/ops").unwrap().1.rows
         + catalog.live_wal_span(late.id, "fake/ops").unwrap().rows;
     assert!(rows > 0, "the late endpoint was streamed");
+}
+
+/// An endpoint given `source=` is named by it as `alias`, with a note that
+/// `source=` is deprecated, and its producer's own `source` stays: an older
+/// cachecannon's KPI template selects `source="cachecannon"`, which the
+/// recording still carries though the user named it `cc-a`.
+#[test]
+fn an_endpoints_source_is_its_alias_and_the_producers_source_stays() {
+    let port = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            labels: &[("source", "cachecannon")],
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("aliased.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port},source=cc-a"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    assert!(stderr.contains("source=cc-a on"), "{stderr}");
+    assert!(stderr.contains("is read as alias=cc-a"), "{stderr}");
+    assert!(!stderr.contains("was given no alias"), "{stderr}");
+
+    let (labels, _, rows) = the_recording(&output, "fake/ops");
+    assert_eq!(
+        labels.get("alias").map(String::as_str),
+        Some("cc-a"),
+        "{labels:?}"
+    );
+    assert_eq!(
+        labels.get("source").map(String::as_str),
+        Some("cachecannon"),
+        "{labels:?}"
+    );
+    assert!(rows > 0, "the stream was recorded");
 }
 
 /// A producer that is not a Rezolus agent and names itself in its stream
@@ -2145,7 +2392,7 @@ fn a_producers_handshake_names_its_recording() {
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "exits 0:\n{stderr}");
-    assert!(!stderr.contains("no source name specified"), "{stderr}");
+    assert!(!stderr.contains("was given no alias"), "{stderr}");
 
     let (labels, metadata, rows) = the_recording(&output, "fake/ops");
     assert_eq!(
@@ -2153,11 +2400,9 @@ fn a_producers_handshake_names_its_recording() {
         Some("cachecannon"),
         "{labels:?}"
     );
-    assert_eq!(
-        metadata.get("source").map(String::as_str),
-        Some("cachecannon"),
-        "{metadata:?}"
-    );
+    // The handshake's `source` is a label in the producer layer; the recorder
+    // writes no `source` metadata key beside it.
+    assert!(!metadata.contains_key("source"), "{metadata:?}");
     assert_eq!(
         metadata.get("version").map(String::as_str),
         Some("0.9.1"),
@@ -2195,7 +2440,7 @@ fn rows_of(output: &std::path::Path, source: &str, table: &str) -> u64 {
     let sources = catalog.sources().expect("the catalog reads");
     let found = sources
         .iter()
-        .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+        .find(|s| s.labels.get("alias").map(String::as_str) == Some(source))
         .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
     catalog.segment_span(found.id, table).unwrap().1.rows
         + catalog.live_wal_span(found.id, table).unwrap().rows
@@ -2674,10 +2919,12 @@ fn a_bad_template_refuses_the_run_before_recording() {
 }
 
 /// On a streamed producer whose handshake sends its own `service_queries`,
-/// that template is what the recording keeps, unless `template=` names a
-/// file: then the file replaces it, and the recorder says so at startup.
+/// that template is the one the recording uses. `template=FILE` is written
+/// beneath it, in the recorder layer, and the recorder says at startup that
+/// the producer's is used and names `template_override=true`; with that
+/// switch the file is written in the user layer and used.
 #[test]
-fn a_template_replaces_the_one_a_producers_handshake_sends() {
+fn a_producers_template_is_used_over_template_unless_overridden() {
     const PRODUCER_TEMPLATE: &str = r#"{"service_name":"cachecannon","kpis":[]}"#;
     let port = spawn_fixture(
         Streams::Always,
@@ -2710,18 +2957,50 @@ fn a_template_replaces_the_one_a_producers_handshake_sends() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         assert!(out.status.success(), "{stderr}");
         let (_, metadata, _) = the_recording(&output, "fake/ops");
-        (metadata.get("service_queries").cloned(), stderr)
+        let layers = metriken_storage::layers::Layers::read(&metadata)
+            .expect("the layers parse")
+            .expect("the recording has identity layers");
+        let in_layer =
+            |m: &std::collections::BTreeMap<String, String>| m.get("service_queries").cloned();
+        (
+            metadata.get("service_queries").cloned(),
+            in_layer(&layers.recorder.metadata),
+            in_layer(&layers.user.metadata),
+            stderr,
+        )
     };
 
-    let (kept, stderr) = record("producer.dendro", "");
-    assert_eq!(kept.as_deref(), Some(PRODUCER_TEMPLATE));
-    assert!(!stderr.contains("replaces the KPI template"), "{stderr}");
+    let (used, recorder, user, stderr) = record("producer.dendro", "");
+    assert_eq!(used.as_deref(), Some(PRODUCER_TEMPLATE));
+    assert_eq!((recorder, user), (None, None));
+    assert!(
+        !stderr.contains("KPI template its handshake sent"),
+        "{stderr}"
+    );
 
-    let (replaced, stderr) = record("mine.dendro", &format!(",template={}", template.display()));
-    assert_eq!(replaced.as_deref(), Some(SVC_TEMPLATE));
+    let option = format!(",template={}", template.display());
+    let (used, recorder, user, stderr) = record("default.dendro", &option);
+    assert_eq!(used.as_deref(), Some(PRODUCER_TEMPLATE));
+    assert_eq!(recorder.as_deref(), Some(SVC_TEMPLATE));
+    assert_eq!(user, None);
     assert!(
         stderr.contains(&format!(
-            "template={} replaces the KPI template its handshake sent",
+            "the KPI template its handshake sent is used over template={}; add \
+             template_override=true to use the file",
+            template.display()
+        )),
+        "{stderr}"
+    );
+
+    let option = format!(",template={},template_override=true", template.display());
+    let (used, recorder, user, stderr) = record("override.dendro", &option);
+    assert_eq!(used.as_deref(), Some(SVC_TEMPLATE));
+    assert_eq!(recorder, None);
+    assert_eq!(user.as_deref(), Some(SVC_TEMPLATE));
+    assert!(
+        stderr.contains(&format!(
+            "template={} is used over the KPI template its handshake sent \
+             (template_override=true)",
             template.display()
         )),
         "{stderr}"
@@ -2761,5 +3040,8 @@ fn a_template_replaces_the_one_a_producers_handshake_sends() {
         metadata.get("service_queries").map(String::as_str),
         Some(SVC_TEMPLATE)
     );
-    assert!(!stderr.contains("replaces the KPI template"), "{stderr}");
+    assert!(
+        !stderr.contains("KPI template its handshake sent"),
+        "{stderr}"
+    );
 }

@@ -667,8 +667,8 @@ fn extract_matrix_samples(
     result: &QueryResult,
 ) -> Result<Vec<MatrixSample>, Box<dyn std::error::Error>> {
     match result {
-        QueryResult::Matrix { result } => Ok(result.clone()),
-        QueryResult::Vector { result } => {
+        QueryResult::Matrix { result, .. } => Ok(result.clone()),
+        QueryResult::Vector { result, .. } => {
             // Convert vector to single-sample matrix
             Ok(result
                 .iter()
@@ -678,7 +678,7 @@ fn extract_matrix_samples(
                 })
                 .collect())
         }
-        QueryResult::Scalar { result } => {
+        QueryResult::Scalar { result, .. } => {
             // Convert scalar to single-sample matrix
             Ok(vec![MatrixSample::new(HashMap::new(), vec![*result])])
         }

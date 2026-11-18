@@ -283,7 +283,7 @@ impl<'a> Host<'a> {
     /// refusal that cannot relabel one.
     pub(super) fn how_labels_are_set(&self) -> String {
         match self.record {
-            Some(r) => format!(" (`{r} --endpoint URL,source=NAME` or `--label k=v`)"),
+            Some(r) => format!(" (`{r} --endpoint URL,alias=NAME` or `--label k=v`)"),
             None => String::new(),
         }
     }
@@ -347,13 +347,14 @@ pub struct AnnotateArgs {
     pub output: Option<PathBuf>,
     #[arg(
         long = "queries",
+        visible_alias = "template",
         value_name = "PATH",
-        help = "Custom service extension JSON file (overrides built-in template)"
+        help = "A KPI template (service extension JSON file) for each recording; on a recording with identity layers it is a user-layer entry, used over the template its producer sent"
     )]
     pub queries: Option<PathBuf>,
     #[arg(
         long = "undo",
-        help = "Remove the KPIs (service extension) from each recording",
+        help = "Remove the KPIs (service extension) from each recording; on a recording with identity layers, remove the templates annotate set, so record's template_override=true template, else the producer's, else record's template= default, is used again",
         conflicts_with = "queries"
     )]
     pub undo: bool,
@@ -429,7 +430,7 @@ pub struct CheckArgs {
         id = "RECORDING",
         long = "recording",
         value_name = "KEY=VALUE",
-        help = "Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)\n\
+        help = "Which recording of a multi-recording archive to check, as key=value (e.g. --recording alias=redis)\n\
                 Repeatable: the pairs are ANDed and must together name exactly one\n\
                 recording. Without it every recording is checked."
     )]
@@ -962,7 +963,12 @@ mod help {
                          WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings\n\
                          become sources with their labels, metadata, clock anchor and `complete`\n\
                          flag. A parquet file becomes one source, labelled with the file's\n\
-                         `source` when that names one source and no series carries its own.\n\
+                         `source` when that names one source and no series carries its own;\n\
+                         a combined parquet (5.x `recording combine`, or the 5.x recorder given\n\
+                         several endpoints) becomes one source per input file, labelled with\n\
+                         its `source` and its `node` or `instance`, which the viewer opens as\n\
+                         one combined view; a column carrying an exporter's own `source` forms\n\
+                         a source of that name.\n\
                          An A/B tarball becomes two sources, its baseline labelled arm=baseline\n\
                          and its experiment arm=experiment, which the viewer opens as a\n\
                          comparison. Tar and parquet tables are re-encoded.\n\n\

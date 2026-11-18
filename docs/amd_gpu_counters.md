@@ -1,25 +1,27 @@
-# AMD GPU telemetry in Rezolus: SMI and PMU samplers
+# AMD GPU telemetry in Rezolus: SMI, PMU and sysfs samplers
 
-Rezolus collects AMD GPU telemetry through **two complementary samplers**, both
-under `src/agent/samplers/gpu/linux/amd/`:
+Rezolus collects AMD GPU telemetry through **three samplers**, all under
+`src/agent/samplers/gpu/linux/amd/`:
 
 | Sampler | Name | Source | What it measures |
 |---|---|---|---|
 | **SMI** | `gpu_amd_smi` | ROCm SMI library (`librocm_smi64.so`) | Board-level telemetry: power, temperature, clocks, VRAM, fan, SMI-level utilization. Metric prefix `gpu_*`. |
 | **PMU** | `gpu_amd_pmu` | rocprofiler-sdk device counting service | Hardware performance counters: clocks, waves, instruction mix, caches, memory traffic. Metric prefix `gpmu_*`. |
+| **sysfs** | `gpu_amd_sysfs` | amdgpu's `gpu_metrics` and `pp_dpm_fclk` | APU clocks, power, temperature, utilization and throttle status on a host without ROCm. See [metrics.md](metrics.md#gpu_amd_sysfs). |
 
-They answer different questions — *"is the board healthy / how hot / how much
-power"* (SMI) vs *"what is the shader array actually doing"* (PMU) — and are kept
-separate because they have very different cost, privilege, and reliability
-profiles. Both load their vendor library at runtime via `dlopen`, so the agent
-still **compiles and runs on hosts without ROCm or an AMD GPU** (each sampler
-returns `Ok(None)` at init and reports as disabled, not failed).
+SMI and PMU answer different questions — *"is the board healthy / how hot / how
+much power"* (SMI) vs *"what is the shader array actually doing"* (PMU) — and are
+kept separate because they have very different cost, privilege, and reliability
+profiles. SMI and PMU load their vendor library at runtime via `dlopen`, so the
+agent still **compiles and runs on hosts without ROCm or an AMD GPU** (each
+sampler returns `Unsupported` at init and is reported as unsupported, not
+failed).
 
 ---
 
 ## Design summary
 
-### Why two samplers, not one
+### Why SMI and PMU are separate samplers
 
 The SMI library and the rocprofiler-sdk are entirely different stacks with
 different constraints:
@@ -504,8 +506,8 @@ with the always-on, in-place-aggregation discipline in `docs/principles.md`.
 - The agent must compile on hosts **without ROCm installed**. Follow the
   existing `rocm_smi.rs` pattern: load the libraries at runtime with `dlopen`
   (resolving the rocprofiler-sdk + HSA symbols dynamically) rather than linking
-  at build time, and return `Ok(None)` from `init()` when ROCm / an AMD GPU is
-  absent so the sampler reports as disabled, not failed.
+  at build time, and return `Unsupported` from `init()` when ROCm / an AMD GPU
+  is absent so the sampler reports as unsupported, not failed.
 - If any rocprofiler-sdk headers are used for bindgen, note they transitively
   include HIP headers and need `-D__HIP_PLATFORM_AMD__` defined even though no
   HIP runtime is linked or used.

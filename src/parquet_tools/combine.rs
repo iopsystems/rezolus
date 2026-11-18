@@ -1008,7 +1008,7 @@ mod tests {
         assert_eq!(readers.len(), 2);
         for (_, reader) in &readers {
             let (start, end) = reader.time_range().unwrap();
-            let metriken_query::QueryResult::Matrix { result } = reader
+            let metriken_query::QueryResult::Matrix { result, .. } = reader
                 .query_range("irate(task_ops{comm=\"nginx\"}[3s])", start, end, 1.0)
                 .unwrap()
             else {
@@ -1060,8 +1060,8 @@ mod tests {
         assert_eq!(answer(&both[0].1), answer(&alone[0].1));
     }
 
-    /// metriken-query 0.42 reads each process group once, and these are the
-    /// cases that decide a group. Two sources with one `producer_epoch`
+    /// metriken-query reads each process group once (since 0.42), and these
+    /// are the cases that decide a group. Two sources with one `producer_epoch`
     /// whose spans overlap (one agent process recorded twice) are one
     /// recording, answering what either answers alone, not the sum; with
     /// disjoint spans they are two; with different epochs they are two

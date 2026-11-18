@@ -6,7 +6,7 @@ import {
     unifyHistogramRange,
     buildDeltaSpectrum,
     composeScatterLabel,
-} from '../src/viewer/assets/lib/charts/util/compare_math.js';
+} from '../src/viewer/assets/lib/compare/compare_math.js';
 
 test('nullDiff: numbers', () => {
     assert.equal(nullDiff(5, 3), 2);

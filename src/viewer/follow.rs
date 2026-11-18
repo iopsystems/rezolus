@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(end_ms(&state), (ANCHOR + 9 * SECOND) / 1_000_000);
         // The PromQL path reads the new rows too, not just the range.
         let at = (ANCHOR + 9 * SECOND) as f64 / 1e9;
-        let metriken_query::QueryResult::Vector { result } =
+        let metriken_query::QueryResult::Vector { result, .. } =
             state.baseline_data().query("mem_free", Some(at)).unwrap()
         else {
             panic!("an instant query gives a vector");

@@ -119,7 +119,7 @@ Source: [viewer chart & heatmap UX](journal/2026-04-19-viewer-chart-ux.md).
   hard-codes `splitNumber: 5`) and across file vs live mode. The live-mode tick
   *overlap* observed 2026-06-21 is one visible symptom. Proper fix: a span-aware
   `minInterval` + width-bounded `splitNumber` cap + matching formatter, shared via
-  `src/viewer/assets/lib/charts/util/`. *Reopen:* when fixing visible tick overlap
+  metriken-charts' `assets/charts/util/`. *Reopen:* when fixing visible tick overlap
   or starting a chart-rendering quality pass.
 - **Single `quantiles()` call for count/mean/percentiles** — Open. Count, mean and
   percentiles are all derivable from one `metriken quantiles()` call on one
@@ -705,10 +705,12 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   record the new occupant's labels (#1232), so a conversion keeps what the file
   records. Reopen only if a recording from that range needs per-task
   attribution badly enough to accept unlabelled occupants.
-- **Show agent restarts from `producer_epochs`** — Open. `record` and
-  `hindsight` write dendro's `producer_epochs` when the agent restarts
-  mid-recording (`docs/journal/2026-10-05-metadata-after-agent-restart.md`),
-  but nothing reads it: the viewer could mark each `from_ts` on the timeline
+- **Show agent restarts from the recorder layer's epochs** — Open. `record`
+  and `hindsight` add an epoch entry (with `from_ts` and the process's
+  `version`) to the recording's recorder layer when the agent restarts
+  mid-recording (older recordings carry `producer_epochs`,
+  `docs/journal/2026-10-05-metadata-after-agent-restart.md`), but nothing
+  reads them: the viewer could mark each `from_ts` on the timeline
   and `mcp describe-recording` could list the epochs and versions. Reopen when
   a recording that spans an upgrade is being investigated.
 
@@ -728,85 +730,52 @@ agent's stream, and slot groups travel in the long layout
 
 ## 6.0.0 release readiness
 
-Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readiness.md).
+Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readiness.md),
+decisions 8 to 14 (2026-11-05 and 2026-11-06) for what 6.0.0 waits for.
 
-- **Compatibility fixtures from released versions** — Open. Check in archives
-  written by released versions (a tar `.rez` from a 5.17.1 prerelease, a v3
-  `.rez` from 5.18.0, a v5.25 `.dendro`, an older parquet, a 6.0 recording)
-  with golden query results; open, query and upgrade each in a test. 5.x's
-  preview `--stream` `.rez` is not included.
-- **Cross-version CI job** — Open. v5.25.1 and v5.27.0 binaries against the
-  current agent, the current recorder against v5.25.1 and v5.27.0 agents, the
-  v5.25.1 and v5.27.0 readers on 6.0 output (5.25.1 measured and systemslab's
-  next pin; 5.27.0 the latest 5.x). (The v5.22.1 reader on a 6.0 `.rez` was
-  dropped 2026-10-12: 6.0 writes no `.rez`.)
-- **Smaller test gaps** — Open. V3 raw `recording convert`; a WASM `.dendro`
-  test; `tests/viewer_smoke.sh` in CI; read `site/viewer/data/mr2-report.dendro`
-  in a test; upgrade a v1 tar archive.
-- **Refuse an agent older than 5.21.0** — Open. At startup (exit 1, nothing
-  written) and mid-run (that endpoint refused, the rest recorded), with a
-  pointer to a 5.x recorder, and a test of each. Replaces the withdrawn
-  "record a non-streaming agent to `.rez`" (decision 1, withdrawn
-  2026-10-12).
-- **Endpoint detection** — Open. Stream any source whose `/metrics/stream`
-  handshake opens; refuse a Rezolus agent that cannot stream; scrape
-  `/metrics` from any other source (cachecannon is refused today). Done in
-  rezolus's own recorder first (metriken-recorder entry, step 2).
-- **Remove the `.rez`, parquet and raw writers from `record` and hindsight**
-  — DONE (this PR): both write `.dendro` only and refuse any other output,
-  pointing at a 5.x recorder or hindsight (metriken-recorder entry, step 2).
-- **Remove the `.rez`, parquet and raw writers** — Open. Decision 5: 6.x
-  writes `.dendro` only. Save as Report in both viewers, and the `recording` subcommands
-  `combine`, `convert`, `filter`, `snapshot`, `upgrade` and `annotate` (with
-  the event and check writers that share it). The entry's inventory lists
-  each writer with its path. Needs a parquet-to-`.dendro` path, `.rez` to
-  `.dendro` in the WASM viewer (or no report save there for those sources),
-  and raw to `.dendro` in `convert`. Also removes MCP `export_query` with
-  `--export-dir`.
-- **`snapshot` of a live 5.x `.rez`** — Open. Check whether
-  `convert_v3_to_dendro` reads a consistent snapshot of a `.rez` that a 5.x
-  writer is still appending to (a 5.x hindsight buffer). If it does not,
-  `recording snapshot` refuses a `.rez` input (6.0 readiness, per-subcommand
-  behaviour).
-- **Owner decisions on in-place and per-subcommand behaviour** — DONE
-  (2026-10-12): `annotate` on `.rez`/parquet refused with a pointer to
-  `recording upgrade --to dendro`; `filter` to a required `-o x.dendro`;
-  `combine` `.dendro` only, `--ab` removed; `snapshot` of a `.rez` to
-  `.dendro`; `upgrade --to dendro` the default; MCP `export_query` removed.
-- **Move callers off parquet and `.rez` output** — Open. Done (this PR):
-  `docker/rezolus-capture` and `scripts/rezolus-capture` (one `record` per
-  capture into `capture.dendro`), `data/test_fixtures/compare-demo.sh`, and
-  the CI smoke steps in `.github/workflows/cargo.yml`. Open: llm-perf's
-  non-`.dendro` server metrics, systemslab's runner (`-o metrics.rez`). `labels/specs/*.toml` pin a 5.17.1-alpha.8 recorder and do
-  not block 6.0.0; moving that pin to 6.x needs `-o .dendro`.
-- **metriken path steps 4 to 7 and their follow-ups** — Open. Decision 7:
-  6.0.0 ships after `metriken-recorder`, templates in the archive,
-  `metriken-py`, and `metriken-dashboard`/`metriken-viewer`, with rezolus on
-  them, and after the follow-ups in the metriken plan's step 7 are landed or
-  measured and dropped.
-- **Measurement harness and the two missing measurements** — Open. Harness in
-  the repository; `.dendro` sizes from 6.0 against `.rez` and parquet from a
-  5.x recorder, for one agent; a 24-hour `hindsight` and `record` run on
-  Linux.
-- **Upgrade page and stale docs** — Open. `site/docs/usage.html`,
-  `architecture.html`, the viewer bundle README in `release.yml`, the
-  `recording` about text, `src/mcp/skill/SKILL.md`, the hindsight `output`
-  path change, and `CLAUDE.md`, `docs/usage.md` and `record`'s help once the
-  writers go. The upgrade page covers `.dendro`-only writing and the refusal
-  of agents older than 5.21.0.
-- **Multi-source single-run recordings open as A/B; templates don't match
-  `.dendro` series** — Open, blocks 6.0.0. A `.dendro` from one `record` run
-  with an agent and a Prometheus endpoint (`rezolus-capture --endpoint`, or
-  `record --endpoint a --endpoint b`) opens in the viewer as an A/B
-  comparison of the first two recordings, not as one merged dashboard. The
-  service KPI templates (`site/viewer/templates/*.json`) select
-  `source="<name>"`, a label `.dendro` series do not carry, so no service
-  dashboard is shown. 5.x wrote one merged parquet that both worked on. The
-  viewer fix is the owner's decision.
-- **Homebrew tap at 5.19.0** — Open. Sixteen bump PRs open in
-  `iopsystems/homebrew-iop` (#134–#151).
-- **Release candidate soak** — Open. A day on a Linux host and a fleet host,
-  read with both readers.
+Blocking 6.0.0:
+
+- **systemslab reads and records `.dendro`** — Open (decision 14). Its
+  reader opening dendro schema 5 with decision 13's float kinds, and its
+  runner asking `rezolus record` for `.dendro`
+  (`crates/runner/src/metrics.rs:293`, `:411`, `:466`), merged before the
+  tag. iopsystems/systemslab#6371 has to move to that reader on a
+  pre-release pin first.
+- **CLI help and docs at the tag** — Open (GO criteria). `usage.html`'s
+  config example uses `source =`, which 5.29.2 reads; it moves to `alias =`
+  in the release PR, since the site deploys from main.
+
+Open, not blocking: a pair of archives written by 5.29.2 from a Linux
+agent, so that histogram reads of a released archive are tested; the 5.29.2
+fixtures in `tests/fixtures/released/` (#1659) were recorded on macOS and
+hold no histogram data.
+
+Deferred past 6.0.0 (decision 11): the cross-version CI job (its 5.x
+binaries against a 6.0 agent and a 6.0 recorder against 5.x agents; its
+5.x-reader leg is dropped, since no 5.x release reads 6.0 output); the
+smaller test gaps (V3 raw `recording convert`, a WASM `.dendro` test,
+`tests/viewer_smoke.sh` in CI, reading `site/viewer/data/mr2-report.dendro`
+in a test, upgrading a v1 tar archive); a tar `.rez` fixture from a 5.17.1
+prerelease, a parquet fixture from a release before 5.18 and the 6.0
+recording of the 2026-10-08 measurement; the measurement harness and the
+size comparison. Waived (decision 10): the 24-hour run and the release
+candidate soak.
+
+`recording snapshot` refuses a `.rez` (it names `recording upgrade`), so the
+question of a consistent snapshot of a `.rez` a 5.x writer is appending to
+moves to `recording upgrade`; it does not block 6.0.0.
+
+Done: refusing an agent older than 5.21.0 at startup and mid-run
+(`src/recorder/agent_probe.rs`, `tests/record_lifecycle.rs`); endpoint
+detection (6.0.0-alpha.50; in metriken-recorder `src/detect.rs` since
+#1448); removing the `.rez`, parquet and raw writers, MCP `export_query`
+and `--export-dir` (#1657) included; the in-repository callers
+(`rezolus-capture`, `compare-demo.sh`, the CI smoke steps); llm-perf records
+in-process and no longer runs `rezolus record`; the Homebrew formula (at
+5.29.2; 5.29.2 produced one bump PR, iopsystems/homebrew-iop#172, landed
+through `pr-pull`); compatibility fixtures from 5.29.2 (#1659); the upgrade
+page, `site/docs/upgrade.html` (#1660); hindsight saying why it refuses an
+agent at startup and creating nothing first (#1662).
 
 ## Agent — histogram groups with slots (after 6.0)
 
@@ -945,6 +914,35 @@ Also found on these runs, separate from the sampler:
   selector on `cgroup_cpu_usage` fails with "Metric not found" while `rate()`
   works** — Open. Reproduced on recordings from both the 5.20.0 and the current
   recorder. It forced these measurements to integrate `rate()`.
+
+## Agent — `process_cpu_usage` contention
+
+Source: [Contention on `process_cpu_usage`](journal/2026-10-27-process-cpu-usage-contention.md).
+GO, measured 2026-10-31 in a 56-vCPU guest: a sharded table of busy processes
+(`process_table`), assigned by the agent.
+
+- **Measure 1 × N on a two-socket or 100+ CPU host** — Open. The table was
+  measured in one 7-L3 guest; check that it removes the contention where the
+  cost on one copy would be larger.
+- **Two entries per bucket in `process_table`** — Open, not needed yet. Two
+  busy processes whose tgids hash to one bucket leave one of them on the
+  contended slot. Reopen if that is seen.
+- **The claim threshold in `process_table`** — Open, not measured. The agent
+  gives a bucket to a process using at least half a CPU, so a busy
+  single-threaded process, which cannot contend on its slot, can take a
+  bucket and hold the one a many-threaded process hashes to. Claiming above
+  about 1.5 CPUs would exclude single-threaded processes. No run measured
+  either threshold against a mix of single- and many-threaded busy
+  processes; that run, with a many-threaded churn workload, decides it.
+- **L3-assigned stripes of `process_cpu_usage`** — Superseded by the table.
+- **Per-CPU write combining** — NO-GO on correctness: up to K − 1 ticks per
+  CPU stay uncommitted on nohz-idle CPUs and are dropped at exit. Reopen only
+  with a flush that does not depend on ticks and an exit path that keeps
+  pending deltas.
+- **Process deltas through a ring buffer** — NO-GO (not built): conflicts
+  with principles 3 and 6. Reopen if the 64 MiB of `process_attribution`
+  maps becomes the problem, with a read-time flush (`BPF_PROG_RUN` on each
+  CPU, 5.10).
 
 ## Agent — cgroup slots
 
@@ -1643,11 +1641,12 @@ Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
   `remove_events` (`ServerOptions`, tiered `tools/list`, flag-off call
   refused naming the flag, tested). `set_kpis` — Open, no producer of KPI
   sets on the agent side yet; the annotate KPI path is ready for it.
-- **`export_query` and `viewer_link`** — DONE. `src/mcp/export.rs` writes
-  a range query as long-form CSV/parquet under `--export-dir` only;
-  `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
+- **`viewer_link`** — DONE. `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
   wire form, pinned to the JS parser by `tests/viewer_link_parity.test.mjs`,
   with a full URL from `--viewer-url` or a `viewer_url` argument.
+  `export_query`, built with it, was removed for 6.0
+  ([release readiness](journal/2026-10-08-6-0-release-readiness.md),
+  decision 5).
 - **`rezolus mcp install`** — DONE. `src/mcp/install.rs` registers through
   `claude mcp add` (project `.mcp.json` merged when the CLI is absent) and
   installs the embedded `rezolus-mcp` skill (`src/mcp/skill/SKILL.md`).
@@ -1661,7 +1660,7 @@ Related ideas with no entry yet:
 
 - **Section-wide shared crosshair** — Idea. Hover cursor sync exists only
   within a compare group (`ChartsState._compareCursorSubs`,
-  `src/viewer/assets/lib/charts/chart.js`); zoom is already global. A
+  metriken-charts' `assets/charts/chart.js`); zoom is already global. A
   section-wide crosshair behind a toggle is a different thing from the
   pin-sync fan-out rejected in #828 and does not reopen that decision.
 - **One reference page for time semantics** — Idea. Null propagation in

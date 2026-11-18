@@ -71,8 +71,9 @@ Hindsight reads the agent named by `source` over its replication stream
 `"v3"` (the default). An agent that cannot serve it is refused at startup.
 If the stream drops, hindsight reconnects after one interval and keeps its
 buffer. If the agent answers a reconnect but can no longer serve the stream,
-hindsight writes the buffer to a timestamped file beside `output`, where a
-SIGHUP capture goes, and exits with status 1.
+or its rows cannot be recorded (a frame that cannot be read or decoded, rows
+that cannot be encoded), hindsight writes the buffer to a timestamped file
+beside `output`, where a SIGHUP capture goes, and exits with status 1.
 
 Hindsight is **disabled by default**. Review the config before enabling it.
 
@@ -138,6 +139,29 @@ are streamed (5.21.0 or later) and Prometheus endpoints scraped, and one archive
 can hold both; a Prometheus scrape gets an acquisition window spanning the HTTP
 request and response. See [Streaming and scraping](#streaming-and-scraping).
 
+A Prometheus series is stored as the exporter serves it: under its own name
+(with any `:` replaced by `_`), with its own values, as floating-point numbers.
+Its unit is written as the series' `unit` key: the unit its metric's
+OpenMetrics `# UNIT` line names, or else the unit token its name ends in
+before any `_bucket`, `_sum`, `_count` or `_total` (`_seconds` is
+`seconds`, `_ms` is `milliseconds`, `_bytes` is `bytes`, `_kib` is
+`kibibytes`, `_bits` is `bits`, and the rest of metriken-storage's
+`prometheus_units::UNITS`). A `_count` or `_bucket` sample has no unit. The
+metric catalogs (`/api/v1/metrics`, the WASM viewer's `metrics`) list it as
+`unit`, and the viewer's charts scale by it: a `_seconds` histogram's
+quantiles read seconds and are drawn as times. A histogram's bucket bounds
+are stored as integers times a `scale` key, fixed by the unit for a time
+(1e9 for seconds, 1e6 for milliseconds, 1e3 for microseconds, 1 for
+nanoseconds) and otherwise the smallest power of 10, up to 1e9, that makes
+every bound an integer (1e9, with the bounds rounded, when none up to 1e9
+does); queries divide by it, so a quantile reads in the exporter's unit. A histogram query over series stored at different scales
+is an error that says so. A recording whose Prometheus series are named
+`..._nanoseconds` or `..._bytes` and carry `__prometheus_name__` holds them
+in nanoseconds or bytes under that name, and a query by the exporter's name
+does not find them. 5.x recorders stored a `_seconds` histogram's buckets in
+nanoseconds under the exporter's name, with no `unit` key, and a chart reads
+them as nanoseconds.
+
 With no `-o` the recording goes to `rezolus.dendro`. The output path must end in
 `.dendro`. rezolus 6.x writes no other format: an output ending in `.rez`,
 `.parquet` or `.raw` (or in anything else), a `--format` other than `dendro`,
@@ -155,8 +179,10 @@ When wrapping a command, rezolus passes its stdio straight through and exits
 with the command's own status, so `rezolus record -o bench.dendro -- ./bench.sh &&
 analyze bench.dendro` gates on the benchmark. Two substitutions: the
 `--duration` cap exits 124 if it kills the command, and a recording failure
-(an endpoint refused mid-run, a write error) exits 1 whatever the command
-returned.
+(a write error, an archive that could not be saved, or nothing recorded)
+exits 1 whatever the command returned. An endpoint lost during the run (refused, or one whose rows
+could not be recorded) is named at the end and does not change the exit
+status.
 
 A wrapped run is also marked in the recording: a `run_start` event when the
 command spawns and a `run_end` event when its exit is observed, named by the
@@ -166,13 +192,13 @@ may not want in a file you share.
 
 ### Tagging a recording
 
-`-m/--metadata k=v` writes metadata on every recording in the archive. A key
-set this way outranks the value the producer reports, including a Prometheus
-endpoint's HELP text as `descriptions`, and is kept when an agent restarts.
-`producer_epoch` and `producer_epochs` are written by the recorder and are
-refused (exit 2).
-`-l/--label k=v` tags the recordings inside the archive (`source` and `host` are
-filled in for you), every recording of the run alike:
+`-m/--metadata k=v` writes metadata on every recording in the archive. A
+metadata key set this way outranks the value the producer reports, including
+a Prometheus endpoint's HELP text as `descriptions`, and is kept when an agent
+restarts. `producer_epoch`, `producer_epochs`, keys under `metriken.`,
+`encoder` and `writer_sessions` are refused (exit 2).
+`-l/--label k=v` tags the recordings inside the archive (`host` and `endpoint`
+are added for you), every recording of the run alike:
 
 ```bash
 rezolus record --url http://localhost:4241 -o out.dendro --label run=42
@@ -194,26 +220,38 @@ as a single capture.
 run it cannot tell two endpoints apart — see below. An endpoint's `role=`
 modifier is kept as the `role` key of that endpoint's recording metadata.
 
-A recording's `source` is the first of: `source=` on its `--endpoint` (or
-`--metadata source=` with `--url`); the `source` label in its stream
-handshake; `rezolus` for a Rezolus agent; a name made from the URL's host,
-port and path, with a warning. The rest of its labels are `--label`, over
-`host` from a Rezolus agent's `/systeminfo`, over the handshake's labels. Its
-metadata is its `--endpoint`'s `role=` and `template=` (as `role` and
-`service_queries`), over `--metadata`, over the keys the recorder writes
-(`sampling_interval_ms`, `producer_epoch`), over a Rezolus agent's `version`,
-`systeminfo` and `descriptions`, over the handshake's metadata; a
-per-endpoint key beats the run-wide `--metadata`. A
-producer that names itself and its version in its handshake is therefore
-recorded under that name, with that version, and needs no `source=`:
+A recording's labels are the user's (`--label`, and `alias=`, `tier=`,
+`service_kind=`, `arm=` and `host=` on its `--endpoint`), over the labels in
+its producer's stream handshake, over what the recorder observed: `endpoint`,
+the URL it recorded from, and `host` from a Rezolus agent's `/systeminfo`.
+`alias=` names the recording; `source=` is its deprecated spelling and is
+read as `alias=` (as are `--metadata source=` with `--url` and `--label
+source=`), and a `source=` and an `alias=` that disagree are refused.
+`tier=` labels the endpoint's role in a benchmark (`client`, `server`), and
+`service_kind=` the role its producer runs in (`prefill`), which refines the
+KPI template it takes. A recording has a `source` label only when its
+producer declares one; the recorder infers none, and warns about an endpoint
+that has neither an alias nor a `source`. A producer that declares its
+identity in its handshake (a Rezolus agent does) also gives the recording `host` and
+`__producer__`, which the viewer reads to show the built-in sections or find
+a KPI template. Its metadata is its `--endpoint`'s `role=` (and `template=`
+with `template_override=true`), over `--metadata`, over the handshake's
+metadata, over what the recorder wrote: `template=` (as `service_queries`),
+`sampling_interval_ms`, `transport`, and a Rezolus agent's `version`,
+`systeminfo` and `descriptions`. A per-endpoint key beats the run-wide
+`--metadata`. Each
+recording keeps these as identity layers, which `recording metadata` and the
+viewer's information panel read; the producer's epochs are entries in its
+recorder layer. A producer that sends its `source` and version in its
+handshake is therefore recorded under that name, with that version:
 
 ```bash
 rezolus record --url http://loadgen:9090 -o run.dendro   # source and version from its handshake
 ```
 
 When a Rezolus agent's metadata routes do not answer within the timeout, its
-recording is added with its handshake's labels and metadata only (no `host`
-label), and a warning says so.
+recording is added without what they give (`systeminfo`, `descriptions`, and
+the `host` from `/systeminfo`), and a warning says so.
 
 ### KPI templates
 
@@ -226,7 +264,7 @@ releases). A scraped Prometheus endpoint has no handshake, so name a
 template file on its `--endpoint`:
 
 ```bash
-rezolus record --endpoint http://gpu-01:8000/metrics,source=vllm,template=vllm.json -o run.dendro
+rezolus record --endpoint http://gpu-01:8000/metrics,alias=vllm,template=vllm.json -o run.dendro
 ```
 
 In a `--config` file the same key is `template = "vllm.json"` in the
@@ -238,12 +276,23 @@ checked before the recording starts: one that cannot be read, is larger than
 know refuses the run (exit 2) and writes nothing, as `recording annotate
 --queries` refuses it. The file is stored as written.
 
-A template's queries select by `source` (`{source="vllm"}`), so give the
-endpoint the `source=` its template names. On a streamed endpoint `template=`
-replaces the template the producer sends, since the user's metadata outranks
-the handshake's, and the recorder logs a line saying so when it sees that
-handshake at startup. It also replaces a `--metadata service_queries=` value,
-which applies to every recording.
+The viewer and `recording check` evaluate a template's queries against its
+endpoint's recording only, so a query need not select by `source`; the
+templates rezolus ships do not. On a streamed endpoint whose producer sends
+its own template, the producer's is used: `template=` is a default, written
+in the recording's recorder layer, beneath the producer's. The recorder logs
+a warning saying so when it sees that handshake at startup. To use the file
+over the producer's template, add `template_override=true`:
+
+```bash
+rezolus record --endpoint http://loadgen:9090,template=mine.json,template_override=true -o run.dendro
+```
+
+In a config file the key is `template_override = true`. The switch writes the
+file in the recording's user layer. It is refused without `template=`, and
+any value other than `true` or `false` is refused. Either way, `template=`
+replaces a `--metadata service_queries=` value, which applies to every
+recording, for that endpoint.
 
 The templates rezolus ships in `crates/dashboard/templates/` (cachecannon,
 llm-perf, vLLM, SGLang, Valkey and others) are a fallback: the viewer uses one
@@ -267,10 +316,15 @@ An archive of several recordings from one run opens in the viewer as one
 combined view: every series carries its recording's labels (`source`, `host`,
 `--label`s), a template renders once per recording that carries it (two agents
 show the built-in sections once per host, the second host's at routes ending
-in `@<host>`), and every query in a recording's sections is restricted to that
-recording's series by those labels. `rezolus view fleet.dendro --baseline
-host=web-01 --experiment host=web-02` opens the same archive as an A/B
-comparison. A/B is opt-in, never inferred from when recordings were taken:
+in `@<host>`), and every chart in a recording's sections reads only that
+recording's sources (an Overview chart normalized by a service's throughput
+also reads that service's recording). An expanded chart
+(`#/<section>/chart/<id>`) lists those sources' uuids under Scope, below its
+query: edit the list to read other sources, or Remove it to read every
+recording. The edit applies to that view only: it is not written to the URL,
+and the section's chart keeps its own scope. `rezolus view fleet.dendro
+--baseline host=web-01 --experiment host=web-02` opens the same archive as an
+A/B comparison. A/B is opt-in, never inferred from when recordings were taken:
 recordings that carry an `arm` label open as a comparison, so a concurrent
 A/B run records with intent,
 `--endpoint http://a:4241,arm=baseline --endpoint http://b:4241,arm=experiment`
@@ -286,17 +340,17 @@ recording's overview.
 Concurrent captures share the same time period; captures taken sequentially
 can also differ in background load, not just the experimental change.
 
-Each recording is identified by its label set. For a Rezolus endpoint, `host`
-is filled in from the
-agent's system info and `source` from the endpoint's `source=` modifier, so two
-agents on *different* hosts are already distinguishable. Two on the **same**
-host are not — and `--label` cannot separate them, because it applies to every
-recording alike. Give each endpoint its own `source=`:
+Each recording is identified by its label set. Every recording carries the
+`endpoint` it was recorded from, and a Rezolus agent's carries its `host`, so
+two endpoints of one run are already distinguishable; `--label` applies to
+every recording alike and cannot name one. `alias=` on each endpoint names
+it, and leaves the `source` its producer declares, which an older
+cachecannon's or llm-perf's KPI template selects:
 
 ```bash
 rezolus record \
-  --endpoint http://localhost:4241,source=redis \
-  --endpoint http://localhost:4242,source=valkey \
+  --endpoint http://localhost:4241,alias=redis \
+  --endpoint http://localhost:4242,alias=valkey \
   -o ab.dendro
 ```
 
@@ -364,7 +418,7 @@ recording:
 
 ```bash
 rezolus record --url http://localhost:4241 -o run.dendro
-rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro
+rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,alias=svc -o run.dendro
 ```
 
 There is no scrape path for a Rezolus agent. An agent that cannot serve the
@@ -374,8 +428,11 @@ the path, or answers 401 or 403), or one whose handshake does not decode (a
 replication protocol version mismatch names both versions) — is refused with
 its version. At startup the run is refused (exit 1) before the archive is
 created. An agent that comes up later and is refused is left out: the other
-endpoints keep recording, the archive is finalized, and the run exits 1. When
-every endpoint has been refused, the run ends there. At the end each refused
+endpoints keep recording, the archive is finalized, and the exit status does
+not change. When
+no endpoint is left recording, a run with neither `--duration` nor a wrapped
+command ends there; a `--duration` run or a wrapped command runs on to its
+own end. At the end each refused
 endpoint gets its own line, saying from when the archive has no rows for it.
 Every refusal points at a rezolus 5.x recorder, which scrapes such an agent;
 convert its `.rez` afterwards if you want a `.dendro`, or upgrade the agent:
@@ -406,8 +463,8 @@ produces no frame for the interval the agent serves plus the scrape timeout
 are lost, as a failed scrape's are. An agent that comes back unable to serve
 the stream (a 404, a wrong content type, a handshake that does not decode) is
 refused as a late agent is: its recording stops with the rows it had and is
-finalized, it is not retried, the other endpoints keep recording, and the run
-exits 1. A streamed endpoint is never switched to scraping.
+finalized, it is not retried, the other endpoints keep recording, and the exit
+status does not change. A streamed endpoint is never switched to scraping.
 
 A wrapped command (`-- <command>`) that exits on its own is followed by a wait
 for each agent's frame stamped at or after the exit, at most one interval plus
@@ -598,7 +655,8 @@ bar is then rewritten to include them (a remembered compare anchor, for
 one), so a copied link carries the effective view. Granularity, pinned
 percentiles and the heatmap toggle are not carried. A value the recording
 cannot satisfy (a node it does not have, a range outside it, `from`/`to` in
-live mode, a cgroup it does not have on the cgroups section) is dropped
+live mode, a cgroup it does not have on the cgroups section, or in compare
+mode a cgroup no capture has) is dropped
 with a warning in the browser console and the link is rewritten without
 it. An expanded cgroup chart does not check its `cgroup` keys: a cgroup the
 recording lacks draws nothing. A granularity change
@@ -638,6 +696,20 @@ tarballs 5.x wrote, which every other subcommand refuses with that command.
 - **Snapshot** — copy an archive that is still being written consistently,
   including committed data in SQLite's sidecar, into a `.dendro`. Prefer this
   over copying an active file with `cp`.
+
+On a recording with identity layers, `annotate --queries` (also spelled
+`--template`) and `--systeminfo` append one user-layer entry by `annotate`:
+the template is used over the one the recording's producer sent, which stays
+in the producer layer. `--undo` removes the templates annotate set: the
+template `record` wrote with `template_override=true`, if any, is used
+again, else the producer's, else the recorder's `template=` default. A
+producer's template cannot be removed from a layered recording; annotate a
+template whose `kpis` is `[]` in its place, or open the recording with
+`rezolus view --registry-templates`, which renders the registry's template
+for a source the registry knows. On a recording without layers they set
+and remove the metadata keys themselves.
+`--add-events` and `--event` write the `events` key, which is outside the
+layers, either way.
 
 `annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
 copy, given `-o`). A recording read from several sources (a recording and its snapshot,
@@ -691,6 +763,7 @@ embeds, so the recording carries what it is judged against. A complete file:
       "title": "p99 request latency",
       "query": "request_latency_seconds",
       "type": "histogram",
+      "unit_system": "time",
       "check": {"above": 0.25, "quantile": 0.99, "for": "10s", "severity": "fail"}
     },
     {
@@ -711,8 +784,17 @@ embeds, so the recording carries what it is judged against. A complete file:
 }
 ```
 
-The file: `service_name` is required; `aliases` (other `source` names this
-template matches) and `service_metadata` are optional. Each KPI needs `role`
+The file: `service_name` is required; `producer`, `service_kind`, `aliases`
+(other `source` names this template matches) and `service_metadata` are
+optional. `producer` names the program whose recordings the template reads
+(`service_name` when absent), and `service_kind` the role it is for when
+that program runs in several: the built-in `vllm-prefill` template has
+`"producer": "vllm"` and `"service_kind": "prefill"`. `view --category NAME`
+compares two recordings through a category template (`"category": true`),
+whose `members` name producers or registry templates (by name or alias),
+and which takes one recording from each side; the built-in
+`inference-library` has `vllm` and `sglang`, so it takes a `vllm-prefill`
+recording as the `vllm` member. Each KPI needs `role`
 (any word; it groups charts on the dashboard), `title` (keep it unique within
 the file, since it names the check in the output and in events), `query`
 (PromQL) and `type`, one of `gauge`, `histogram` or a counter kind
@@ -721,13 +803,20 @@ evaluated as written. `description`, `unit_system`, `subtype`, `percentiles`,
 `subgroup`, `subgroup_description`, `full_width`, `denominator` and `check`
 are optional. A KPI without `check` is a chart only. `unit_system` is one of
 `time`, `bytes`, `bitrate`, `datarate`, `percentage`, `frequency`, `power`,
-`count` or `rate`; `recording annotate` refuses any other.
+`count`, `rate`, `temperature` or `cores`; `recording annotate` refuses
+any other. A `gauge` or `histogram` KPI whose `query` is a bare selector
+(`name` or `name{...}`) is charted in the unit its series are stored in, so
+a Prometheus `_seconds` histogram with `unit_system: time` reads as
+seconds.
 
 The check:
 
 - Exactly one of `above` / `below` is the threshold, compared in the query's
   own unit (seconds for the histogram above, requests per second for the
   rate). The comparison is strict: a value equal to the threshold passes.
+  A Prometheus `_seconds` histogram is stored in seconds, so 0.25 s is
+  `0.25`. A 5.x recording stored its buckets in nanoseconds, where 0.25 s is
+  `250000000`.
 - `for` is the shortest run that counts (default `0s`, so one point is
   enough). Accepted forms: `500ms`, `10s`, `1m30s`, `2h`, `1d`, `1.5s`, or a
   bare number of seconds.
@@ -827,7 +916,7 @@ a stdio MCP server or as one-shot CLI commands.
 
 ```bash
 rezolus mcp install                                    # user scope: every project
-rezolus mcp install --scope project --export-dir ./exports   # this directory's .mcp.json
+rezolus mcp install --scope project                    # this directory's .mcp.json
 rezolus mcp install --dry-run                          # say what would be done
 ```
 
@@ -838,8 +927,8 @@ recording and its metrics before querying, extract features before forming
 hypotheses, the recording selector, and what to write back. In Claude Code,
 `/mcp` lists the server and `/rezolus-mcp` loads the skill; `claude mcp list`
 checks the connection from a shell. Re-running replaces the entry, which is
-how the server's flags (`--allow-mutating`, `--export-dir`, `--viewer-url`,
-all accepted by `install`) are changed. Without `claude` on `PATH`, project
+how the server's flags (`--allow-mutating` and `--viewer-url`, both accepted
+by `install`) are changed. Without `claude` on `PATH`, project
 scope writes `.mcp.json` directly and user scope prints the command to run.
 A skill file that is not this skill, or a symlink, is never overwritten.
 Claude Code resolves a server name local, then project, then user; when
@@ -851,7 +940,32 @@ Code the first time it opens in that directory.
 rezolus mcp                                                  # stdio server
 rezolus mcp detect-anomalies run.dendro              # anomaly detection
 rezolus mcp query run.dendro "sum(irate(cpu_cycles[1m]))"
+rezolus mcp query run.dendro "sum(irate(blockio_bytes[1m]))" \
+    --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --above 5e8
 ```
+
+A query is evaluated at the multiples of the step from `--start` to `--end`
+(Unix seconds or RFC 3339, the end included); by default every second of the
+recording, or a coarser whole-second step on a recording of more than a
+million seconds. A query combining samplers of different cadence is evaluated
+at the slower one's rows instead, and `histogram_quantile()` and the other
+histogram functions without a stride argument give one point per row that
+holds observations, wherever the step falls (a gauge histogram gives one per
+step; `histogram_quantiles([q], h, STEP)` gives one per step). No point after
+the recording's last row is returned. A `rate()` or `irate()` at the end over a
+sampler whose rows are further apart than 120 s (or two of the recording's
+finest row interval, when that is longer; or a million steps, when that is
+shorter) is computed without its next row. `--step` takes seconds or humantime such as `10s`. `irate()` is the
+rate over one step, so a larger step also averages over a longer interval.
+Each series prints min, max, mean, p50, p90 and p99 over its points that are
+not NaN (nearest rank); `--above VALUE` computes them over the points strictly above VALUE, and
+prints how many there were.
+
+The MCP `query` tool takes `start` and `end` (an RFC 3339 string or Unix
+seconds as a JSON number) and `step` (a humantime string or seconds as a JSON
+number). It returns every point unless `summarize` is true, when it returns
+those statistics per series instead, over the points above `above` when that
+is given.
 
 `extract-features` distills a whole recording into one deterministic, versioned
 JSON record — the structured input for an AI-assisted bottleneck assessment,
@@ -893,21 +1007,6 @@ an event.
   as `queries`, and returns every verdict with its violation windows and a
   summary. With `annotate: true` the windows are written into the recording
   as `kind=check` events, exactly as `rezolus recording check --annotate`.
-- `export_query` runs a PromQL range query over the whole recording and
-  writes the rows as CSV (default) or parquet, long form: one row per series
-  and timestamp with columns `series`, `timestamp` (Unix seconds), `value`,
-  `lo`, `hi` (the `rate()` uncertainty band, else empty). It is the way out
-  of PromQL: the agent gets rows it can load into whatever it has. Files
-  land only under the directory the server was started with, under a bare
-  `filename` (or one derived from the query), never over an existing file,
-  and never through a symlink planted there. A result over a million rows is
-  refused with the count and a hint to raise `step` or aggregate:
-
-  ```bash
-  rezolus mcp --export-dir /tmp/rezolus-exports
-  ```
-
-  Without the flag the tool refuses every call, naming it.
 - `viewer_link` builds a link that opens a running viewer at a `section` (or
   one `chart_id`) with the view state set: `from`/`to`, `time`, `node`,
   `gpu`, `cgroup`, `instance`, `family` and compare `anchors`, the same keys
@@ -956,10 +1055,10 @@ what the archive holds and the flag that picks each one:
 ```
 $ rezolus mcp describe-recording ab.dendro
 ab.dendro holds 2 recordings with data (a multi-host or A/B archive):
-  - host=web-01, source=redis (position 0)
-    select with: --recording source=redis
-  - host=web-01, source=valkey (position 1)
-    select with: --recording source=valkey
+  - alias=redis, host=web-01 (position 0)
+    select with: --recording alias=redis
+  - alias=valkey, host=web-01 (position 1)
+    select with: --recording alias=valkey
 
 Run any tool with one of the selectors above to analyze that recording.
 ```
@@ -968,14 +1067,14 @@ Then pass `--recording key=value` (repeatable, ANDed) to any of the six
 subcommands to analyze that one recording:
 
 ```bash
-rezolus mcp query ab.dendro "sum(irate(cpu_cycles[1m]))" --recording source=valkey
+rezolus mcp query ab.dendro "sum(irate(cpu_cycles[1m]))" --recording alias=valkey
 ```
 
 A selector must name exactly one recording: matching none or several is an
 error that lists the candidates, never a guess at which one you meant. The
 stdio server's tools, read and write alike, take the same selector as an
 optional `recording` object instead of repeated flags, e.g.
-`{"source": "valkey"}`.
+`{"alias": "valkey"}`.
 
 
 ## HTTP endpoint (optional)
@@ -1039,8 +1138,8 @@ into `capture.dendro` in the output directory (`--output-dir`, default `.`),
 and launches the viewer on it. Its default agent config is
 `config/agent.toml`; use `--agent-config` if you run it elsewhere. For service
 metrics, pass paired `--endpoint` and `--source` flags: each endpoint becomes
-its own recording in the archive, labelled `source=<NAME>`, beside the agent's
-`source=rezolus`. `--command` records for the lifetime of the command
+its own recording in the archive, labelled `alias=<NAME>`, beside the agent's
+`alias=rezolus`. `--command` records for the lifetime of the command
 (`rezolus record -- <command>`), and `--pid` until that process exits. Run
 `scripts/rezolus-capture --help` for its full options.
 

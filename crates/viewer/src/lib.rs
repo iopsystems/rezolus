@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use metriken_query::{MetricsSource, QueryOptions};
+use metriken_query::MetricsSource;
 use metriken_storage::BufferPool;
 
 /// Buffer pool budget for the WASM viewer: 64 MB.
 ///
-/// Browsers impose tighter heap limits than servers; the source bytes
-/// are already in memory, so the effective warm-cache speedup is bounded
-/// by how many row groups fit alongside them. 64 MB is a conservative
-/// default — enough for a moderate recording without crowding the JS heap.
+/// Browsers impose tighter heap limits than servers; the source bytes are already in memory, so
+/// the effective warm-cache speedup is bounded by how many opened segments and decoded blocks fit
+/// in the budget. A segment that does not fit in the budget beside the blocks one series decodes
+/// from it is opened again for each series. 64 MB is a conservative default, enough for a moderate
+/// recording without crowding the JS heap.
 const WASM_CACHE_SIZE_BYTES: usize = 64 * 1024 * 1024;
 use dashboard::keys::{KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SYSTEMINFO};
 use dashboard::source_templates::TemplatePreference;
@@ -215,7 +216,7 @@ fn incomplete_notice(
          ticks after that are not in this file. If it was copied while a recorder still held \
          it, the copy is also missing whatever was still in SQLite's `-wal` sidecar — a \
          separate file that does not travel with an upload. `rezolus recording snapshot \
-         <archive> -o out.rez` takes a complete copy without stopping the recorder."
+         <archive> -o out.dendro` takes a complete copy without stopping the recorder."
     ))
 }
 
@@ -363,6 +364,9 @@ impl Viewer {
                     labels.clone(),
                     dashboard::combined::Header::of(reader),
                     reader.file_metadata(),
+                    dashboard::combined::source_uuids(
+                        reader.sources().iter().map(|s| s.uuid.clone()),
+                    ),
                 )
             })
             .collect();
@@ -381,7 +385,9 @@ impl Viewer {
             parts
                 .into_iter()
                 .zip(series)
-                .map(|((l, header, metadata), series)| (l, series, header, metadata))
+                .map(|((l, header, metadata, sources), series)| {
+                    (l, series, header, metadata, sources)
+                })
                 .collect(),
         );
         let reader = Arc::new(reader);
@@ -660,7 +666,9 @@ impl Viewer {
 
     /// Execute a PromQL range query. Returns JSON compatible with
     /// /api/v1/query_range response format. `rate_mode` is `"raw"` or (default)
-    /// grid — see `dashboard::display_wire::parse_rate_mode`.
+    /// grid, and `scope` the uuids of the sources read (`None`, from JS
+    /// `null` or `undefined`, for every source) — see
+    /// `dashboard::display_wire::query_options`.
     pub fn query_range(
         &self,
         query: &str,
@@ -668,9 +676,16 @@ impl Viewer {
         end: f64,
         step: f64,
         rate_mode: &str,
+        scope: Option<String>,
     ) -> String {
-        let qopts =
-            QueryOptions::with_rate_mode(dashboard::display_wire::parse_rate_mode(Some(rate_mode)));
+        let qopts = match dashboard::display_wire::query_options(Some(rate_mode), scope.as_deref())
+        {
+            Ok(qopts) => qopts,
+            Err(e) => {
+                let msg = format!("invalid scope: {e}").replace('"', "\\\"");
+                return format!(r#"{{"status":"error","error":"{}"}}"#, msg);
+            }
+        };
         match self
             .reader
             .query_range_opts(query, start, end, step, &qopts)
@@ -696,7 +711,8 @@ impl Viewer {
     /// can differ in the last bits) so the shared frontend decodes it the same
     /// way. A non-series result (scalar/vector) is
     /// surfaced as an error so the frontend falls back to the JSON query path,
-    /// matching the server. `band` is `"lo,hi"` (empty → interquartile default).
+    /// matching the server. `band` is `"lo,hi"` (empty → interquartile default),
+    /// and `scope` as for [`Self::query_range`].
     #[allow(clippy::too_many_arguments)]
     pub fn query_range_display(
         &self,
@@ -707,9 +723,11 @@ impl Viewer {
         points: usize,
         band: &str,
         rate_mode: &str,
+        scope: Option<String>,
     ) -> Result<Vec<u8>, JsValue> {
         let band = dashboard::display_wire::parse_band(Some(band));
-        let rate_mode = dashboard::display_wire::parse_rate_mode(Some(rate_mode));
+        let qopts = dashboard::display_wire::query_options(Some(rate_mode), scope.as_deref())
+            .map_err(|e| JsValue::from_str(&format!("invalid scope: {e}")))?;
         match dashboard::display_wire::display_query(
             self.reader.as_ref(),
             query,
@@ -718,7 +736,7 @@ impl Viewer {
             step,
             points,
             band,
-            rate_mode,
+            &qopts,
         ) {
             Ok(dashboard::display_wire::DisplayWire::Binary(buf)) => Ok(buf),
             Ok(dashboard::display_wire::DisplayWire::Json(_)) => Err(JsValue::from_str(
@@ -816,10 +834,10 @@ impl Viewer {
     /// the `source` key), through the lookup the server viewer uses (`dashboard::source_templates::resolve_source_templates`).
     /// Returns the extensions and the lookup's notices.
     ///
-    /// Category membership for compare-mode follows from the detected source
-    /// names (e.g. a parquet whose `per_source_metadata` contains `vllm` is
-    /// what makes a capture the vllm member of the inference-library
-    /// category). The user-facing legend / display alias is plumbed
+    /// Category membership follows from each capture's source and template
+    /// (`CategoryExtension::member`): a capture whose template is for `vllm`,
+    /// `vllm-prefill` included, is the `vllm` member of the
+    /// inference-library category. The user-facing legend / display alias is plumbed
     /// separately via `Viewer::set_alias` and never influences which template
     /// a capture binds to.
     fn detect_and_validate_service_exts(
@@ -836,7 +854,7 @@ impl Viewer {
 
         // Validate against this capture's own reader so per-capture
         // unavailability is correctly reported.
-        validate_service_extensions_inline(self.reader.as_ref(), &mut service_exts);
+        dashboard::dashboard::validate_service_extensions(self.reader.as_ref(), &mut service_exts);
         (service_exts, resolved.notices)
     }
 
@@ -1302,6 +1320,7 @@ impl WasmCaptureRegistry {
         self.slot(capture).map(|v| v.file_metadata_json())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn query_range(
         &self,
         capture: &str,
@@ -1310,9 +1329,10 @@ impl WasmCaptureRegistry {
         end: f64,
         step: f64,
         rate_mode: &str,
+        scope: Option<String>,
     ) -> Result<String, JsValue> {
         self.require_slot(capture)
-            .map(|v| v.query_range(query, start, end, step, rate_mode))
+            .map(|v| v.query_range(query, start, end, step, rate_mode, scope))
     }
 
     pub fn query(&self, capture: &str, query: &str, time: f64) -> Result<String, JsValue> {
@@ -1330,9 +1350,11 @@ impl WasmCaptureRegistry {
         points: usize,
         band: &str,
         rate_mode: &str,
+        scope: Option<String>,
     ) -> Result<Vec<u8>, JsValue> {
-        self.require_slot(capture)
-            .and_then(|v| v.query_range_display(query, start, end, step, points, band, rate_mode))
+        self.require_slot(capture).and_then(|v| {
+            v.query_range_display(query, start, end, step, points, band, rate_mode, scope)
+        })
     }
 
     /// Initialise ServiceExtension templates for the given capture.  Mirrors
@@ -1371,10 +1393,10 @@ impl WasmCaptureRegistry {
     /// in the experiment slot too — otherwise the experiment fetch
     /// 404s and the chart surfaces "Error: null".
     ///
-    /// `category_name` activates category mode when each detected
-    /// source appears in the category template's `members` list. When
-    /// the membership check fails (or the category template isn't
-    /// found), category mode is silently skipped and the captures
+    /// `category_name` activates category mode when the category admits
+    /// the two captures' templates (`CategoryExtension::admits`: one from
+    /// each, each matching a member). When the check fails (or the
+    /// category template isn't found), category mode is silently skipped and the captures
     /// render as per-member sections — same fall-back shape the server
     /// runtime uses. A None category is treated as plain per-member
     /// compare mode (no bridging).
@@ -1415,6 +1437,17 @@ impl WasmCaptureRegistry {
             .map(|v| v.detect_and_validate_service_exts(&registry, preference))
             .unwrap_or_default();
 
+        // Fall back to per-member rendering when the requested category
+        // doesn't activate cleanly — same shape as the server runtime's
+        // `lookup_category`. The user perceives this as "two per-member
+        // sections instead of one combined section," which is a less
+        // surprising failure mode than a hard error from the bootstrap.
+        let category = category_name
+            .as_deref()
+            .and_then(|name| registry.get_category(name))
+            .filter(|cat| cat.admits(&baseline_exts, &experiment_exts).is_ok())
+            .map(|cat| (cat.service_name.as_str(), cat));
+
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
         service_exts.extend(baseline_exts);
         service_exts.extend(experiment_exts);
@@ -1433,26 +1466,6 @@ impl WasmCaptureRegistry {
             .as_ref()
             .map(|b| classify_sources(b.reader.as_ref(), &b.file_metadata, &service_names))
             .unwrap_or_default();
-
-        // Fall back to per-member rendering when the requested category
-        // doesn't activate cleanly — same shape as the server runtime's
-        // `lookup_category`. The user perceives this as "two per-member
-        // sections instead of one combined section," which is a less
-        // surprising failure mode than a hard error from the bootstrap.
-        let category = match category_name.as_deref() {
-            Some(name) => match registry.get_category(name) {
-                Some(cat)
-                    if service_refs.len() == 2
-                        && service_refs
-                            .iter()
-                            .all(|(source, _)| cat.members.iter().any(|m| m == source)) =>
-                {
-                    Some((cat.service_name.as_str(), cat))
-                }
-                _ => None,
-            },
-            None => None,
-        };
 
         // Trimmed reports — if either slot carries the marker — collapse
         // both contexts to empty so the frontend lands on /report.
@@ -1719,31 +1732,6 @@ fn parse_template_registry(
         }
     }
     Ok(registry)
-}
-
-/// Validate KPI availability for service extensions by running each KPI's
-/// PromQL query against the data source.
-fn validate_service_extensions_inline(
-    data: &dyn MetricsSource,
-    exts: &mut [(String, dashboard::ServiceExtension)],
-) {
-    use metriken_query::QueryResult;
-    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
-    for (_source, ext) in exts.iter_mut() {
-        for kpi in &mut ext.kpis {
-            let query = kpi.effective_query();
-            let has_data = match data.query_range(&query, start, end, 1.0) {
-                Ok(result) => match &result {
-                    QueryResult::Vector { result } => !result.is_empty(),
-                    QueryResult::Matrix { result } => !result.is_empty(),
-                    QueryResult::Scalar { .. } => true,
-                    QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
-                },
-                Err(_) => false,
-            };
-            kpi.available = has_data;
-        }
-    }
 }
 
 /// Enrich a file-metadata JSON map with pre-computed multi-node info.
@@ -2221,8 +2209,8 @@ mod tests {
 
     /// An archive of two hosts of one run, from either entry point, is one
     /// combined capture: the built-in sections once per host, the second
-    /// host's routes keyed `@h2`, each section's queries restricted to its
-    /// host. `set_compare_requested` attaches it as a comparison instead.
+    /// host's routes keyed `@h2`, each section's plots scoped to its host's
+    /// sources. `set_compare_requested` attaches it as a comparison instead.
     #[test]
     fn a_one_run_archive_is_one_combined_capture() {
         use rez::fixtures::{Recording, one_run};
@@ -2263,13 +2251,93 @@ mod tests {
             );
             assert_eq!(routes.iter().filter(|r| **r == "/query").count(), 1);
         }
+        // A query's scope (its sources' uuids) reads only those sources, on
+        // the range and the display path; without one it reads every
+        // recording.
+        let recordings = rez::reader::RezReader::open_recordings_from_bytes(
+            bytes.clone(),
+            BufferPool::new(16 << 20),
+        )
+        .unwrap();
+        let h2: Vec<String> = recordings
+            .iter()
+            .find(|(labels, _)| labels.get("host").map(String::as_str) == Some("h2"))
+            .map(|(_, r)| r.sources().iter().filter_map(|s| s.uuid.clone()).collect())
+            .unwrap();
+        assert!(!h2.is_empty());
+        let (start, end) = single.reader.time_range().unwrap();
+        let hosts = |scope: Option<&str>| -> Vec<String> {
+            let got = reg
+                .query_range(
+                    "baseline",
+                    "cpu_cores",
+                    start,
+                    end,
+                    1.0,
+                    "grid",
+                    scope.map(str::to_string),
+                )
+                .unwrap();
+            let got: serde_json::Value = serde_json::from_str(&got).unwrap();
+            let mut hosts: Vec<String> = got["data"]["result"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{got}"))
+                .iter()
+                .map(|s| s["metric"]["host"].as_str().unwrap().to_string())
+                .collect();
+            hosts.sort();
+            hosts
+        };
+        assert_eq!(hosts(None), ["h1", "h2"]);
+        assert_eq!(hosts(Some(&h2.join(","))), ["h2"]);
+        // A scope naming no source is refused, not read as every source.
+        let empty = reg
+            .query_range(
+                "baseline",
+                "cpu_cores",
+                start,
+                end,
+                1.0,
+                "grid",
+                Some(String::new()),
+            )
+            .unwrap();
+        assert!(empty.contains(r#""status":"error""#), "{empty}");
+        // The display body's header lists its series.
+        let display_hosts = |scope: Option<&str>| -> Vec<String> {
+            let body = reg
+                .query_range_display(
+                    "baseline",
+                    "cpu_cores",
+                    start,
+                    end,
+                    1.0,
+                    100,
+                    "",
+                    "grid",
+                    scope.map(str::to_string),
+                )
+                .unwrap();
+            let len = u32::from_le_bytes(body[..4].try_into().unwrap()) as usize;
+            let header: serde_json::Value = serde_json::from_slice(&body[4..4 + len]).unwrap();
+            let mut hosts: Vec<String> = header["series"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{header}"))
+                .iter()
+                .map(|s| s["metric"]["host"].as_str().unwrap().to_string())
+                .collect();
+            hosts.sort();
+            hosts
+        };
+        assert_eq!(display_hosts(None), ["h1", "h2"]);
+        assert_eq!(display_hosts(Some(&h2.join(","))), ["h2"]);
+
         let cpu: serde_json::Value =
             serde_json::from_str(&reg.get_section("baseline", "cpu@h2").unwrap()).unwrap();
-        assert_eq!(cpu["metadata"]["scope"][0]["value"], "h2");
-        assert!(
-            cpu.to_string().contains(r#"cpu_usage{host=\"h2\"}"#),
-            "{cpu}"
-        );
+        assert_eq!(cpu["metadata"]["scope"], serde_json::json!(h2));
+        let plot = &cpu["groups"][0]["subgroups"][0]["plots"][0];
+        assert_eq!(plot["scope"], serde_json::json!(h2), "{plot}");
+        assert!(!cpu.to_string().contains("host="), "{cpu}");
 
         let mut compare = WasmCaptureRegistry::new();
         compare.set_compare_requested(true);
@@ -2338,7 +2406,7 @@ mod tests {
         let (start, end) = beside[0].data.time_range().unwrap();
         let q = format!("irate(cpu_cycles{{__capture__=\"{}\"}}[2s])", beside[0].key);
         let got = reg
-            .query_range("baseline", &q, start, end, 1.0, "grid")
+            .query_range("baseline", &q, start, end, 1.0, "grid", None)
             .unwrap();
         assert!(got.contains("envoy"), "{got}");
     }
@@ -2764,6 +2832,19 @@ mod tests {
         let overview: serde_json::Value =
             serde_json::from_str(&reg.get_section("baseline", "overview").unwrap()).unwrap();
         assert!(overview["metadata"].get("template_error").is_none());
-        assert!(!overview["groups"].as_array().unwrap().is_empty());
+        let viewer = reg.slot("baseline").unwrap();
+        let sources = classify_sources(
+            viewer.reader.as_ref(),
+            &viewer.file_metadata,
+            &std::collections::HashSet::new(),
+        );
+        let want_ctx = dashboard::dashboard::build_dashboard_context(None, &[], None, &sources);
+        let mut want =
+            dashboard::dashboard::generate_section(viewer.reader.as_ref(), "/overview", &want_ctx)
+                .unwrap();
+        want.set_filename(viewer.reader.filename_or_default());
+        let mut want = serde_json::to_value(&want).unwrap();
+        strip_sections_from_section_body(&mut want);
+        assert_eq!(overview, want);
     }
 }

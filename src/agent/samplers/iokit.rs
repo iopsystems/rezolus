@@ -1,5 +1,6 @@
 //! Minimal IOKit and CoreFoundation bindings for the macOS samplers that read
-//! the I/O registry (`blockio`, `drivehealth`).
+//! the I/O registry (`blockio`, `drivehealth`, `network_traffic`,
+//! `cpu_frequency`, `cpu_power`, `hw_sensors`).
 //!
 //! Only what those samplers call is bound. Every owned registry object,
 //! CoreFoundation object and plugin interface is wrapped so it is released on
@@ -39,6 +40,12 @@ extern "C" {
         options: u32,
     ) -> CfTypeRef;
     fn IORegistryEntryGetRegistryEntryID(entry: IoObject, id: *mut u64) -> KernReturn;
+    fn IORegistryEntryGetParentEntry(
+        entry: IoObject,
+        plane: *const c_char,
+        parent: *mut IoObject,
+    ) -> KernReturn;
+    fn IOObjectConformsTo(object: IoObject, class_name: *const c_char) -> u32;
     fn IORegistryEntrySearchCFProperty(
         entry: IoObject,
         plane: *const c_char,
@@ -54,6 +61,32 @@ extern "C" {
         the_score: *mut i32,
     ) -> KernReturn;
     fn IODestroyPlugInInterface(interface: *mut *const IUnknownVtbl) -> KernReturn;
+    fn IORegistryEntryFromPath(main_port: u32, path: *const c_char) -> IoObject;
+    fn IORegistryEntryGetChildIterator(
+        entry: IoObject,
+        plane: *const c_char,
+        iterator: *mut IoObject,
+    ) -> KernReturn;
+    fn IOServiceOpen(
+        service: IoObject,
+        owning_task: u32,
+        kind: u32,
+        connect: *mut IoObject,
+    ) -> KernReturn;
+    fn IOServiceClose(connect: IoObject) -> KernReturn;
+    fn IOConnectCallStructMethod(
+        connection: IoObject,
+        selector: u32,
+        input: *const c_void,
+        input_size: usize,
+        output: *mut c_void,
+        output_size: *mut usize,
+    ) -> KernReturn;
+}
+
+extern "C" {
+    /// The task's own port, which the `mach_task_self()` macro reads.
+    static mach_task_self_: u32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -92,6 +125,9 @@ extern "C" {
         b15: u8,
     ) -> CfTypeRef;
     fn CFRelease(cf: CfTypeRef);
+    fn CFDataGetTypeID() -> usize;
+    fn CFDataGetLength(data: CfTypeRef) -> isize;
+    fn CFDataGetBytePtr(data: CfTypeRef) -> *const u8;
 }
 
 /// The text of a CFString, if `v` is one.
@@ -99,7 +135,7 @@ extern "C" {
 /// # Safety
 ///
 /// `v` must be null or a live CoreFoundation object.
-unsafe fn string_value(v: CfTypeRef) -> Option<String> {
+pub(crate) unsafe fn string_value(v: CfTypeRef) -> Option<String> {
     if v.is_null() || CFGetTypeID(v) != CFStringGetTypeID() {
         return None;
     }
@@ -149,6 +185,11 @@ impl CfString {
             CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), CF_STRING_ENCODING_UTF8)
         };
         (!r.is_null()).then(|| CfString(Owned(r)))
+    }
+
+    /// The CFString, for a CoreFoundation call made while `self` is alive.
+    pub(crate) fn as_ptr(&self) -> *const c_void {
+        self.0 .0
     }
 }
 
@@ -253,6 +294,113 @@ impl Service {
         (unsafe { CFGetTypeID(v.0) == CFDictionaryGetTypeID() }).then(|| CfDictionary(v))
     }
 
+    /// The property `key` of this entry, if it is a string of under 256
+    /// bytes.
+    pub(crate) fn string(&self, key: &CfString) -> Option<String> {
+        // SAFETY: as in `dictionary`.
+        let v = unsafe { IORegistryEntryCreateCFProperty(self.0, key.0 .0, std::ptr::null(), 0) };
+        if v.is_null() {
+            return None;
+        }
+        let v = Owned(v);
+        // SAFETY: `v.0` is a live CF object.
+        unsafe { string_value(v.0) }
+    }
+
+    /// The registry entry at `path`, such as `IODeviceTree:/cpus`.
+    pub(crate) fn from_path(path: &str) -> Option<Service> {
+        let c = CString::new(path).ok()?;
+        // SAFETY: `c` is NUL-terminated; the result is a +1 reference or 0.
+        let entry = unsafe { IORegistryEntryFromPath(MAIN_PORT_DEFAULT, c.as_ptr()) };
+        (entry != 0).then_some(Service(entry))
+    }
+
+    /// This entry's children in the device tree plane.
+    pub(crate) fn device_tree_children(&self) -> Option<Vec<Service>> {
+        let mut iter: IoObject = 0;
+        // SAFETY: `self.0` is a live entry, the plane name is NUL-terminated,
+        // and on success `iter` is a +1 iterator that `Service` takes over.
+        let kr =
+            unsafe { IORegistryEntryGetChildIterator(self.0, c"IODeviceTree".as_ptr(), &mut iter) };
+        if kr != KERN_SUCCESS || iter == 0 {
+            return None;
+        }
+        let iter = Service(iter);
+        let mut out = Vec::new();
+        loop {
+            // SAFETY: as in `matching`.
+            let s = unsafe { IOIteratorNext(iter.0) };
+            if s == 0 {
+                break;
+            }
+            out.push(Service(s));
+        }
+        Some(out)
+    }
+
+    /// The property `key` of this entry, if it is a CFData.
+    pub(crate) fn data(&self, key: &CfString) -> Option<Vec<u8>> {
+        // SAFETY: as in `dictionary`.
+        let v = unsafe { IORegistryEntryCreateCFProperty(self.0, key.0 .0, std::ptr::null(), 0) };
+        if v.is_null() {
+            return None;
+        }
+        let v = Owned(v);
+        // SAFETY: `v.0` is a live CF object; the bytes are borrowed from it
+        // and copied out while it is alive.
+        unsafe {
+            if CFGetTypeID(v.0) != CFDataGetTypeID() {
+                return None;
+            }
+            let len = usize::try_from(CFDataGetLength(v.0)).ok()?;
+            let ptr = CFDataGetBytePtr(v.0);
+            if ptr.is_null() {
+                return Some(Vec::new());
+            }
+            Some(std::slice::from_raw_parts(ptr, len).to_vec())
+        }
+    }
+
+    /// The property `key` of this entry, if it is a CFNumber.
+    pub(crate) fn number(&self, key: &CfString) -> Option<i64> {
+        // SAFETY: as in `dictionary`.
+        let v = unsafe { IORegistryEntryCreateCFProperty(self.0, key.0 .0, std::ptr::null(), 0) };
+        if v.is_null() {
+            return None;
+        }
+        let v = Owned(v);
+        let mut out: i64 = 0;
+        // SAFETY: `v.0` is a live CF object and `out` a valid out-pointer.
+        unsafe {
+            (CFGetTypeID(v.0) == CFNumberGetTypeID()
+                && CFNumberGetValue(
+                    v.0,
+                    CF_NUMBER_SINT64_TYPE,
+                    &mut out as *mut i64 as *mut c_void,
+                ) != 0)
+                .then_some(out)
+        }
+    }
+
+    /// This entry's first parent in the service plane, or `None` at the
+    /// root.
+    pub(crate) fn parent(&self) -> Option<Service> {
+        let mut parent: IoObject = 0;
+        // SAFETY: `self.0` is a live registry entry, the plane name is
+        // NUL-terminated, and on success `parent` is a +1 reference that
+        // `Service` takes over.
+        let kr =
+            unsafe { IORegistryEntryGetParentEntry(self.0, c"IOService".as_ptr(), &mut parent) };
+        (kr == KERN_SUCCESS && parent != 0).then_some(Service(parent))
+    }
+
+    /// True if this entry is an instance of IOKit class `class` or a
+    /// subclass of it.
+    pub(crate) fn conforms_to(&self, class: &std::ffi::CStr) -> bool {
+        // SAFETY: `self.0` is a live object and `class` is NUL-terminated.
+        unsafe { IOObjectConformsTo(self.0, class.as_ptr()) != 0 }
+    }
+
     /// The property `key` of this entry, if it is a boolean.
     pub(crate) fn boolean(&self, key: &CfString) -> Option<bool> {
         // SAFETY: as in `dictionary`.
@@ -263,6 +411,15 @@ impl Service {
         let v = Owned(v);
         // SAFETY: `v.0` is a live CF object.
         unsafe { (CFGetTypeID(v.0) == CFBooleanGetTypeID()).then(|| CFBooleanGetValue(v.0) != 0) }
+    }
+
+    /// Open a connection to this service's user client of type `kind`.
+    pub(crate) fn open(&self, kind: u32) -> Option<UserClient> {
+        let mut connect: IoObject = 0;
+        // SAFETY: `self.0` is a live service and `connect` a valid
+        // out-pointer; on success it is a connection `UserClient` closes.
+        let kr = unsafe { IOServiceOpen(self.0, mach_task_self_, kind, &mut connect) };
+        (kr == KERN_SUCCESS && connect != 0).then_some(UserClient(connect))
     }
 
     /// The first string property `key` found on this entry or its children
@@ -286,6 +443,51 @@ impl Service {
         let v = Owned(v);
         // SAFETY: `v.0` is a live CF object.
         unsafe { string_value(v.0) }
+    }
+}
+
+/// An open connection to a service's user client, closed on drop.
+pub(crate) struct UserClient(IoObject);
+
+// SAFETY: a connection is a Mach port name, which any thread of the task can
+// use.
+unsafe impl Send for UserClient {}
+
+impl UserClient {
+    /// Call struct method `selector` with `input`, writing the reply into
+    /// `output`. Returns false if the call fails or the reply is not
+    /// `size_of::<O>()` bytes.
+    ///
+    /// # Safety
+    ///
+    /// `I` and `O` must be `#[repr(C)]` types matching the layout the user
+    /// client expects for `selector`, and every byte pattern must be a valid
+    /// `O`.
+    pub(crate) unsafe fn call_struct<I, O>(
+        &self,
+        selector: u32,
+        input: &I,
+        output: &mut O,
+    ) -> bool {
+        let mut size = std::mem::size_of::<O>();
+        let kr = IOConnectCallStructMethod(
+            self.0,
+            selector,
+            input as *const I as *const c_void,
+            std::mem::size_of::<I>(),
+            output as *mut O as *mut c_void,
+            &mut size,
+        );
+        kr == KERN_SUCCESS && size == std::mem::size_of::<O>()
+    }
+}
+
+impl Drop for UserClient {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is a connection this wrapper opened, closed once.
+        unsafe {
+            IOServiceClose(self.0);
+        }
     }
 }
 

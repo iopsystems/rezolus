@@ -57,8 +57,8 @@ export const pinCompareMeta = (pageCompare, groupCompare, aliases) => {
 // views. An entry pinned from a recording beside a comparison does not: it
 // says so (`single_capture`), or, saved before that field existed, its
 // query names the recording (`__capture__="<key>"`). Nor does a cgroup chart
-// that draws cgroup groups (`cgroup_queries` with a labelled query): the
-// compare path runs one query per capture.
+// saved with a query per cgroup group (`cgroup_queries` with a labelled
+// query): the compare path runs one query per capture.
 export const pinnedCompares = (compareMode, entry, spec) =>
     !!compareMode && !!spec?.promql_query
     && entry?.single_capture !== true

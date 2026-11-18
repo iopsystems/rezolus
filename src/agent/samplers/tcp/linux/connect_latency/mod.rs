@@ -1,10 +1,12 @@
-//! Collects TCP packet latency stats using BPF and traces:
-//! * `tcp_v4_connect`, `tcp_v6_connect`, `tcp_rcv_state_process`
-//!   (fentry when the kernel has BTF, else kprobe)
+//! Collects TCP connect latency stats using BPF and traces:
+//! * `tcp_v4_connect`, `tcp_v6_connect` (fentry when the kernel has BTF, else
+//!   kprobe)
+//! * `inet_sock_set_state` (tp_btf when the tracepoint is in BTF, else raw_tp)
 //! * `tcp_destroy_sock`
 //!
 //! And produces these stats:
-//! * `tcp/connect_latency`
+//! * `tcp_connect_latency`, one histogram per `outcome`: established,
+//!   refused, timeout, error, aborted
 
 const NAME: &str = "tcp_connect_latency";
 
@@ -26,21 +28,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let bpf = BpfBuilder::new(
-        &config,
-        NAME,
-        BpfProgStats {
-            run_time: &BPF_RUN_TIME,
-            run_count: &BPF_RUN_COUNT,
-        },
-        ModSkelBuilder::default,
-    )
-    .histogram("latency", &TCP_CONNECT_LATENCY, &LATENCY_ACQ)
-    // Per target, prefer fentry (cheaper dispatch); fall back to its kprobe
-    // where fentry cannot attach (`kernel_can_fentry`). tcp_v6_connect is in
-    // the ipv6 module on some kernels and may be absent from BTF; its kprobe
-    // then misses at attach, which is tolerated.
-    .disabled_programs(&unused_twins(&[
+    let btf = kernel_btf_has_tracepoints(&["inet_sock_set_state"]);
+    debug!(
+        "{NAME}: inet_sock_set_state {}",
+        if btf { "tp_btf" } else { "raw_tp" }
+    );
+
+    let mut disabled = unused_twins(&[
         (
             "tcp_v4_connect",
             "tcp_v4_connect_fentry",
@@ -51,12 +45,36 @@ fn init(config: Arc<Config>) -> SamplerResult {
             "tcp_v6_connect_fentry",
             "tcp_v6_connect_kprobe",
         ),
-        (
-            "tcp_rcv_state_process",
-            "tcp_rcv_state_process_fentry",
-            "tcp_rcv_state_process_kprobe",
-        ),
-    ]))
+    ]);
+    disabled.push(if btf {
+        "inet_sock_set_state_raw"
+    } else {
+        "inet_sock_set_state_btf"
+    });
+
+    let bpf = BpfBuilder::new(
+        &config,
+        NAME,
+        BpfProgStats {
+            run_time: &BPF_RUN_TIME,
+            run_count: &BPF_RUN_COUNT,
+        },
+        ModSkelBuilder::default,
+    )
+    .histogram(
+        "established",
+        &TCP_CONNECT_LATENCY_ESTABLISHED,
+        &LATENCY_ACQ,
+    )
+    .histogram("refused", &TCP_CONNECT_LATENCY_REFUSED, &LATENCY_ACQ)
+    .histogram("timeout", &TCP_CONNECT_LATENCY_TIMEOUT, &LATENCY_ACQ)
+    .histogram("error", &TCP_CONNECT_LATENCY_ERROR, &LATENCY_ACQ)
+    .histogram("aborted", &TCP_CONNECT_LATENCY_ABORTED, &LATENCY_ACQ)
+    // Per target, prefer fentry (cheaper dispatch); fall back to its kprobe
+    // where fentry cannot attach (`kernel_can_fentry`). tcp_v6_connect is in
+    // the ipv6 module on some kernels and may be absent from BTF; its kprobe
+    // then misses at attach, which is tolerated.
+    .disabled_programs(&disabled)
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -72,7 +90,11 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
-            "latency" => &self.maps.latency,
+            "established" => &self.maps.established,
+            "refused" => &self.maps.refused,
+            "timeout" => &self.maps.timeout,
+            "error" => &self.maps.error,
+            "aborted" => &self.maps.aborted,
             _ => unimplemented!(),
         }
     }
@@ -85,8 +107,8 @@ impl OpenSkelExt for ModSkel<'_> {
             self.progs.tcp_v4_connect_fentry.insn_cnt()
         );
         debug!(
-            "{NAME} tcp_rcv_state_process_fentry() BPF instruction count: {}",
-            self.progs.tcp_rcv_state_process_fentry.insn_cnt()
+            "{NAME} inet_sock_set_state_btf() BPF instruction count: {}",
+            self.progs.inet_sock_set_state_btf.insn_cnt()
         );
     }
 }

@@ -44,6 +44,18 @@ const logSectionTemplateError = (view) => {
     console.warn(message);
 };
 
+// A query's scope as the backend reads it: the uuids of the sources it
+// reads, separated by commas (`display_wire::parse_scope`), or null to read
+// every source. `scope` is an array of uuids, a string of them, or
+// null/undefined. An empty array is refused rather than read as every
+// source, which would read every recording of a combined archive.
+const scopeArg = (scope) => {
+    if (scope === null || scope === undefined) return null;
+    if (typeof scope === 'string') return scope;
+    if (Array.isArray(scope) && scope.length > 0) return scope.join(',');
+    throw new TypeError(`a query scope is a non-empty array of uuids: ${JSON.stringify(scope)}`);
+};
+
 const ViewerApi = {
     setRegistry(instance) {
         registry = instance;
@@ -156,9 +168,9 @@ const ViewerApi = {
 
     // `signal` is accepted (unused — in-process) to keep positional parity with
     // the server adapter so data.js can call both the same way.
-    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid') {
+    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid', scope = null) {
         ensureAttached(captureId);
-        return JSON.parse(registry.query_range(captureId, query, start, end, step, rateMode || 'grid'));
+        return JSON.parse(registry.query_range(captureId, query, start, end, step, rateMode || 'grid', scopeArg(scope)));
     },
 
     // Display-mode range query. The WASM backend returns the SAME compact binary
@@ -167,9 +179,9 @@ const ViewerApi = {
     // abort — `signal`/`captureId` opts match the server adapter's shape but the
     // registry call is synchronous. A non-series result throws, so the caller
     // falls back to the JSON query path exactly like the server adapter.
-    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', rateMode = 'grid' } = {}) {
+    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', rateMode = 'grid', scope = null } = {}) {
         ensureAttached(captureId);
-        const bytes = registry.query_range_display(captureId, query, start, end, step, points, band || '', rateMode || 'grid');
+        const bytes = registry.query_range_display(captureId, query, start, end, step, points, band || '', rateMode || 'grid', scopeArg(scope));
         // wasm-bindgen hands back a fresh Uint8Array; hand up a plain ArrayBuffer
         // so decodeDisplayBinary / decodeHeatmapBinary can view it zero-copy.
         return { buffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };

@@ -344,6 +344,9 @@ impl MetricsSource for LiveReader {
     fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
         self.current().columns(query)
     }
+    fn metric_unit(&self, name: &str) -> Option<String> {
+        self.current().metric_unit(name)
+    }
     fn counter_names(&self) -> Vec<String> {
         self.current().counter_names()
     }

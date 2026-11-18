@@ -82,7 +82,7 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.equal(registry.has('experiment'), false);
         const info = JSON.parse(registry.info('baseline'));
         const result = JSON.parse(registry.query_range(
-            'baseline', 'irate(cpu_cycles[2s])', info.minTime, info.maxTime, 1, 'grid',
+            'baseline', 'irate(cpu_cycles[2s])', info.minTime, info.maxTime, 1, 'grid', null,
         ));
         assert.equal(result.status, 'success', JSON.stringify(result) + JSON.stringify(info));
         const sources = result.data.result.map((s) => s.metric.source).sort();
@@ -126,7 +126,7 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         const info = JSON.parse(registry.info('baseline'));
         const result = JSON.parse(registry.query_range(
             'baseline', 'irate(cpu_cycles{__capture__="web-01"}[2s])',
-            info.minTime, info.maxTime, 1, 'grid',
+            info.minTime, info.maxTime, 1, 'grid', null,
         ));
         assert.equal(result.status, 'success', JSON.stringify(result));
         assert.match(JSON.stringify(result.data.result), /envoy/);
@@ -275,7 +275,7 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.equal(registry.has('experiment'), false);
         const info = JSON.parse(registry.info('baseline'));
         const result = JSON.parse(registry.query_range(
-            'baseline', 'mem_free', info.minTime, info.maxTime, 1, 'grid',
+            'baseline', 'mem_free', info.minTime, info.maxTime, 1, 'grid', null,
         ));
         assert.equal(result.status, 'success', JSON.stringify(result) + JSON.stringify(info));
         const hosts = result.data.result.map((s) => s.metric.host).sort();
@@ -343,7 +343,7 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
             registry.attach('baseline', bytes, name);
             const info = JSON.parse(registry.info('baseline'));
             const result = JSON.parse(registry.query_range(
-                'baseline', 'irate(ops[5s])', info.minTime, info.maxTime, 1, 'grid',
+                'baseline', 'irate(ops[5s])', info.minTime, info.maxTime, 1, 'grid', null,
             ));
             return result.data.result.reduce((n, s) => n + s.values.length, 0);
         };

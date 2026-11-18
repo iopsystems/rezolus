@@ -182,6 +182,8 @@ impl Cached<GroupSnapshot, OnceLock<Vec<u8>>> {
             && previous.gauges == group.gauges
             && previous.histograms == group.histograms
             && previous.gauge_histograms == group.gauge_histograms
+            && previous.float_counters == group.float_counters
+            && previous.float_gauges == group.float_gauges
     }
 }
 
@@ -378,6 +380,12 @@ mod tests {
                 name: "gauge_histogram".into(),
                 metadata: BTreeMap::new(),
             }],
+            float_counters: vec![],
+            // A float gauge makes the group encode its trailing fields.
+            float_gauges: vec![MetricDesc {
+                name: "float_gauge".into(),
+                metadata: BTreeMap::new(),
+            }],
         });
         let group = GroupSnapshot {
             name: "test/group".into(),
@@ -388,6 +396,8 @@ mod tests {
             gauges: vec![Some(-42)],
             histograms: vec![],
             gauge_histograms: vec![None],
+            float_counters: vec![],
+            float_gauges: vec![Some(1.5)],
         };
         for count in [0, 1, 15, 16, 17, 255, 256] {
             let mut cache = V3Builder::new();

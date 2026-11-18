@@ -16,9 +16,10 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.4"
-metriken-exposition = "0.25.0"
-metriken-query = { version = "0.42.2", default-features = false }
-metriken-storage = { version = "0.5.4", default-features = false }
+metriken-charts = "0.1.5"
+metriken-exposition = "0.27.0"
+metriken-query = { version = "0.50.1", default-features = false }
+metriken-storage = { version = "0.13.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -46,8 +47,9 @@ dashboard = { path = "crates/dashboard" }
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from. 0.6.0 creates schema 5
 # archives (a `documents` table, segment indexes in their own table), which
-# dendro 0.5.1 and earlier refuse; it still reads and resumes schema 4.
-dendro = { version = "0.6.0", default-features = false }
+# dendro 0.5.1 and earlier refuse; it still reads and resumes schema 4. 0.6.1
+# adds `SourceWriter::set_identity`, which metriken-storage 0.6's writer uses.
+dendro = { version = "0.7.1", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -56,7 +58,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.69"
+version = "6.0.0-alpha.144"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -103,6 +105,7 @@ libc.workspace = true
 linkme = "0.3.36"
 memmap2 = "0.9.10"
 metriken.workspace = true
+metriken-charts.workspace = true
 # `stream-tokio`: the `/metrics/stream` route (`StreamSubscription`) and its
 # body stream on tokio.
 metriken-exposition = { workspace = true, features = ["stream-tokio"] }
@@ -110,11 +113,14 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # Detection, the stream and scrape transports, restart metadata, and the
 # tick that commits every source into one `.dendro`: `record`, hindsight and
 # the live viewer over the library (metriken's
-# docs/journal/2026-10-12-metriken-recorder.md).
-metriken-recorder = "0.5.1"
-# The archive writer `record -o out.dendro` writes through (`write`), the
+# docs/journal/2026-10-12-metriken-recorder.md). It writes each recording's
+# identity layers and no `source` of its own; the readers take a recording's
+# producer from its layers (`dashboard::identity`).
+metriken-recorder = "0.15.0"
+# The archive writer behind the `recording` copies (`write`), the
 # raw-msgpack-to-dendro conversion behind `recording convert` (`convert`), and
-# the `.rez` and parquet to dendro converters (`to_dendro`, `rez`).
+# the `.rez` and parquet to dendro converters (`to_dendro`, `rez`). `record`,
+# hindsight and the live viewer write through metriken-recorder's.
 metriken-storage = { workspace = true, features = ["write", "convert", "rez"] }
 notify = "8.2.0"
 open = "5.3.4"
@@ -139,7 +145,7 @@ reqwest = { version = "0.13.3", default-features = false, features = [
 # `bundled` compiles SQLite from source: slower builds, but no runtime system
 # dependency, which is what the `.deb` in [package.metadata.deb] needs.
 rez.workspace = true
-rusqlite = { version = "0.40", features = ["bundled", "blob"] }
+rusqlite = { version = "0.41", features = ["bundled", "blob"] }
 rustls = { version = "0.23", default-features = false, features = [
     "logging",
     "ring",
@@ -160,7 +166,7 @@ syscall-numbers = "4.0.3"
 sysconf = "0.3.4"
 tempfile = "3.27.0"
 thiserror.workspace = true
-# Direct dep for `parquet convert`'s zstd-compressed raw input. Already in the
+# Direct dep for `recording convert`'s zstd-compressed raw input. Already in the
 # graph via parquet's `zstd` feature, so this costs no extra build time.
 zstd = "0.14.3"
 tokio = { version = "1.52.2", features = [
@@ -218,8 +224,7 @@ nvml-wrapper = "0.12.1"
 libloading = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nix = { version = "0.31", features = ["signal", "process"] }
-plist = "1.9"
+libloading = "0.8"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
 libbpf-cargo = { version = "0.26.2" }
@@ -286,7 +291,13 @@ assets = [
     ],
 ]
 
+# Tests walk the metric registry for every snapshot, and in an unoptimized
+# build that walk's time is mostly hashing in these two crates
+# (`metriken_model::schema::fnv1a_128`,
+# `metriken_exposition::group_builder::identity_fold`). debug-assertions and
+# overflow-checks stay on.
+[profile.dev.package.metriken-model]
+opt-level = 3
 
-
-
-
+[profile.dev.package.metriken-exposition]
+opt-level = 3

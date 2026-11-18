@@ -66,6 +66,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="upgrade.html">Upgrading to 6.0</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="mcp.html">MCP Server</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
@@ -81,12 +82,13 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Sidebar -->
 <aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
 <div class="mb-8">
-<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.28.0</div>
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.32.0</div>
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
 <h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Getting Started</h4>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html">Upgrading to 6.0</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="mcp.html">MCP Server</a>
 </div>
@@ -305,7 +307,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_connect_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Histogram (ns) &mdash; time to establish connection</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_connect_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Histogram (ns) &mdash; connect() to end of handshake, by outcome</span></div>
 <div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_packet_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Histogram (ns) &mdash; receive-to-read latency</span></div>
 <div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_jitter</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Histogram (ns) &mdash; inter-packet jitter</span></div>
 <div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_srtt</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Histogram (ns) &mdash; smoothed round-trip time</span></div>

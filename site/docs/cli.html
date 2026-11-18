@@ -64,6 +64,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="upgrade.html">Upgrading to 6.0</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="mcp.html">MCP Server</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
@@ -79,12 +80,13 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Sidebar -->
 <aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
 <div class="mb-8">
-<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.28.0</div>
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.32.0</div>
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
 <h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Getting Started</h4>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="upgrade.html">Upgrading to 6.0</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="mcp.html">MCP Server</a>
 </div>
@@ -151,10 +153,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;           <span class="text-slate-600">Output path, ending in .dendro [default: rezolus.dendro]</span></div>
 <div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;     <span class="text-slate-600">Collection interval [default: 1s]</span></div>
 <div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;     <span class="text-slate-600">Record for a fixed window, then stop</span></div>
-<div><span class="text-slate-400">-l, --label</span> &lt;KEY=VALUE&gt;       <span class="text-slate-600">Tag an archive recording (repeatable); source/host auto-filled</span></div>
+<div><span class="text-slate-400">-l, --label</span> &lt;KEY=VALUE&gt;       <span class="text-slate-600">Tag an archive recording (repeatable); host/endpoint auto-filled</span></div>
 <div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">Metadata on every recording in the archive (repeatable)</span></div>
 <div><span class="text-slate-400">    --config</span> &lt;FILE&gt;           <span class="text-slate-600">TOML config for multi-endpoint recording</span></div>
-<div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">Endpoint with options (repeatable), url[,source=][,role=][,protocol=]</span></div>
+<div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">Endpoint with options (repeatable), url[,alias=][,tier=][,service_kind=][,role=][,protocol=]</span></div>
 <div><span class="text-slate-400">-v, --verbose</span>                 <span class="text-slate-600">Increase verbosity (stackable)</span></div>
 </div>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
@@ -225,7 +227,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-slate-400">    --proxy-allow</span> &lt;PATTERN&gt;  <span class="text-slate-600">Whitelist a host pattern for URL proxy (repeatable)</span></div>
 <div><span class="text-slate-400">    --proxy-allow-any</span>         <span class="text-slate-600">Disable proxy allowlist entirely (trust-everyone mode)</span></div>
 <div><span class="text-slate-400">    --tui</span>                     <span class="text-slate-600">Terminal UI instead of a browser (needs a file or agent URL)</span></div>
-<div><span class="text-slate-400">    --cache-size-mb</span> &lt;MB&gt;     <span class="text-slate-600">Row-group buffer cache size [default: 500]</span></div>
+<div><span class="text-slate-400">    --cache-size-mb</span> &lt;MB&gt;     <span class="text-slate-600">Buffer pool size, opened segments and decoded blocks together [default: an eighth of memory, 500 to 8192]</span></div>
 <div><span class="text-slate-400">    --query-concurrency</span> &lt;N&gt;  <span class="text-slate-600">Queries run at once (others wait) [default: half the CPUs, 2 to 8]</span></div>
 <div><span class="text-slate-400">-v, --verbose</span>                  <span class="text-slate-600">Increase verbosity</span></div>
 </div>
@@ -256,15 +258,17 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-slate-400">describe-recording</span> &lt;FILE&gt;</div>
 <div><span class="text-slate-400">describe-metrics</span> &lt;FILE&gt;</div>
 <div><span class="text-slate-400">detect-anomalies</span> &lt;FILE&gt; [QUERY]</div>
-<div><span class="text-slate-400">query</span> &lt;FILE&gt; &lt;QUERY&gt;</div>
+<div><span class="text-slate-400">query</span> &lt;FILE&gt; &lt;QUERY&gt; [--start TIME] [--end TIME] [--step DURATION] [--above VALUE]</div>
 <div><span class="text-slate-400">extract-features</span> &lt;FILE&gt;</div>
-<div><span class="text-slate-400">install</span> [--scope user|project] [--dry-run] [--no-skill] [--allow-mutating] [--export-dir DIR] [--viewer-url URL]</div>
+<div><span class="text-slate-400">install</span> [--scope user|project] [--dry-run] [--no-skill] [--allow-mutating] [--viewer-url URL]</div>
 </div>
-<p class="text-sm text-slate-400 mt-3">Every &lt;FILE&gt; is a <code>.dendro</code>; a <code>.rez</code> or <code>.parquet</code> from an earlier release is refused with <code>rezolus recording upgrade FILE</code>, which converts it. With no subcommand, <code>rezolus mcp</code> runs as a stdio MCP server for an LLM client; In Rezolus 6.0 and later, <code>--allow-mutating</code> enables the mutating tool (<code>remove_events</code>), <code>--export-dir DIR</code> gives <code>export_query</code> a directory to write into, and <code>--viewer-url URL</code> lets <code>viewer_link</code> return full URLs; <code>install</code> registers it with Claude Code. See <a class="text-blue-600 dark:text-blue-400" href="mcp.html">MCP Server</a>.</p>
+<p class="text-sm text-slate-400 mt-3">Every &lt;FILE&gt; is a <code>.dendro</code>; a <code>.rez</code> or <code>.parquet</code> from an earlier release is refused with <code>rezolus recording upgrade FILE</code>, which converts it. With no subcommand, <code>rezolus mcp</code> runs as a stdio MCP server for an LLM client; in Rezolus 6.0 and later, <code>--allow-mutating</code> enables the mutating tool (<code>remove_events</code>) and <code>--viewer-url URL</code> lets <code>viewer_link</code> return full URLs; <code>install</code> registers it with Claude Code. See <a class="text-blue-600 dark:text-blue-400" href="mcp.html">MCP Server</a>.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-base leading-8">
 <div class="text-slate-500 text-sm"># One-shot PromQL against a recording</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp query out.dendro 'sum(irate(cpu_cycles[1m]))'</code></div>
+<div class="text-slate-500 text-sm mt-3"># Statistics over the seconds above 500 MB/s, in a window</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp query out.dendro 'sum(irate(blockio_bytes[1m]))' --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --above 5e8</code></div>
 <div class="text-slate-600 text-sm mt-3"># Sweep every metric for anomalies</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies out.dendro</code></div>
 </div>

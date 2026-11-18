@@ -5,7 +5,8 @@
 //!
 //! And produces these stats:
 //! * `scheduler_runqueue_latency`, `scheduler_running`, `scheduler_offcpu`,
-//!   `scheduler_context_switch` and their per-cgroup series (part `runqueue`)
+//!   `scheduler_uninterruptible`, `scheduler_context_switch` and their
+//!   per-cgroup series (part `runqueue`)
 //! * `cpu_migrations` and `cgroup_cpu_migrations` (part `migrations`)
 //!
 //! One program per hook: this sampler replaced `scheduler_runqueue` and
@@ -42,6 +43,7 @@ static CGROUP_IDENTITY_BOTH: metriken::group::SlotIdentity =
     metriken::group::SlotIdentity::grouped(&[
         &[&CGROUP_SCHEDULER_IVCSW, &CGROUP_SCHEDULER_VCSW],
         &[&CGROUP_SCHEDULER_OFFCPU],
+        &[&CGROUP_SCHEDULER_UNINTERRUPTIBLE_WAIT],
         &[&CGROUP_SCHEDULER_RUNQUEUE_WAIT],
         &[&CGROUP_CPU_MIGRATIONS],
     ]);
@@ -50,6 +52,7 @@ static CGROUP_IDENTITY_RUNQUEUE: metriken::group::SlotIdentity =
     metriken::group::SlotIdentity::grouped(&[
         &[&CGROUP_SCHEDULER_IVCSW, &CGROUP_SCHEDULER_VCSW],
         &[&CGROUP_SCHEDULER_OFFCPU],
+        &[&CGROUP_SCHEDULER_UNINTERRUPTIBLE_WAIT],
         &[&CGROUP_SCHEDULER_RUNQUEUE_WAIT],
     ]);
 
@@ -88,8 +91,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
             &RUNQLAT_ACQ,
             &RUNNING_ACQ,
             &OFFCPU_ACQ,
+            &UNINTERRUPTIBLE_ACQ,
             &CGROUP_WAIT_ACQ,
             &CGROUP_OFFCPU_ACQ,
+            &CGROUP_UNINTERRUPTIBLE_ACQ,
             &CGROUP_CONTEXT_SWITCH_ACQ,
         ] {
             group.set_member_bound(0);
@@ -107,11 +112,28 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SCHEDULER_RUNQUEUE_WAIT,
         &SCHEDULER_DISCARDED,
         &SCHEDULER_VCSW,
+        &SCHEDULER_UNINTERRUPTIBLE_WAIT,
     ];
 
     let migration_counters = vec![&CPU_MIGRATIONS_FROM, &CPU_MIGRATIONS_TO];
 
     let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
+
+    // 5.18 added `prev_state` as sched_switch's fourth argument; see
+    // `sched_switch_prev_state` in mod.bpf.c.
+    let arity = kernel_btf_tracepoint_arg_count("sched_switch");
+    if let Some(n) = arity.filter(|n| !(3..=4).contains(n)) {
+        info!("{NAME}: sched_switch passes {n} arguments; reading prev's state from the task");
+    }
+    let prev_state_arg = arity == Some(4);
+    debug!(
+        "{NAME}: prev's state from {}",
+        if prev_state_arg {
+            "the sched_switch prev_state argument"
+        } else {
+            "the task (kernel BTF does not show a prev_state argument)"
+        }
+    );
 
     // One of each tp_btf/raw_tp twin, and no wakeup programs without the
     // runqueue part.
@@ -148,7 +170,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .disabled_programs(&disabled)
     // The switches are read-only data the verifier folds at load (see
-    // `runqueue`, `migrations` and `cgroup_attribution` in mod.bpf.c); a part
+    // `runqueue`, `migrations`, `cgroup_attribution` and
+    // `sched_switch_prev_state` in mod.bpf.c); a part
     // that is off has its maps left out of the object and its series absent.
     .pre_load(move |open| {
         let rodata = open
@@ -159,6 +182,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         rodata.runqueue = runqueue as u8;
         rodata.migrations = migrations as u8;
         rodata.cgroup_attribution = cgroup_attribution as u8;
+        rodata.sched_switch_prev_state = prev_state_arg as u8;
 
         let maps = &mut open.maps;
         let mut skip: Vec<&mut libbpf_rs::OpenMapMut<'_>> = Vec::new();
@@ -171,10 +195,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
                 &mut maps.runqlat,
                 &mut maps.running,
                 &mut maps.offcpu,
+                &mut maps.uninterruptible,
                 &mut maps.cgroup_ivcsw,
                 &mut maps.cgroup_vcsw,
                 &mut maps.cgroup_runq_wait,
                 &mut maps.cgroup_offcpu,
+                &mut maps.cgroup_uninterruptible,
             ]);
         } else if !cgroup_attribution {
             skip.extend([
@@ -182,6 +208,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
                 &mut maps.cgroup_vcsw,
                 &mut maps.cgroup_runq_wait,
                 &mut maps.cgroup_offcpu,
+                &mut maps.cgroup_uninterruptible,
             ]);
         }
         if !migrations {
@@ -208,7 +235,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .cpu_counters("counters", counters, &COUNTERS_ACQ)
             .histogram("runqlat", &SCHEDULER_RUNQUEUE_LATENCY, &RUNQLAT_ACQ)
             .histogram("running", &SCHEDULER_RUNNING, &RUNNING_ACQ)
-            .histogram("offcpu", &SCHEDULER_OFFCPU, &OFFCPU_ACQ);
+            .histogram("offcpu", &SCHEDULER_OFFCPU, &OFFCPU_ACQ)
+            .histogram(
+                "uninterruptible",
+                &SCHEDULER_UNINTERRUPTIBLE,
+                &UNINTERRUPTIBLE_ACQ,
+            );
     }
 
     if migrations {
@@ -234,6 +266,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
                     "cgroup_offcpu",
                     &CGROUP_SCHEDULER_OFFCPU,
                     &CGROUP_OFFCPU_ACQ,
+                    cgroup_identity,
+                )
+                .cgroup_counters(
+                    "cgroup_uninterruptible",
+                    &CGROUP_SCHEDULER_UNINTERRUPTIBLE_WAIT,
+                    &CGROUP_UNINTERRUPTIBLE_ACQ,
                     cgroup_identity,
                 )
                 .cgroup_counters(
@@ -277,10 +315,12 @@ impl SkelExt for ModSkel<'_> {
         match name {
             "counters" => &self.maps.counters,
             "offcpu" => &self.maps.offcpu,
+            "uninterruptible" => &self.maps.uninterruptible,
             "running" => &self.maps.running,
             "runqlat" => &self.maps.runqlat,
             "cgroup_runq_wait" => &self.maps.cgroup_runq_wait,
             "cgroup_offcpu" => &self.maps.cgroup_offcpu,
+            "cgroup_uninterruptible" => &self.maps.cgroup_uninterruptible,
             "cgroup_ivcsw" => &self.maps.cgroup_ivcsw,
             "cgroup_vcsw" => &self.maps.cgroup_vcsw,
             "cgroup_info" => &self.maps.cgroup_info,

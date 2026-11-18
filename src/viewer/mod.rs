@@ -37,6 +37,8 @@ mod proxy_allow;
 
 mod actions;
 #[cfg(test)]
+mod cgroup_group_query_test;
+#[cfg(test)]
 pub(crate) mod combined_test;
 #[cfg(test)]
 mod dashboard_queries_test;
@@ -52,14 +54,14 @@ use ::dashboard::source_templates::TemplatePreference;
 use capture_registry::CaptureId;
 use state::AppState;
 
-/// Shared entry point for loading the template registry. Both the
-/// viewer (`rezolus view`) and `rezolus recording annotate/check` call
-/// this. Precedence: explicit `--templates <path>` > env var /
-/// `crates/dashboard/templates/` default (developer-mode or explicit path only).
-/// Release builds fall back to the templates baked into the `dashboard`
-/// crate via `include_dir!`, so the binary and any other consumer of that
-/// crate render the same set; developer-mode reads from disk so template
-/// edits don't require a rebuild.
+/// Shared entry point for loading the template registry, used by the viewer
+/// (`rezolus view`), `rezolus recording annotate/check` and the MCP server.
+/// An explicit `--templates <path>` wins. Otherwise a release build uses the
+/// templates baked into the `dashboard` crate via `include_dir!`, so the
+/// binary and any other consumer of that crate render the same set. A
+/// developer-mode build reads from disk, so template edits don't require a
+/// rebuild: `REZOLUS_TEMPLATES` if set, else the source tree's
+/// `crates/dashboard/templates/` by an absolute path fixed at compile time.
 pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
     if cli_path.is_some() {
         return ::dashboard::resolve_templates(cli_path);
@@ -71,9 +73,15 @@ pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
             TemplateRegistry::empty()
         })
     }
+    // Without `REZOLUS_TEMPLATES`, load the source tree's templates by a path
+    // fixed at compile time, so the working directory does not matter.
     #[cfg(feature = "developer-mode")]
     {
-        ::dashboard::resolve_templates(None)
+        let source_tree = concat!(env!("CARGO_MANIFEST_DIR"), "/crates/dashboard/templates");
+        let dir = std::env::var(::dashboard::TEMPLATES_ENV_VAR)
+            .is_err()
+            .then(|| Path::new(source_tree));
+        ::dashboard::resolve_templates(dir)
     }
 }
 
@@ -166,7 +174,7 @@ pub fn command() -> Command {
              rezolus view http://host:4241 --listen 127.0.0.1:8080\n\n    \
              # Upload-only mode: start with no file, then upload from the browser\n    \
              rezolus view\n\n    \
-             # A/B compare using a category bridge view (both sources must be category members)\n    \
+             # A/B compare using a category bridge view (each capture's template must be a member)\n    \
              rezolus view a.dendro b.dendro --category inference-library",
         )
         .arg(
@@ -240,9 +248,10 @@ pub fn command() -> Command {
                     "Activate the A/B 'category bridge' view using the named category \
                      template (e.g. `inference-library`). NAME must match a category \
                      template known to the viewer (built-in, or from --templates). Each \
-                     capture's detected source (from its metadata) must appear in \
-                     that template's `members` list. Only meaningful when comparing two \
-                     captures.",
+                     capture must match that template's `members` list, by \
+                     source name, template name, alias or producer (a `vllm-prefill` \
+                     capture matches `vllm`). Each of the two captures must have one \
+                     service template.",
                 )
                 .action(clap::ArgAction::Set),
         )
@@ -320,9 +329,13 @@ pub fn command() -> Command {
                 .long("cache-size-mb")
                 .value_name("MB")
                 .help(
-                    "Row-group buffer cache size in megabytes. Larger values \
+                    "Buffer pool size in megabytes, for opened segments and \
+                     decoded blocks together. Larger values \
                      speed up repeated queries against the same data (typical \
-                     dashboard workload); smaller values reduce peak RSS. \
+                     dashboard workload); smaller values reduce peak RSS, but \
+                     a segment that does not fit in the pool beside the \
+                     blocks one series decodes from it is opened again for \
+                     each series. \
                      Overrides REZOLUS_CACHE_MB. Default: an eighth of the \
                      memory available (physical, or a Linux cgroup's limit \
                      when lower), clamped to 500-8192.",
@@ -527,7 +540,7 @@ pub fn run(config: Config) {
 
     let registry = load_template_registry(config.templates_dir.as_deref());
 
-    // One shared pool for all ParquetReaders in this process.
+    // One buffer pool shared by every reader in this process.
     let pool = metriken_storage::BufferPool::new(config.cache_size_bytes);
     info!(
         "Buffer pool: {} MB",
@@ -869,6 +882,7 @@ pub(super) fn combine_recordings(
             l.clone(),
             ::dashboard::combined::Header::of(reader),
             reader.file_metadata(),
+            ::dashboard::combined::source_uuids(reader.sources().iter().map(|s| s.uuid.clone())),
         ));
     }
     let markers = ::dashboard::combined::report_markers(
@@ -883,7 +897,7 @@ pub(super) fn combine_recordings(
         parts
             .into_iter()
             .zip(series)
-            .map(|((l, header, metadata), series)| (l, series, header, metadata))
+            .map(|((l, header, metadata, sources), series)| (l, series, header, metadata, sources))
             .collect(),
     );
     CombinedRecordings {
@@ -1278,9 +1292,10 @@ fn init_file_mode_rez(
     state
 }
 
-/// Validate `--category`: the named category must exist, and the sources of
-/// both captures' templates must appear in its `members`. Refuses to launch
-/// on misconfiguration; silent fall-back hides user intent.
+/// Validate `--category`: the named category must exist, and each capture
+/// must have one service template matching a member, of two different
+/// sources ([`dashboard::CategoryExtension::admits`]). Refuses to launch on
+/// misconfiguration; silent fall-back hides user intent.
 fn validate_category_at_startup(state: &AppState, registry: &TemplateRegistry, cat_name: &str) {
     let category = registry.get_category(cat_name).unwrap_or_else(|| {
         eprintln!("no category template named {cat_name:?} found in the registry");
@@ -1290,23 +1305,20 @@ fn validate_category_at_startup(state: &AppState, registry: &TemplateRegistry, c
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
         std::process::exit(1);
     };
-    let sources_of = |data: &dyn metriken_query::MetricsSource| -> Vec<String> {
+    let templates_of = |data: &dyn metriken_query::MetricsSource| {
         metadata::capture_service_extensions(data, registry, state.template_preference)
-            .into_iter()
-            .map(|(s, _)| s)
-            .collect()
     };
-    let baseline_sources = sources_of(state.baseline_data().as_ref());
-    let experiment_sources = sources_of(experiment.as_ref());
-    for source in baseline_sources.iter().chain(experiment_sources.iter()) {
-        if !category.members.iter().any(|m| m == source) {
-            eprintln!(
-                "source {source:?} is not a member of category {cat_name:?} (members: {:?})",
-                category.members
-            );
-            std::process::exit(1);
-        }
+    let baseline_templates = templates_of(state.baseline_data().as_ref());
+    let experiment_templates = templates_of(experiment.as_ref());
+    if let Err(message) = category.admits(&baseline_templates, &experiment_templates) {
+        eprintln!("--category {cat_name:?}: {message}");
+        std::process::exit(1);
     }
+    let sources = |templates: &[(String, ServiceExtension)]| -> Vec<String> {
+        templates.iter().map(|(s, _)| s.clone()).collect()
+    };
+    let (baseline_sources, experiment_sources) =
+        (sources(&baseline_templates), sources(&experiment_templates));
     info!(
         "Activated category {:?} (members: {:?}) — baseline sources {:?}, experiment sources {:?}",
         cat_name, category.members, baseline_sources, experiment_sources,
@@ -1366,8 +1378,10 @@ fn init_live_mode(
 async fn serve(listener: std::net::TcpListener, state: AppState) {
     let livereload = LiveReloadLayer::new();
 
+    // The watcher stops when it is dropped, so it is held until the server
+    // returns.
     #[cfg(feature = "developer-mode")]
-    {
+    let _watcher = {
         let reloader = livereload.reloader();
         let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
             if let Ok(event) = res {
@@ -1377,13 +1391,16 @@ async fn serve(listener: std::net::TcpListener, state: AppState) {
             }
         })
         .expect("failed to initialize watcher");
+        for dir in [
+            Path::new(routes::DEV_ASSETS_DIR),
+            Path::new(metriken_charts::ASSETS_PATH),
+        ] {
+            watcher
+                .watch(dir, notify::RecursiveMode::Recursive)
+                .unwrap_or_else(|e| panic!("failed to watch {}: {e}", dir.display()));
+        }
         watcher
-            .watch(
-                Path::new("src/viewer/assets"),
-                notify::RecursiveMode::Recursive,
-            )
-            .expect("failed to watch assets folder");
-    }
+    };
 
     let app: Router = routes::app(livereload, state);
 
@@ -1400,6 +1417,40 @@ mod tests {
     use super::state::{build_sections_metadata_payload, LazySectionStore};
     use ::dashboard::dashboard::DashboardContext;
     use ::dashboard::Section;
+
+    /// `--category` at startup takes one template from each capture, each
+    /// matching a member, a refined template included, and refuses a
+    /// non-member or a capture with another number of templates.
+    #[test]
+    fn category_admits_two_member_templates() {
+        let registry = ::dashboard::embedded_templates().unwrap();
+        let category = registry.get_category("inference-library").unwrap();
+        let named = |name: &str| (name.to_string(), registry.get(name).unwrap().clone());
+        let (prefill, sglang, decode, valkey) = (
+            named("vllm-prefill"),
+            named("sglang"),
+            named("vllm-decode"),
+            named("valkey"),
+        );
+        let admits = |baseline: &[_], experiment: &[_]| category.admits(baseline, experiment);
+
+        let one = std::slice::from_ref;
+        assert_eq!(admits(one(&prefill), one(&sglang)), Ok(()));
+        let err = admits(one(&prefill), &[valkey]).unwrap_err();
+        assert!(err.contains("\"valkey\""), "{err}");
+        let err = admits(one(&prefill), one(&prefill)).unwrap_err();
+        assert!(err.contains("both captures are source"), "{err}");
+        let err = admits(&[prefill.clone(), decode], one(&sglang)).unwrap_err();
+        assert!(
+            err.contains("the baseline has 2 service templates"),
+            "{err}"
+        );
+        let err = admits(&[prefill], &[]).unwrap_err();
+        assert!(
+            err.contains("the experiment has 0 service templates"),
+            "{err}"
+        );
+    }
 
     /// `init_file_mode` opens a v3 `.rez` upgraded to `.dendro`.
     #[test]

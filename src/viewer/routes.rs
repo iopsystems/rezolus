@@ -38,6 +38,11 @@ use super::state::{self, ApiResponse, AppState, CaptureParam};
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
 
+/// The viewer's assets in the source tree, which developer mode serves and
+/// watches in place of the embedded copy.
+#[cfg(feature = "developer-mode")]
+pub(super) const DEV_ASSETS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/viewer/assets");
+
 pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
     let app_state = Arc::new(app_state);
 
@@ -94,11 +99,20 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
 
     #[cfg(feature = "developer-mode")]
     let router = {
-        warn!("running in developer mode. Rezolus Viewer must be run from within project folder");
+        warn!("running in developer mode: serving assets from {DEV_ASSETS_DIR}");
+        let assets = Path::new(DEV_ASSETS_DIR);
         router
-            .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
-            .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
-            .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
+            .route_service("/", ServeFile::new(assets.join("index.html")))
+            .nest_service(
+                "/lib/charts",
+                ServeDir::new(Path::new(metriken_charts::ASSETS_PATH).join("charts")),
+            )
+            .route_service(
+                "/lib/charts.css",
+                ServeFile::new(Path::new(metriken_charts::ASSETS_PATH).join("charts.css")),
+            )
+            .nest_service("/lib", ServeDir::new(assets.join("lib")))
+            .fallback_service(ServeFile::new(assets.join("index.html")))
     };
 
     #[cfg(not(feature = "developer-mode"))]
@@ -392,6 +406,10 @@ struct QueryParams {
     time: Option<f64>,
     #[serde(default)]
     capture: Option<String>,
+    /// Refused when present: an instant query reads every source
+    /// (metriken-query's `MetricsSource::query` takes no options).
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -416,6 +434,23 @@ struct RangeQueryParams {
     /// anything else is the default grid-aligned mode.
     #[serde(default)]
     rate_mode: Option<String>,
+    /// The sources the query reads, as uuids separated by commas
+    /// (`display_wire::parse_scope`); absent reads every source.
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+impl RangeQueryParams {
+    /// The query's options ([`display_wire::query_options`]); a scope that
+    /// does not parse is a `bad_data` error.
+    fn options(&self) -> Result<metriken_query::QueryOptions, Box<Response>> {
+        display_wire::query_options(self.rate_mode.as_deref(), self.scope.as_deref()).map_err(|e| {
+            Box::new(
+                ApiResponse::<serde_json::Value>::err(format!("invalid scope: {e}"), "bad_data")
+                    .into_response(),
+            )
+        })
+    }
 }
 
 /// Run `f`, which reads the recording, on tokio's blocking pool once one of
@@ -465,6 +500,13 @@ async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
+    if params.scope.is_some() {
+        return ApiResponse::<serde_json::Value>::err(
+            "an instant query takes no scope; use /api/v1/query_range".to_string(),
+            "bad_data",
+        )
+        .into_response();
+    }
     on_query_slot(&state, move |state| {
         run_query(state, params.capture.as_deref(), |data| {
             data.query(&params.query, params.time)
@@ -482,9 +524,10 @@ async fn range_query(
         if params.format.as_deref() == Some("display") {
             return range_query_display(state, &params);
         }
-        let qopts = metriken_query::QueryOptions::with_rate_mode(display_wire::parse_rate_mode(
-            params.rate_mode.as_deref(),
-        ));
+        let qopts = match params.options() {
+            Ok(qopts) => qopts,
+            Err(response) => return *response,
+        };
         run_query(state, params.capture.as_deref(), |data| {
             data.query_range_opts(&params.query, params.start, params.end, params.step, &qopts)
         })
@@ -498,6 +541,10 @@ async fn range_query(
 /// `dashboard::display_wire` so the WASM viewer produces byte-identical bodies.
 /// Non-`Series` results (scalar/vector) fall back to JSON.
 fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response {
+    let qopts = match params.options() {
+        Ok(qopts) => qopts,
+        Err(response) => return *response,
+    };
     let capture = params
         .capture
         .as_deref()
@@ -517,7 +564,7 @@ fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response 
         params.step,
         params.points.unwrap_or(500),
         display_wire::parse_band(params.band.as_deref()),
-        display_wire::parse_rate_mode(params.rate_mode.as_deref()),
+        &qopts,
     ) {
         Ok(display_wire::DisplayWire::Binary(buf)) => {
             ([(header::CONTENT_TYPE, "application/octet-stream")], buf).into_response()
@@ -681,10 +728,19 @@ async fn index(headers: HeaderMap) -> Response {
     asset_response(asset.contents(), "text/html", &headers)
 }
 
+/// `/lib/charts/` and `/lib/charts.css` are the metriken-charts crate's
+/// `assets/charts/` and `assets/charts.css`; the rest of `/lib` is
+/// `src/viewer/assets/lib`.
 #[cfg(not(feature = "developer-mode"))]
 async fn lib(uri: Uri, headers: HeaderMap) -> Response {
     let path = uri.path();
-    let Some(asset) = ASSETS.get_file(format!("lib{path}")) else {
+    let rel = path.trim_start_matches('/');
+    let asset = if rel == "charts.css" || rel.starts_with("charts/") {
+        metriken_charts::ASSETS.get_file(rel)
+    } else {
+        ASSETS.get_file(format!("lib{path}"))
+    };
+    let Some(asset) = asset else {
         tracing::error!("path: {path} does not map to a static resource");
         return (
             StatusCode::NOT_FOUND,
@@ -701,6 +757,61 @@ async fn lib(uri: Uri, headers: HeaderMap) -> Response {
         _ => "text/plain",
     };
     asset_response(asset.contents(), content_type, &headers)
+}
+
+#[cfg(all(test, not(feature = "developer-mode")))]
+mod lib_tests {
+    use super::*;
+
+    async fn get(path: &str) -> (StatusCode, Option<String>, Vec<u8>) {
+        let resp = lib(path.parse().unwrap(), HeaderMap::new()).await;
+        let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap().to_string());
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, content_type, body.to_vec())
+    }
+
+    #[tokio::test]
+    async fn charts_are_served_from_metriken_charts() {
+        for (path, file, content_type) in [
+            ("/charts/chart.js", "charts/chart.js", "text/javascript"),
+            (
+                "/charts/util/units.js",
+                "charts/util/units.js",
+                "text/javascript",
+            ),
+            ("/charts.css", "charts.css", "text/css"),
+        ] {
+            let (status, ct, body) = get(path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert_eq!(ct.as_deref(), Some(content_type), "{path}");
+            assert_eq!(
+                body,
+                metriken_charts::ASSETS.get_file(file).unwrap().contents(),
+                "{path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_rest_of_lib_is_served_from_the_viewer_assets() {
+        let (status, _, body) = get("/data.js").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, ASSETS.get_file("lib/data.js").unwrap().contents());
+        assert!(ASSETS.get_dir("lib/charts").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_is_not_found() {
+        for path in ["/charts/missing.js", "/missing.js", "/chartsx.css"] {
+            assert_eq!(get(path).await.0, StatusCode::NOT_FOUND, "{path}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -755,6 +866,110 @@ mod follow_tests {
             &::dashboard::TemplateRegistry::empty(),
             metriken_storage::BufferPool::new(64 << 20),
         ))
+    }
+
+    /// A range query's `scope` (its sources' uuids) reads only those
+    /// sources, on the JSON and the display path; without one it reads every
+    /// recording of the combined archive.
+    #[tokio::test]
+    async fn a_range_query_reads_its_scope() {
+        use rez::fixtures::{one_run, Recording};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.dendro");
+        let host = |labels| Recording {
+            labels,
+            metadata: &[("source", "rezolus")],
+            cpus: 2,
+            busy_ns: 500_000_000,
+            counter: None,
+        };
+        one_run(
+            &path,
+            &[
+                host(&[("source", "rezolus"), ("host", "h1")]),
+                host(&[("source", "rezolus"), ("host", "h2")]),
+            ],
+        );
+        let recordings = rez::reader::RezReader::open_recordings(
+            &path,
+            metriken_storage::BufferPool::new(16 << 20),
+        )
+        .unwrap();
+        let h2: Vec<String> = recordings
+            .iter()
+            .find(|(labels, _)| labels.get("host").map(String::as_str) == Some("h2"))
+            .map(|(_, r)| r.sources().iter().filter_map(|s| s.uuid.clone()).collect())
+            .unwrap();
+        let (start, end) = metriken_query::MetricsSource::time_range(&recordings[0].1).unwrap();
+        let state = view(&path);
+        let params = |scope: Option<&str>, format: Option<&str>| RangeQueryParams {
+            query: "cpu_cores".to_string(),
+            start,
+            end,
+            step: 1.0,
+            capture: None,
+            format: format.map(str::to_string),
+            points: Some(100),
+            band: None,
+            rate_mode: None,
+            scope: scope.map(str::to_string),
+        };
+        let run = |scope: Option<&str>, format: Option<&str>| {
+            let request = Query(params(scope, format));
+            let state = State(Arc::clone(&state));
+            async move {
+                let response = range_query(request, state).await;
+                let binary = response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .is_some_and(|t| t == "application/octet-stream");
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                (binary, body)
+            }
+        };
+        let hosts = |series: &serde_json::Value| -> Vec<String> {
+            let mut hosts: Vec<String> = series
+                .as_array()
+                .unwrap_or_else(|| panic!("{series}"))
+                .iter()
+                .map(|s| s["metric"]["host"].as_str().unwrap().to_string())
+                .collect();
+            hosts.sort();
+            hosts
+        };
+        let json = |bytes: &[u8]| -> serde_json::Value { serde_json::from_slice(bytes).unwrap() };
+        let h2 = h2.join(",");
+        for (scope, want) in [(None, vec!["h1", "h2"]), (Some(h2.as_str()), vec!["h2"])] {
+            let (_, body) = run(scope, None).await;
+            assert_eq!(hosts(&json(&body)["data"]["result"]), want, "{scope:?}");
+            // The display body's header lists its series.
+            let (binary, body) = run(scope, Some("display")).await;
+            assert!(binary, "{}", String::from_utf8_lossy(&body));
+            let len = u32::from_le_bytes(body[..4].try_into().unwrap()) as usize;
+            assert_eq!(hosts(&json(&body[4..4 + len])["series"]), want, "{scope:?}");
+        }
+        // A scope naming no source is refused, not read as every source, on
+        // both paths; an instant query refuses any scope.
+        for format in [None, Some("display")] {
+            let (_, body) = run(Some(""), format).await;
+            assert_eq!(json(&body)["errorType"], "bad_data", "{format:?}");
+        }
+        let instant = instant_query(
+            Query(QueryParams {
+                query: "cpu_cores".to_string(),
+                time: None,
+                capture: None,
+                scope: Some(h2.clone()),
+            }),
+            State(Arc::clone(&state)),
+        )
+        .await;
+        let body = axum::body::to_bytes(instant.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(json(&body)["errorType"], "bad_data");
     }
 
     async fn mode_and_metadata(state: Arc<AppState>) -> (serde_json::Value, serde_json::Value) {
@@ -846,6 +1061,10 @@ mod query_slot_tests {
         fn sample_timestamps(&self) -> Vec<u64> {
             self.wait();
             MetricsSource::sample_timestamps(&self.inner)
+        }
+        fn metric_unit(&self, name: &str) -> Option<String> {
+            self.wait();
+            MetricsSource::metric_unit(&self.inner, name)
         }
         fn counter_names(&self) -> Vec<String> {
             self.wait();
@@ -946,6 +1165,7 @@ mod query_slot_tests {
             points: None,
             band: None,
             rate_mode: None,
+            scope: None,
         })
     }
 
@@ -964,6 +1184,7 @@ mod query_slot_tests {
                     query: "up".to_string(),
                     time: None,
                     capture: None,
+                    scope: None,
                 }),
                 state,
             )),

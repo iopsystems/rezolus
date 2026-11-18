@@ -439,3 +439,25 @@ revision advances on every sweep and the group is re-encoded once per sweep
 regardless of values. Every scrape does clone the cached `GroupSnapshot` into
 the response (about 120k optional values at capacity), which is the likely
 `memmove` source and is unmeasured.
+
+## Merged with main (2026-11-18)
+
+Main had moved 94 commits on (`6.0.0-alpha.143`), so the branch merges it and
+moves to `6.0.0-alpha.144`. The merge needed these changes beyond resolving
+text:
+
+- `metriken-model` 0.3 added `float_counters` and `float_gauges` to
+  `GroupSnapshot` and `GroupSchema`. `Cached::matches` compares both, so cached
+  bytes are not reused for a group whose float values differ. The encoder test's
+  group carries a float gauge, so the byte comparison against `rmp_serde` covers
+  the trailing fields. `SnapshotV3` is still four fields, which the hand-written
+  top level assumes.
+- #1602 added a second reason for `RezolusRouter::route` to leave a metric out
+  (a histogram in a group nothing has stamped). Both checks apply.
+- `AcquisitionGroup::values_fixed_at` (from `cpu_usage`'s process table) is
+  honoured by `acquire_blocking` as well as `acquire`.
+- #1639 renamed the dashboard's `PlotOpts` to `Plot`. The five golden catalogs
+  added since (amd-apu, efa, macos, linux, dtlb-without-instructions) gain the
+  memory plots and nothing else.
+- The zstd bump this branch carried is on main already (0.14.4), so its
+  CHANGELOG entry is gone.

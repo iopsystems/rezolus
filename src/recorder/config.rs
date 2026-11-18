@@ -35,7 +35,7 @@ pub struct RecordingConfig {
     /// [`check_output`].
     pub output: PathBuf,
     pub metadata: Vec<(String, String)>,
-    /// Recording labels (`--label k=v`); `source`/`host` auto-added.
+    /// Recording labels (`--label k=v`); `host` and `endpoint` are added.
     pub labels: Vec<(String, String)>,
     pub endpoints: Vec<EndpointConfig>,
     /// When set, record only while this command runs (perf-record style).
@@ -186,7 +186,96 @@ fn resolve_output(
 }
 
 impl RecordingConfig {
+    /// The configuration `args` give, with every `source=` read as
+    /// `alias=` ([`RecordingConfig::read_source_as_alias`]); a note says so
+    /// for each.
     pub fn from_args(args: &ArgMatches) -> Result<Self, String> {
+        let mut config = Self::from_args_as_given(args)?;
+        for note in config.read_source_as_alias()? {
+            eprintln!("{note}");
+        }
+        Ok(config)
+    }
+
+    /// `source=` is the deprecated spelling of `alias=`, the user's name for
+    /// an endpoint: an endpoint's `source=` (from `--endpoint`, a config
+    /// file, or `--metadata source=` with `--url`) becomes its `alias`, and
+    /// every `--label source=` becomes `--label alias=`. A recording then
+    /// carries a `source` label only when its producer declares one. Each
+    /// endpoint's `source`, `alias`, `tier` and `service_kind` must be a value
+    /// with no whitespace around it, from any of them. Returns a note per
+    /// rewrite; refuses a `source=` and an `alias=` that disagree.
+    fn read_source_as_alias(&mut self) -> Result<Vec<String>, String> {
+        let mut notes = Vec::new();
+        for ep in &mut self.endpoints {
+            for (key, value) in [
+                ("source", &ep.source),
+                ("alias", &ep.alias),
+                ("tier", &ep.tier),
+                ("service_kind", &ep.service_kind),
+            ] {
+                if value
+                    .as_deref()
+                    .is_some_and(|v| v.is_empty() || v.trim() != v)
+                {
+                    let value = value.as_deref().unwrap_or_default();
+                    return Err(format!(
+                        "{}: {key}={value:?} needs a value with no whitespace around it",
+                        ep.url
+                    ));
+                }
+            }
+            let Some(source) = ep.source.take() else {
+                continue;
+            };
+            if let Some(alias) = ep.alias.as_ref().filter(|a| **a != source) {
+                return Err(format!(
+                    "{}: source={source} and alias={alias} name the endpoint differently; \
+                     source= is the old spelling of alias=, so give alias= alone",
+                    ep.url
+                ));
+            }
+            notes.push(format!(
+                "note: source={source} on {} is read as alias={source}; source= is \
+                 deprecated, use alias=",
+                ep.url
+            ));
+            ep.alias = Some(source);
+        }
+        let sources: Vec<String> = self
+            .labels
+            .iter()
+            .filter(|(k, _)| k == "source")
+            .map(|(_, v)| v.clone())
+            .collect();
+        if let Some(source) = sources.first().cloned() {
+            if let Some(other) = sources.iter().find(|s| **s != source) {
+                return Err(format!(
+                    "--label source={source} and --label source={other} disagree; give one \
+                     --label alias= in their place"
+                ));
+            }
+            self.labels.retain(|(k, _)| k != "source");
+            // The last `--label alias=` is the one a recording carries.
+            match self.labels.iter().rev().find(|(k, _)| k == "alias") {
+                Some((_, alias)) if *alias != source => {
+                    return Err(format!(
+                        "--label source={source} and --label alias={alias} disagree; \
+                         source= is the old spelling of alias=, so give alias= alone"
+                    ));
+                }
+                Some(_) => {}
+                None => self.labels.push(("alias".to_string(), source.clone())),
+            }
+            notes.push(format!(
+                "note: --label source={source} is read as --label alias={source}; source= \
+                 is deprecated, use alias="
+            ));
+        }
+        Ok(notes)
+    }
+
+    fn from_args_as_given(args: &ArgMatches) -> Result<Self, String> {
         let verbose = *args.get_one::<u8>("VERBOSE").unwrap_or(&0);
         let interval = *args
             .get_one::<humantime::Duration>("INTERVAL")
@@ -207,18 +296,18 @@ impl RecordingConfig {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
             })
             .collect();
-        // The recorder writes these from the producer's handshake and
-        // rewrites them on every restart; a user's value would be kept only
-        // until then, and would seed the restart history with an epoch no
-        // process had.
+        // A recording keeps its producer epochs as entries in its recorder
+        // layer; these keys belong to recordings written before
+        // metriken-recorder 0.7, and the layer function refuses them in any
+        // entry.
         if let Some((key, _)) = metadata.iter().find(|(k, _)| {
             k == crate::parquet_metadata::KEY_PRODUCER_EPOCH
                 || k == crate::parquet_metadata::KEY_PRODUCER_EPOCHS
         }) {
             return Err(format!(
-                "--metadata {key}=: {key} is written by the recorder from the producer's \
-                 stream handshake and rewritten when the producer restarts, so it cannot be \
-                 set; use another key"
+                "--metadata {key}=: a recording keeps its producer epochs as entries in its \
+                 recorder layer, and {key} is reserved for recordings written before \
+                 metriken-recorder 0.7, so it cannot be set; use another key"
             ));
         }
         let labels: Vec<(String, String)> = args
@@ -368,17 +457,38 @@ impl RecordingConfig {
             eprintln!("note: the positional OUTPUT is deprecated, use -o/--output");
         }
 
-        let source = metadata
+        // `--metadata source=` names the one endpoint: it is read as the
+        // endpoint's `source=` (and so as `alias=`), not kept as metadata.
+        let sources: Vec<&String> = metadata
             .iter()
-            .find(|(k, _)| k == "source")
-            .map(|(_, v)| v.clone());
+            .filter(|(k, _)| k == "source")
+            .map(|(_, v)| v)
+            .collect();
+        let source = sources.first().map(|s| (*s).clone());
+        let first = sources.first().copied();
+        if let Some((first, other)) =
+            first.and_then(|f| sources.iter().find(|v| **v != f).map(|o| (f, o)))
+        {
+            return Err(format!(
+                "--metadata source={first} and --metadata source={other} disagree; give one \
+                 --metadata source=NAME, or --label alias=NAME, in their place"
+            ));
+        }
+        let metadata: Vec<(String, String)> = metadata
+            .into_iter()
+            .filter(|(k, _)| k != "source")
+            .collect();
 
         let endpoint = EndpointConfig {
             url,
             source,
+            alias: None,
+            tier: None,
+            service_kind: None,
             role: None,
             protocol: None,
             template: None,
+            template_override: false,
             template_json: None,
             arm: None,
             host: None,
@@ -415,8 +525,12 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let mut role: Option<String> = None;
     let mut protocol: Option<Protocol> = None;
     let mut template: Option<PathBuf> = None;
+    let mut template_override = false;
     let mut arm: Option<String> = None;
     let mut host: Option<String> = None;
+    let mut alias: Option<String> = None;
+    let mut tier: Option<String> = None;
+    let mut service_kind: Option<String> = None;
 
     if let Some(opts) = rest {
         for pair in opts.split(',') {
@@ -436,6 +550,17 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                     }
                     template = Some(PathBuf::from(value));
                 }
+                "template_override" => {
+                    template_override = match value {
+                        "true" => true,
+                        "false" => false,
+                        other => {
+                            return Err(format!(
+                                "template_override={other:?} is not true or false"
+                            ));
+                        }
+                    };
+                }
                 "arm" if value.is_empty() => return Err("arm= needs a value".to_string()),
                 "arm" if value.trim() != value => {
                     return Err(format!("arm={value:?} has whitespace around it"));
@@ -446,6 +571,15 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                     return Err(format!("host={value:?} has whitespace around it"));
                 }
                 "host" => host = Some(value.to_string()),
+                "alias" | "tier" | "service_kind" if value.is_empty() => {
+                    return Err(format!("{key}= needs a value"));
+                }
+                "alias" | "tier" | "service_kind" if value.trim() != value => {
+                    return Err(format!("{key}={value:?} has whitespace around it"));
+                }
+                "alias" => alias = Some(value.to_string()),
+                "tier" => tier = Some(value.to_string()),
+                "service_kind" => service_kind = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
                         "stream" | "rezolus" | "msgpack" => Protocol::Stream,
@@ -461,9 +595,13 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     Ok(EndpointConfig {
         url,
         source,
+        alias,
+        tier,
+        service_kind,
         role,
         protocol,
         template,
+        template_override,
         template_json: None,
         arm,
         host,
@@ -748,9 +886,9 @@ mod tests {
         );
     }
 
-    /// `producer_epoch` and `producer_epochs` are the recorder's: setting
-    /// either with `--metadata` is refused rather than kept until a restart
-    /// overwrites it.
+    /// `producer_epoch` and `producer_epochs` are reserved for recordings
+    /// written before metriken-recorder 0.7: setting either with `--metadata`
+    /// is refused.
     #[test]
     fn metadata_naming_the_producer_epoch_is_refused() {
         for key in ["producer_epoch", "producer_epochs"] {
@@ -758,7 +896,10 @@ mod tests {
             let err = parse(&["--url", "http://localhost:4241", "--metadata", &arg])
                 .err()
                 .unwrap_or_else(|| panic!("--metadata {arg} must be refused"));
-            assert!(err.contains("written by the recorder"), "{err}");
+            assert!(
+                err.contains("reserved for recordings written before"),
+                "{err}"
+            );
         }
         assert!(parse(&["--url", "http://localhost:4241", "--metadata", "epoch=x"]).is_ok());
     }
@@ -822,10 +963,139 @@ mod tests {
         assert_eq!(ep.role.as_deref(), Some("agent"));
     }
 
+    /// `alias=`, `tier=` and `service_kind=` are endpoint options, each a
+    /// value without surrounding whitespace.
+    #[test]
+    fn an_endpoint_takes_alias_tier_and_service_kind() {
+        let ep =
+            parse_endpoint_str("http://a:8000/metrics,alias=p0,tier=server,service_kind=prefill")
+                .unwrap();
+        assert_eq!(ep.alias.as_deref(), Some("p0"));
+        assert_eq!(ep.tier.as_deref(), Some("server"));
+        assert_eq!(ep.service_kind.as_deref(), Some("prefill"));
+        for bad in ["alias=", "tier= x", "service_kind= x"] {
+            let arg = format!("http://a:8000/metrics,{bad}");
+            assert!(parse_endpoint_str(&arg).is_err(), "{arg}");
+        }
+    }
+
+    /// `source=` is read as `alias=` on every way of giving an endpoint, and
+    /// a run-wide `--label source=` as `--label alias=`; a `source=` and an
+    /// `alias=` that disagree are refused.
+    #[test]
+    fn source_is_read_as_alias() {
+        let cfg = parse(&["--endpoint", "http://a:4241,source=web"]).unwrap();
+        assert_eq!(cfg.endpoints[0].alias.as_deref(), Some("web"));
+        assert_eq!(cfg.endpoints[0].source, None);
+        let cfg = parse(&["--endpoint", "http://a:4241,source=web,alias=web"]).unwrap();
+        assert_eq!(cfg.endpoints[0].alias.as_deref(), Some("web"));
+        let err = parse(&["--endpoint", "http://a:4241,source=web,alias=db"])
+            .err()
+            .expect("refused");
+        assert!(err.contains("source=web and alias=db"), "{err}");
+
+        let cfg = parse(&["--url", "http://a:4241", "--metadata", "source=web"]).unwrap();
+        assert_eq!(cfg.endpoints[0].alias.as_deref(), Some("web"));
+        assert!(
+            !cfg.metadata.iter().any(|(k, _)| k == "source"),
+            "{:?}",
+            cfg.metadata
+        );
+
+        let cfg = parse(&["--url", "http://a:4241", "--label", "source=run"]).unwrap();
+        assert_eq!(cfg.labels, [("alias".to_string(), "run".to_string())]);
+        let err = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "source=run",
+            "--label",
+            "alias=other",
+        ])
+        .err()
+        .expect("refused");
+        assert!(err.contains("disagree"), "{err}");
+
+        // Every `--label source=` is read as an alias, and two that differ
+        // are refused; the last `--label alias=` is the one compared.
+        let cfg = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "source=run",
+            "--label",
+            "source=run",
+        ])
+        .unwrap();
+        assert_eq!(cfg.labels, [("alias".to_string(), "run".to_string())]);
+        let err = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "source=a",
+            "--label",
+            "source=b",
+        ])
+        .err()
+        .expect("refused");
+        assert!(err.contains("source=a and --label source=b"), "{err}");
+        let cfg = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "alias=a",
+            "--label",
+            "alias=b",
+            "--label",
+            "source=b",
+        ])
+        .unwrap();
+        assert!(
+            !cfg.labels.iter().any(|(k, _)| k == "source"),
+            "{:?}",
+            cfg.labels
+        );
+
+        // A config file's endpoint is checked the same way.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = dir.path().join("record.toml");
+        std::fs::write(
+            &toml,
+            "[recording]\noutput = \"out.dendro\"\n\n[[endpoints]]\nurl = \"http://a:4241\"\nalias = \" padded\"\n",
+        )
+        .unwrap();
+        let err = parse(&["--config", toml.to_str().unwrap()])
+            .err()
+            .expect("refused");
+        assert!(err.contains("alias=\" padded\""), "{err}");
+
+        // Two `--metadata source=` with `--url` that differ are refused.
+        let err = parse(&[
+            "--url",
+            "http://a:4241",
+            "--metadata",
+            "source=a",
+            "--metadata",
+            "source=b",
+        ])
+        .err()
+        .expect("refused");
+        assert!(
+            err.contains("--metadata source=a and --metadata source=b"),
+            "{err}"
+        );
+
+        // An empty or padded `source=` is refused, as `alias=` is.
+        for bad in ["source=", "source= web"] {
+            let arg = format!("http://a:4241,{bad}");
+            assert!(parse(&["--endpoint", &arg]).is_err(), "{arg}");
+        }
+    }
+
     #[test]
     fn test_parse_endpoint_str_url_only() {
         let ep = parse_endpoint_str("http://localhost:9090/metrics").unwrap();
-        assert!(ep.source.is_none()); // probe resolves it
+        assert!(ep.source.is_none()); // the recording has none unless its producer gives one
         assert!(ep.role.is_none());
     }
 
@@ -919,6 +1189,68 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("failed to read good.json"), "{err}");
+    }
+
+    /// `template_override=` takes `true` or `false`, from `--endpoint` and as
+    /// a config file's `template_override = true`, and is refused without
+    /// `template=`.
+    #[test]
+    fn template_override_needs_a_template_and_a_boolean() {
+        let ep = parse_endpoint_str("http://h:9090/metrics,template=k.json,template_override=true")
+            .unwrap();
+        assert!(ep.template_override);
+        let ep =
+            parse_endpoint_str("http://h:9090/metrics,template=k.json,template_override=false")
+                .unwrap();
+        assert!(!ep.template_override);
+        let err = parse_endpoint_str("http://h:9090/metrics,template=k.json,template_override=yes")
+            .unwrap_err();
+        assert_eq!(err, r#"template_override="yes" is not true or false"#);
+
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.json");
+        std::fs::write(&good, r#"{"service_name":"vllm","kpis":[]}"#).unwrap();
+        let parse = |args: &[&str]| {
+            let mut argv = vec!["record"];
+            argv.extend_from_slice(args);
+            crate::recorder::command()
+                .try_get_matches_from(argv)
+                .map_err(|e| e.to_string())
+                .and_then(|m| RecordingConfig::from_args(&m))
+        };
+        let err = parse(&["--endpoint", "http://h:9090/metrics,template_override=true"])
+            .err()
+            .unwrap();
+        assert_eq!(
+            err,
+            "endpoint http://h:9090/metrics: template_override=true needs template=FILE"
+        );
+        let toml = |name: &str, body: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "[recording]\noutput = \"run.dendro\"\n\n[[endpoints]]\n\
+                     url = \"http://h:9090/metrics\"\n{body}"
+                ),
+            )
+            .unwrap();
+            path.to_str().unwrap().to_string()
+        };
+        let with = toml(
+            "with.toml",
+            &format!(
+                "template = {:?}\ntemplate_override = true\n",
+                good.display().to_string()
+            ),
+        );
+        assert!(parse(&["--config", &with]).unwrap().endpoints[0].template_override);
+        let without = toml("without.toml", "template_override = true\n");
+        let err = parse(&["--config", &without]).err().unwrap();
+        assert!(
+            err.ends_with("template_override=true needs template=FILE"),
+            "{err}"
+        );
     }
 
     #[test]

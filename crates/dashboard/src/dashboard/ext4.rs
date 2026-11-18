@@ -74,11 +74,11 @@ fn operations(view: &mut View) {
         let sg = ops.subgroup(title);
         sg.describe(what);
         sg.plot_promql(
-            PlotOpts::histogram_latency(format!("{title} Latency"), format!("op-{op}-latency")),
+            Plot::histogram_latency(format!("{title} Latency"), format!("op-{op}-latency")),
             format!("ext4_op_latency{{op=\"{op}\"}}"),
         );
         sg.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 format!("{title} Calls"),
                 format!("op-{op}-calls"),
                 Unit::Count,
@@ -86,7 +86,7 @@ fn operations(view: &mut View) {
             format!("sum by (mount) (irate(ext4_ops{{op=\"{op}\"}}[5m]))"),
         );
         sg.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 format!("{title} Mean Latency"),
                 format!("op-{op}-mean"),
                 Unit::Time,
@@ -97,7 +97,7 @@ fn operations(view: &mut View) {
             ),
         );
         sg.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 format!("{title} Errors"),
                 format!("op-{op}-errors"),
                 Unit::Count,
@@ -106,7 +106,7 @@ fn operations(view: &mut View) {
         );
         if op == "write" {
             sg.plot_promql(
-                PlotOpts::counter("Bytes Written", "op-write-bytes", Unit::Datarate),
+                Plot::counter("Bytes Written", "op-write-bytes", Unit::Datarate),
                 rate("ext4_write_bytes"),
             );
         }
@@ -134,25 +134,25 @@ fn write_path(view: &mut View, data: &dyn MetricsSource) {
     );
     if has_metric(data, "ext4_write_bytes") {
         terms.plot_promql(
-            PlotOpts::counter("Application Bytes", "path-application", Unit::Datarate),
+            Plot::counter("Application Bytes", "path-application", Unit::Datarate),
             total_rate("ext4_write_bytes"),
         );
     }
     if has_metric(data, "ext4_writepages_pages") {
         terms.plot_promql(
-            PlotOpts::counter("Writeback Bytes", "path-writeback", Unit::Datarate),
+            Plot::counter("Writeback Bytes", "path-writeback", Unit::Datarate),
             "sum(irate(ext4_writepages_pages{outcome=\"written\"}[5m])) * 4096".to_string(),
         );
     }
     if has_metric(data, "ext4_journal_commit_blocks") {
         terms.plot_promql(
-            PlotOpts::counter("Journal Bytes", "path-journal", Unit::Datarate),
+            Plot::counter("Journal Bytes", "path-journal", Unit::Datarate),
             "sum(irate(ext4_journal_commit_blocks{kind=\"logged\"}[5m])) * 4096".to_string(),
         );
     }
     if has_metric(data, "blockio_bytes") {
         terms.plot_promql(
-            PlotOpts::counter("Device Bytes", "path-device", Unit::Datarate),
+            Plot::counter("Device Bytes", "path-device", Unit::Datarate),
             "sum(irate(blockio_bytes{op=\"write\"}[5m]))".to_string(),
         );
     }
@@ -170,19 +170,19 @@ fn journal(view: &mut View) {
          commit rate tracks fsync rate on a durability-bound workload.",
     );
     commits.plot_promql(
-        PlotOpts::counter("Commits", "commits", Unit::Count),
+        Plot::counter("Commits", "commits", Unit::Count),
         rate("ext4_journal_commits"),
     );
     commits.plot_promql(
-        PlotOpts::counter("Handles", "commit-handles", Unit::Count),
+        Plot::counter("Handles", "commit-handles", Unit::Count),
         rate("ext4_journal_commit_handles"),
     );
     commits.plot_promql(
-        PlotOpts::counter("Blocks Logged", "commit-blocks-logged", Unit::Count),
+        Plot::counter("Blocks Logged", "commit-blocks-logged", Unit::Count),
         rate("ext4_journal_commit_blocks{kind=\"logged\"}"),
     );
     commits.plot_promql(
-        PlotOpts::counter("Blocks Dirtied", "commit-blocks-dirtied", Unit::Count),
+        Plot::counter("Blocks Dirtied", "commit-blocks-dirtied", Unit::Count),
         rate("ext4_journal_commit_blocks{kind=\"dirtied\"}"),
     );
 
@@ -201,7 +201,7 @@ fn journal(view: &mut View) {
         ("locked", "Locked"),
     ] {
         phases.plot_promql(
-            PlotOpts::histogram_latency(title, format!("commit-{phase}")),
+            Plot::histogram_latency(title, format!("commit-{phase}")),
             format!("ext4_journal_commit_latency{{phase=\"{phase}\"}}"),
         );
     }
@@ -213,7 +213,7 @@ fn journal(view: &mut View) {
          credits.",
     );
     handles.plot_promql(
-        PlotOpts::histogram_latency("Handle Start", "handle-start"),
+        Plot::histogram_latency("Handle Start", "handle-start"),
         "ext4_journal_handle_start_latency".to_string(),
     );
 
@@ -224,15 +224,15 @@ fn journal(view: &mut View) {
          the write rate: transactions are being closed early to make room.",
     );
     checkpoint.plot_promql(
-        PlotOpts::counter("Checkpoints", "checkpoints", Unit::Count),
+        Plot::counter("Checkpoints", "checkpoints", Unit::Count),
         rate("ext4_journal_checkpoints"),
     );
     checkpoint.plot_promql(
-        PlotOpts::histogram_latency("Checkpoint Latency", "checkpoint-latency"),
+        Plot::histogram_latency("Checkpoint Latency", "checkpoint-latency"),
         "ext4_journal_checkpoint_latency".to_string(),
     );
     checkpoint.plot_promql(
-        PlotOpts::counter("Forced to Close", "checkpoint-forced-to-close", Unit::Count),
+        Plot::counter("Forced to Close", "checkpoint-forced-to-close", Unit::Count),
         rate("ext4_journal_checkpoint_forced_to_close"),
     );
 
@@ -242,11 +242,11 @@ fn journal(view: &mut View) {
          reports these in whole milliseconds.",
     );
     stalls.plot_promql(
-        PlotOpts::counter("Stalls", "lock-buffer-stalls", Unit::Count),
+        Plot::counter("Stalls", "lock-buffer-stalls", Unit::Count),
         rate("ext4_journal_lock_buffer_stalls"),
     );
     stalls.plot_promql(
-        PlotOpts::histogram_latency("Stall Latency", "lock-buffer-stall-latency"),
+        Plot::histogram_latency("Stall Latency", "lock-buffer-stall-latency"),
         "ext4_journal_lock_buffer_stall_latency".to_string(),
     );
 
@@ -260,11 +260,11 @@ fn journal(view: &mut View) {
          under Syscall, in the sync class.",
     );
     calls.plot_promql(
-        PlotOpts::counter("Calls", "sync-calls", Unit::Count),
+        Plot::counter("Calls", "sync-calls", Unit::Count),
         "sum by (op) (irate(ext4_sync_file[5m]))".to_string(),
     );
     calls.plot_promql(
-        PlotOpts::counter("Errors", "sync-errors", Unit::Count),
+        Plot::counter("Errors", "sync-errors", Unit::Count),
         rate("ext4_sync_file_errors"),
     );
 
@@ -279,11 +279,11 @@ fn journal(view: &mut View) {
          read-only gauge shows the state a remount leaves behind.",
     );
     reported.plot_promql(
-        PlotOpts::counter("Errors", "errors", Unit::Count),
+        Plot::counter("Errors", "errors", Unit::Count),
         rate("ext4_errors"),
     );
     reported.plot_promql(
-        PlotOpts::counter("Shutdowns", "shutdowns", Unit::Count),
+        Plot::counter("Shutdowns", "shutdowns", Unit::Count),
         rate("ext4_shutdowns"),
     );
 
@@ -301,11 +301,11 @@ fn allocator(view: &mut View) {
          This is the always-on form of what e2freefrag reports offline.",
     );
     effort.plot_promql(
-        PlotOpts::counter("Allocations", "allocations", Unit::Count),
+        Plot::counter("Allocations", "allocations", Unit::Count),
         rate("ext4_allocations"),
     );
     effort.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "Groups Scanned per Allocation",
             "groups-per-allocation",
             Unit::Count,
@@ -317,7 +317,7 @@ fn allocator(view: &mut View) {
         ),
     );
     effort.plot_promql(
-        PlotOpts::counter("By Criterion", "allocations-by-criterion", Unit::Count),
+        Plot::counter("By Criterion", "allocations-by-criterion", Unit::Count),
         "sum by (criterion) (irate(ext4_allocations_by_criterion[5m]))".to_string(),
     );
 
@@ -328,7 +328,7 @@ fn allocator(view: &mut View) {
          because no free run was long enough.",
     );
     extents.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "Blocks Requested vs Allocated",
             "allocation-blocks",
             Unit::Count,
@@ -336,12 +336,17 @@ fn allocator(view: &mut View) {
         "sum by (kind) (irate(ext4_allocation_blocks[5m]))".to_string(),
     );
     extents.plot_promql(
-        PlotOpts::histogram("Extent Size", "allocation-size", Unit::Count, "percentiles")
-            .with_log_scale(true),
+        Plot::histogram(
+            "Extent Size",
+            "allocation-size",
+            Unit::Count,
+            HistogramView::Percentiles,
+        )
+        .with_log_scale(true),
         "ext4_allocation_size".to_string(),
     );
     extents.plot_promql(
-        PlotOpts::counter("Blocks Freed", "freed-blocks", Unit::Count),
+        Plot::counter("Blocks Freed", "freed-blocks", Unit::Count),
         rate("ext4_freed_blocks"),
     );
 
@@ -351,15 +356,15 @@ fn allocator(view: &mut View) {
          blocks released back to the pool when files are closed, truncated or unlinked.",
     );
     discard.plot_promql(
-        PlotOpts::counter("Trimmed Blocks", "trimmed-blocks", Unit::Count),
+        Plot::counter("Trimmed Blocks", "trimmed-blocks", Unit::Count),
         rate("ext4_trimmed_blocks"),
     );
     discard.plot_promql(
-        PlotOpts::counter("Preallocation Releases", "prealloc-discards", Unit::Count),
+        Plot::counter("Preallocation Releases", "prealloc-discards", Unit::Count),
         rate("ext4_preallocation_discards"),
     );
     discard.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "Preallocated Blocks Released",
             "prealloc-blocks",
             Unit::Count,
@@ -377,7 +382,7 @@ fn allocator(view: &mut View) {
          store shows here as a burst of frees.",
     );
     churn.plot_promql(
-        PlotOpts::counter("Allocated vs Freed", "inodes", Unit::Count),
+        Plot::counter("Allocated vs Freed", "inodes", Unit::Count),
         "sum by (op) (irate(ext4_inodes[5m]))".to_string(),
     );
 
@@ -392,15 +397,15 @@ fn allocator(view: &mut View) {
          up with the dirtying rate.",
     );
     passes.plot_promql(
-        PlotOpts::counter("Passes", "writepages", Unit::Count),
+        Plot::counter("Passes", "writepages", Unit::Count),
         rate("ext4_writepages"),
     );
     passes.plot_promql(
-        PlotOpts::counter("Pages Written vs Skipped", "writepages-pages", Unit::Count),
+        Plot::counter("Pages Written vs Skipped", "writepages-pages", Unit::Count),
         "sum by (outcome) (irate(ext4_writepages_pages[5m]))".to_string(),
     );
     passes.plot_promql(
-        PlotOpts::counter("Errors", "writepages-errors", Unit::Count),
+        Plot::counter("Errors", "writepages-errors", Unit::Count),
         rate("ext4_writepages_errors"),
     );
 
@@ -415,11 +420,11 @@ fn allocator(view: &mut View) {
          atime on a cold inode cache; bitmap reads are the allocator's own cold-metadata cost.",
     );
     reads.plot_promql(
-        PlotOpts::counter("Inode-table Reads", "inode-loads", Unit::Count),
+        Plot::counter("Inode-table Reads", "inode-loads", Unit::Count),
         rate("ext4_inode_loads"),
     );
     reads.plot_promql(
-        PlotOpts::counter("Bitmap Reads", "bitmap-loads", Unit::Count),
+        Plot::counter("Bitmap Reads", "bitmap-loads", Unit::Count),
         "sum by (kind) (irate(ext4_bitmap_loads[5m]))".to_string(),
     );
 

@@ -16,18 +16,14 @@ const builtIns = (sections) => ({
     samplers: sections.filter((s) => !PINNED_ROUTES.includes(baseRoute(s.route))),
 });
 
-// Group `sections` (`[{ name, route, instance? }]`) for the sidebar. In
-// compare mode the cgroup section is hidden (v1 scope).
+// Group `sections` (`[{ name, route, instance? }]`) for the sidebar.
 //
 // A section carrying `instance` is one of several renderings of the
 // built-in sections, one per recording of a combined archive: those are
 // grouped by instance, in order, under `instances` (`[{ name, overview,
 // exceptions, samplers }]`), and the top-level overview, exceptions and
 // samplers are left empty.
-export const groupSections = (sections, compareMode) => {
-    const visible = compareMode
-        ? sections.filter((s) => baseRoute(s.route) !== '/cgroups')
-        : sections;
+export const groupSections = (visible) => {
     const services = visible.filter((s) => s.route.startsWith('/service/'));
     // Foreign (non-Rezolus) source sections get their own "Metrics" group;
     // "Samplers" is reserved for the Rezolus agent's built-in samplers.

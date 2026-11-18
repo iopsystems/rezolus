@@ -1807,6 +1807,100 @@ mod tests {
         );
     }
 
+    // Dedicated group + histogram, touched by no other test.
+    static V3_UNSTAMPED_HISTOGRAM_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "unstamped_histogram_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_UNSTAMPED_HISTOGRAM_GROUP_ENTRY: &'static AcquisitionGroup =
+        &V3_UNSTAMPED_HISTOGRAM_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_unstamped_histogram_probe",
+        metadata = { acq_group = "unstamped_histogram_probe" }
+    )]
+    static V3_UNSTAMPED_HISTOGRAM_PROBE: metriken::RwLockCounterHistogram =
+        metriken::RwLockCounterHistogram::new(3, 64);
+
+    /// A histogram in a declared group no sampler has stamped is absent from
+    /// the snapshot, and joins it, with a valid schema, once the group is
+    /// stamped; the same builder carries its skeleton cache across the two.
+    #[test]
+    fn histogram_of_a_never_stamped_group_is_absent_until_the_first_stamp() {
+        let name = "unattributed/unstamped_histogram_probe";
+        let mut cache = v3_builder();
+
+        let Snapshot::V3(before) = create_v3(Duration::from_secs(1), vec![], &mut cache, (0, 0))
+        else {
+            panic!("expected V3")
+        };
+        assert!(
+            before.groups.iter().all(|g| g.name != name),
+            "a never-stamped histogram group must be absent"
+        );
+
+        V3_UNSTAMPED_HISTOGRAM_GROUP.acquire().finish();
+
+        let Snapshot::V3(after) = create_v3(Duration::from_secs(1), vec![], &mut cache, (0, 0))
+        else {
+            panic!("expected V3")
+        };
+        let group = after
+            .groups
+            .iter()
+            .find(|g| g.name == name)
+            .expect("the group is present once stamped");
+        assert_eq!(group.validate(), Ok(()));
+        assert!(group.window.is_some());
+        let schema = group.schema.as_ref().expect("schema present");
+        assert!(schema.histograms.iter().any(|d| {
+            d.metadata.get("metric").map(String::as_str)
+                == Some("snapshot_v3_unstamped_histogram_probe")
+        }));
+    }
+
+    /// No declared group holds both a histogram and a counter or gauge.
+    /// `RezolusRouter::route` leaves out a never-stamped group's histograms
+    /// and keeps its other members, so a mixed group would be published
+    /// without its histograms before its first stamp, and a build whose
+    /// identity pass and walk the stamp falls between would drop the whole
+    /// group. Static metrics only: a
+    /// test may register a dynamic mixed group while this one runs.
+    #[test]
+    fn no_declared_group_mixes_histograms_with_other_metrics() {
+        let router = super::super::router::RezolusRouter::new();
+        let mut kinds: HashMap<(String, String), (bool, bool)> = HashMap::new();
+        for metric in metriken::metrics().static_metrics() {
+            let Some(group) = metric
+                .metadata()
+                .get(metriken_exposition::group_builder::GROUP_METADATA_KEY)
+            else {
+                continue;
+            };
+            let histogram = matches!(
+                metric.value(),
+                Some(Value::Histogram(_) | Value::GaugeHistogram(_))
+            );
+            let entry = kinds
+                .entry((router.sampler(metric).to_string(), group.to_string()))
+                .or_default();
+            if histogram {
+                entry.0 = true;
+            } else {
+                entry.1 = true;
+            }
+        }
+        let mixed: Vec<_> = kinds
+            .iter()
+            .filter(|(_, (h, o))| *h && *o)
+            .map(|(k, _)| k)
+            .collect();
+        assert!(
+            mixed.is_empty(),
+            "groups mixing histograms and other metrics: {mixed:?}"
+        );
+    }
+
     // Dedicated group + metric, touched by no other test. `rustc test`
     // threads tests in parallel within one process, sharing the whole
     // metriken registry: a test that instead asserted on the shared
@@ -2151,10 +2245,10 @@ mod tests {
     // Dedicated group + metric, backing capacity for 512 members. Declared,
     // dense (`member_bound`, not reader-stamped), with per-member metadata
     // attached — the shape most declared groups use in production
-    // (per-CPU/per-core counters). Grown from `ALLOC_TEST_SMALL_N` to
-    // `ALLOC_TEST_LARGE_N` members mid-test (see the test below) so hit-tick
-    // allocations can be compared AT TWO DIFFERENT MEMBER COUNTS WITHIN ONE
-    // TEST RUN — the direct way to prove "not O(N)" without depending on
+    // (per-CPU/per-core counters). Measured at `ALLOC_TEST_SMALL_N` and
+    // `ALLOC_TEST_LARGE_N` members, alternately (see the test below), so
+    // hit-tick allocations can be compared AT TWO DIFFERENT MEMBER COUNTS
+    // WITHIN ONE TEST RUN — the direct way to prove "not O(N)" without depending on
     // knowing this test binary's total registry size (a `create_v3` call
     // always walks the FULL `metriken` registry, so a hit tick's measured
     // allocation total is dominated by O(distinct groups) bookkeeping
@@ -2179,18 +2273,26 @@ mod tests {
     static V3_ALLOC_COUNTERS: metriken::CounterGroup =
         metriken::CounterGroup::new(ALLOC_TEST_LARGE_N);
 
-    /// Populate `[from, to)` with a value and per-member metadata, set the
-    /// group's member bound to `to`, and re-acquire/finish the bracket so
-    /// the next `create_v3` call sees the new population.
-    fn grow_alloc_probe(from: usize, to: usize) {
-        for idx in from..to {
-            V3_ALLOC_COUNTERS.add(idx, idx as u64 + 1);
-            V3_ALLOC_COUNTERS.set_metadata(idx, [("cpu".to_string(), idx.to_string())].into());
+    /// Give members `0..n` per-member metadata and clear it from the rest,
+    /// set the group's member bound to `n`, and re-acquire/finish the bracket
+    /// so the next `create_v3` call sees `n` populated members, as a per-CPU
+    /// group with `n` CPUs has.
+    fn populate_alloc_probe(n: usize) {
+        for idx in 0..ALLOC_TEST_LARGE_N {
+            if idx < n {
+                V3_ALLOC_COUNTERS.set_metadata(idx, [("cpu".to_string(), idx.to_string())].into());
+            } else {
+                V3_ALLOC_COUNTERS.clear_metadata(idx);
+            }
         }
-        V3_ALLOC_GROUP.set_member_bound(to);
+        V3_ALLOC_GROUP.set_member_bound(n);
         let guard = V3_ALLOC_GROUP.acquire();
         guard.finish();
     }
+
+    /// How many small/large pairs `v3_hit_tick_allocations_are_a_small_constant_not_o_n`
+    /// measures. See the test for why it takes the smallest difference.
+    const ALLOC_ROUNDS: usize = 3;
 
     /// How many hit ticks to measure before taking the minimum. See
     /// [`warm_then_measure_hit`] for why the minimum is the right estimator.
@@ -2201,7 +2303,7 @@ mod tests {
     ///
     /// The warm tick is necessarily a miss for anything that changed since the
     /// last call using this `cache` — this fixture right after
-    /// `grow_alloc_probe` moved its member bound, for instance — so it is not
+    /// `populate_alloc_probe` changed its members, for instance — so it is not
     /// measured.
     ///
     /// # Why the minimum, and not one sample
@@ -2214,19 +2316,17 @@ mod tests {
     /// pays a real miss for a group this test never touched, and a miss
     /// allocates.
     ///
-    /// That interference is **one-sided**: it can only ADD allocations. Nothing
-    /// another test does can make this walk cheaper than a clean all-hit walk,
-    /// because the hit path is already the cheapest path through the builder.
-    /// So the minimum over a few samples converges on the clean cost, while a
-    /// single sample is whatever the rest of the suite happened to be doing at
-    /// that instant.
+    /// Another test's change to metric state causes one miss on the next walk
+    /// and only adds allocations, so the minimum over a few samples drops it, while a single sample is whatever
+    /// the rest of the suite happened to be doing at that instant. A lasting
+    /// change to another group moves every later walk's cost, up or down, and
+    /// the minimum does not remove that; the test handles it by comparing
+    /// measurements taken back to back over several rounds.
     ///
-    /// This replaces a wide tolerance. The margin was set against locally
-    /// observed noise of ~40 and CI produced 382 on a PR that could not reach
-    /// this code (#1232) — widening it further would have meant a test that
-    /// cannot fail for the reason it exists. Sampling removes the noise instead
-    /// of accommodating it, which is what lets the margin below be tight enough
-    /// to mean something.
+    /// The minimum over samples and the minimum over rounds together keep the
+    /// interference below the test's margin of 100 in the suite at 8 threads;
+    /// a wider margin would let a regression of one allocation per member
+    /// (about 504) come closer to passing.
     fn warm_then_measure_hit(cache: &mut V3Builder) -> (Snapshot, usize) {
         let _ = create_v3(Duration::from_secs(1), vec![], cache, (0, 0));
 
@@ -2258,21 +2358,12 @@ mod tests {
     fn v3_hit_tick_allocations_are_a_small_constant_not_o_n() {
         let mut cache = v3_builder();
 
-        // Settle the PROCESS before phase 1 measures anything.
-        //
-        // `create_v3` walks the whole metriken registry, and a good deal of
-        // what it touches is lazily initialized on first use — metric storage,
-        // group registries, the per-sampler attribution map. Whichever
-        // measurement runs first pays for all of it.
-        //
-        // That is why this test failed on GitHub's runners while passing on a
-        // 32-core Linux box and on macOS: the two phases are compared against
-        // each other, so anything one-time landing in phase 1 reads as phase 2
-        // being *cheaper*, and the margin is two-sided. Measured on CI, phase 1
-        // came in ~382 allocations above phase 2 — consistently, not randomly.
-        //
-        // A throwaway cache, so this does not warm the one under test: phase 1
-        // must still see its own first tick as a miss.
+        // Settle the process before anything is measured. `create_v3` walks
+        // the whole metriken registry, and much of what it touches is lazily
+        // initialized on first use (metric storage, group registries, the
+        // per-sampler attribution map), so the first measurement would pay
+        // for all of it and read higher than the rest. A throwaway cache, so
+        // this does not warm the one under test.
         {
             let mut settle = v3_builder();
             for _ in 0..3 {
@@ -2280,24 +2371,41 @@ mod tests {
             }
         }
 
-        // Phase 1: SMALL_N members, hit tick measured.
-        grow_alloc_probe(0, ALLOC_TEST_SMALL_N);
-        let (snap_small, small_allocs) = warm_then_measure_hit(&mut cache);
-        let group_small = alloc_probe_group(&snap_small);
-        let schema_small = group_small.schema.as_ref().expect("schema present").clone();
-        assert_eq!(schema_small.counters.len(), ALLOC_TEST_SMALL_N);
+        for idx in 0..ALLOC_TEST_LARGE_N {
+            V3_ALLOC_COUNTERS.add(idx, idx as u64 + 1);
+        }
 
-        // Phase 2: grow to LARGE_N members — the next tick using `cache`
-        // must be a miss (real membership change), then the tick after
-        // that is a fresh hit at the larger member count.
-        grow_alloc_probe(ALLOC_TEST_SMALL_N, ALLOC_TEST_LARGE_N);
-        let (snap_large, large_allocs) = warm_then_measure_hit(&mut cache);
+        // Each round measures a hit tick over SMALL_N populated members, then
+        // over LARGE_N, back to back. Every measured walk covers the whole
+        // registry, and other tests change that registry's cost while this
+        // runs, so two measurements taken apart in time differ by whatever
+        // changed in between. Such a change usually falls inside one round,
+        // while a per-member cost appears in every round, so the test asserts
+        // on the smallest difference over the rounds. Values are set on all
+        // LARGE_N members in both measurements (a `CounterGroup` cannot zero a
+        // slot), so the rounds vary the member bound and metadata, not the
+        // number of non-zero values.
+        let mut pairs = Vec::with_capacity(ALLOC_ROUNDS);
+        let mut last = None;
+        for _ in 0..ALLOC_ROUNDS {
+            populate_alloc_probe(ALLOC_TEST_SMALL_N);
+            let (snap_small, small_allocs) = warm_then_measure_hit(&mut cache);
+            populate_alloc_probe(ALLOC_TEST_LARGE_N);
+            let (snap_large, large_allocs) = warm_then_measure_hit(&mut cache);
+            pairs.push((small_allocs, large_allocs));
+            last = Some((snap_small, snap_large));
+        }
+        let (snap_small, snap_large) = last.expect("ALLOC_ROUNDS is non-zero");
+
+        let group_small = alloc_probe_group(&snap_small);
+        let schema_small = group_small.schema.as_ref().expect("schema present");
+        assert_eq!(schema_small.counters.len(), ALLOC_TEST_SMALL_N);
         let group_large = alloc_probe_group(&snap_large);
         let schema_large = group_large.schema.as_ref().expect("schema present");
         assert_eq!(schema_large.counters.len(), ALLOC_TEST_LARGE_N);
-        assert!(
-            !Arc::ptr_eq(&schema_small, schema_large),
-            "growing membership must NOT reuse the small fixture's cached Arc<GroupSchema>"
+        assert_ne!(
+            group_small.schema_hash, group_large.schema_hash,
+            "growing membership changes the schema hash"
         );
 
         // The identity-hash claim, pinned directly: a hit tick reuses the
@@ -2325,48 +2433,27 @@ mod tests {
             "a hit tick's wire output (values) equals the prior tick's for this unchanged fixture"
         );
 
-        // The allocation-parity claim: growing this fixture's OWN member
-        // count 64x (SMALL_N=8 -> LARGE_N=512) must not move the hit-tick
-        // allocation total by anywhere close to that factor. Both
-        // measurements walk the SAME process-wide metriken registry (every
-        // other declared group this test binary registers, dozens of them,
-        // contributes the SAME O(distinct groups) bookkeeping cost to
-        // both), so comparing them cancels that shared baseline and
-        // isolates this fixture's own marginal cost.
-        //
-        // Measured on this run (2026-08-19, this worktree, debug build,
-        // `--test-threads=1`): small_allocs and large_allocs came out
-        // IDENTICAL — 916 both times (down from 1,407 before the
-        // tuple-keyed routing fix below dropped the remaining
-        // O(registry-entry-count) `format!` cost) — meaning this fixture's
-        // growth from 8 to 512 members added exactly zero additional
-        // allocations on a hit. Under `cargo test`'s default parallelism
-        // the two
-        // measurements are NOT taken back-to-back in isolation — other
-        // tests mutate their OWN groups on other threads in between, and
-        // `create_v3` walks the full process-wide registry every time, so
-        // Both counts are the MINIMUM over `HIT_SAMPLES` hit ticks, so the
-        // one-sided interference described on `warm_then_measure_hit` has
-        // been sampled out rather than tolerated. What remains is the real
-        // difference between a hit tick over 8 members and one over 512, and
-        // the claim under test is that there is none: the hit path reuses the
-        // cached `Arc<GroupSchema>` and touches no per-member allocation.
-        //
-        // The margin is therefore small on purpose. Before the change this
-        // test pins, growing 504 more members cost a `MetricDesc` (`String`
-        // name + `BTreeMap`) AND an `entry_metadata` `HashMap` per member —
-        // on the order of 1,500+ extra allocations. A margin of 100 sits an
-        // order of magnitude below that and no longer has to absorb whatever
-        // the rest of the suite was doing at that instant.
-        let delta = large_allocs.abs_diff(small_allocs);
+        // The allocation-parity claim: growing this fixture's own member
+        // count 64x must not move the hit-tick allocation total. Run alone
+        // (`--test-threads=1`) the two counts are equal. A hit reuses the
+        // cached `Arc<GroupSchema>`; without that, each of the 504 extra
+        // members costs a `MetricDesc` (a `String` name and a cloned
+        // `BTreeMap` of metadata), about 10 allocations each: a miss measured
+        // 6478 allocations at 512 members and 1420 at 8. A margin of 100 is
+        // well below that.
+        let delta = pairs
+            .iter()
+            .map(|(small, large)| small.abs_diff(*large))
+            .min()
+            .expect("ALLOC_ROUNDS is non-zero");
         assert!(
             delta <= 100,
             "growing this fixture from {ALLOC_TEST_SMALL_N} to {ALLOC_TEST_LARGE_N} members \
-             changed hit-tick allocations by {delta} ({small_allocs} -> {large_allocs}), \
-             each the minimum over {HIT_SAMPLES} hit ticks — expected ~0. A per-member \
-             allocation regression would move this by well over a thousand; a delta in \
-             the low hundreds instead means the hit path started doing per-member work \
-             that is cheap but not free"
+             changed hit-tick allocations by at least {delta} in every round \
+             (small, large per round: {pairs:?}), each count the minimum over \
+             {HIT_SAMPLES} hit ticks — expected ~0. A regression of one allocation per \
+             member moves this by about 504; a smaller delta means the hit path does \
+             work that scales with members but allocates less than once per member"
         );
     }
 

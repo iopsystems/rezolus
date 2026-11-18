@@ -77,21 +77,28 @@ const TABLE: &str = "fake/ops";
 /// the optional metadata routes, which hindsight treats as absent. Returns the
 /// bound port; the accept loop is detached and dies with the test process.
 fn spawn_fake_agent(width: usize) -> u16 {
-    spawn_agent(width, None, false)
+    spawn_agent(width, None, false, None)
 }
 
 /// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
 /// and is then closed, and every later one gets a 404: an agent replaced by
 /// one that cannot stream, or a proxy that stopped routing the path.
 fn spawn_fake_agent_that_stops(width: usize, frames: u64) -> u16 {
-    spawn_agent(width, Some(frames), false)
+    spawn_agent(width, Some(frames), false, None)
 }
 
 /// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
 /// and is then closed, as when the agent restarts; every later one streams
 /// under [`RESTARTED_EPOCH`].
 fn spawn_fake_agent_that_restarts(width: usize, frames: u64) -> u16 {
-    spawn_agent(width, Some(frames), true)
+    spawn_agent(width, Some(frames), true, None)
+}
+
+/// As [`spawn_fake_agent`], but its `good + 1`th frame is stamped before the
+/// Unix epoch, which the recorder cannot read: the agent's rows cannot be
+/// recorded from then on.
+fn spawn_fake_agent_with_an_unreadable_frame(width: usize, good: u64) -> u16 {
+    spawn_agent(width, None, false, Some(good))
 }
 
 /// The producer epoch the stand-in agent streams under, before and after a
@@ -99,7 +106,7 @@ fn spawn_fake_agent_that_restarts(width: usize, frames: u64) -> u16 {
 const EPOCH: &str = "fake-epoch";
 const RESTARTED_EPOCH: &str = "fake-epoch-2";
 
-fn spawn_agent(width: usize, frames: Option<u64>, restarts: bool) -> u16 {
+fn spawn_agent(width: usize, frames: Option<u64>, restarts: bool, unreadable: Option<u64>) -> u16 {
     let subscriptions = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
@@ -122,14 +129,14 @@ fn spawn_agent(width: usize, frames: Option<u64>, restarts: bool) -> u16 {
                 let first = || subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
                 if path.starts_with("/metrics/stream") && restarts {
                     if first() {
-                        serve_stream(stream, &path, width, frames, EPOCH);
+                        serve_stream(stream, &path, width, frames, EPOCH, unreadable);
                     } else {
-                        serve_stream(stream, &path, width, None, RESTARTED_EPOCH);
+                        serve_stream(stream, &path, width, None, RESTARTED_EPOCH, unreadable);
                     }
                     return;
                 }
                 if path.starts_with("/metrics/stream") && (frames.is_none() || first()) {
-                    serve_stream(stream, &path, width, frames, EPOCH);
+                    serve_stream(stream, &path, width, frames, EPOCH, unreadable);
                     return;
                 }
                 let _ = stream.write_all(
@@ -153,13 +160,15 @@ fn wall_ns() -> u64 {
 /// preamble and a handshake, then one rows frame per requested interval
 /// carrying `width` counters (`fake_ops_0`..) in the `fake/ops` acquisition
 /// group, the schema on the first row only, until hindsight hangs up. Each
-/// frame's values differ, so consecutive rows are not deduped.
+/// frame's values differ, so consecutive rows are not deduped. Frame
+/// `unreadable` (counting from 0), if given, is stamped before the epoch.
 fn serve_stream(
     mut stream: std::net::TcpStream,
     path: &str,
     width: usize,
     frames: Option<u64>,
     epoch: &str,
+    unreadable: Option<u64>,
 ) {
     use dendro::replicate::{wire, Frame};
     use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
@@ -206,6 +215,8 @@ fn serve_stream(
         gauges: Vec::new(),
         histograms: Vec::new(),
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     for seq in 0u64.. {
         if frames.is_some_and(|n| seq >= n) {
@@ -223,6 +234,8 @@ fn serve_stream(
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         let anchor = (seq == 0).then(|| (&schema).into());
         let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(&group, anchor)).unwrap();
@@ -234,7 +247,11 @@ fn serve_stream(
                 index_state: dendro::replicate::NO_INDEX_STATE,
                 rows: vec![dendro::archive::WalRow {
                     stream: TABLE.to_string(),
-                    ts: ts as i64,
+                    ts: if unreadable == Some(seq) {
+                        -1
+                    } else {
+                        ts as i64
+                    },
                     wall_offset: 0,
                     row,
                 }],
@@ -1591,9 +1608,33 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
     assert!(rows >= 10, "the capture holds the recorded rows:\n{stdout}");
 }
 
+/// An agent whose rows cannot be recorded (a frame stamped before the epoch)
+/// ends the daemon as a refused reconnect does: hindsight writes the buffer
+/// to a timestamped file beside `output` and exits with status 1.
+#[test]
+fn an_agent_whose_rows_cannot_be_recorded_captures_the_buffer_then_exits() {
+    let agent = spawn_fake_agent_with_an_unreadable_frame(1, 20);
+    let mut h = Hindsight::try_start(agent, 8)
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    let status = h.wait_for_exit(Duration::from_secs(60));
+    assert_eq!(status.code(), Some(1), "{}", h.log_text());
+    assert!(h.log_has("rows could not be recorded"), "{}", h.log_text());
+    let dir = h.output.parent().unwrap();
+    let captures: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("snapshot-") && n.ends_with(".dendro"))
+        })
+        .collect();
+    assert_eq!(captures.len(), 1, "one capture beside output: {captures:?}");
+}
+
 /// An agent that restarts while hindsight runs is recorded in the buffer's
-/// metadata: `producer_epochs` gains the new process from its first row, and
-/// `producer_epoch` names it.
+/// metadata: the recorder layer gains an entry for the new process from its
+/// first row.
 #[test]
 fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
     use metriken_storage::Catalog;
@@ -1608,26 +1649,35 @@ fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
 
     let catalog = metriken_storage::DendroCatalog::open(&dest).expect("the dump opens");
     let sources = catalog.sources().unwrap();
-    let metadata = &sources[0].metadata;
-    assert_eq!(
-        metadata.get("producer_epoch").map(String::as_str),
-        Some(RESTARTED_EPOCH),
-        "{metadata:?}"
-    );
-    let epochs: serde_json::Value = serde_json::from_str(
-        metadata
-            .get("producer_epochs")
-            .unwrap_or_else(|| panic!("no producer_epochs: {metadata:?}")),
-    )
-    .unwrap();
-    let epochs = epochs.as_array().unwrap();
+    let epochs = recorded_epochs(&sources[0].metadata);
     assert_eq!(epochs.len(), 2, "{epochs:?}");
-    assert_eq!(epochs[0]["epoch"], EPOCH);
-    assert_eq!(epochs[1]["epoch"], RESTARTED_EPOCH);
-    assert!(
-        epochs[1]["from_ts"].as_u64() > epochs[0]["from_ts"].as_u64(),
-        "the new epoch starts after the first: {epochs:?}"
+    assert_eq!(epochs[0].0, EPOCH);
+    assert_eq!(
+        epochs[0].1, None,
+        "the opening epoch covers from the first row"
     );
+    assert_eq!(epochs[1].0, RESTARTED_EPOCH);
+    assert!(epochs[1].1.is_some(), "the restart starts at its first row");
+}
+
+/// The producer epochs a recording's recorder layer records, in the order
+/// they were appended: each epoch's id, its `from_ts` (none for the one the
+/// recording opened with), and the `version` its entry carries.
+fn recorded_epochs(
+    metadata: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, Option<u64>, Option<String>)> {
+    let layers = metriken_storage::layers::Layers::read(metadata)
+        .expect("the layers parse")
+        .expect("the recording has identity layers");
+    layers
+        .recorder
+        .entries
+        .iter()
+        .filter_map(|e| {
+            let epoch = e.epoch.clone()?;
+            Some((epoch, e.from_ts, e.metadata.get("version").cloned()))
+        })
+        .collect()
 }
 
 /// The buffer is a dendro archive, and its dumps are dendro archives that the
@@ -1768,4 +1818,151 @@ fn an_output_not_ending_in_dendro_is_refused_at_startup() {
             "neither the output nor a buffer is created"
         );
     }
+}
+
+/// A stand-in for an agent older than `/metrics/stream` (5.21.0): it answers
+/// `/` with the `Rezolus 5.20.0 Agent` banner and 404s everything else.
+/// Returns the bound port, and a receiver that gets a message each time the
+/// banner has been sent; the accept loop dies with the test process.
+fn spawn_old_agent() -> (u16, std::sync::mpsc::Receiver<()>) {
+    let (banner_tx, banner_rx) = std::sync::mpsc::channel();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the old agent");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut request = String::new();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            if reader.read_line(&mut request).is_err() {
+                continue;
+            }
+            // The rest of the head, so the reply is not sent mid-request.
+            let mut line = String::new();
+            while reader.read_line(&mut line).map(|n| n > 2).unwrap_or(false) {
+                line.clear();
+            }
+            let banner = request.starts_with("GET / ");
+            let reply = if banner {
+                let body = "Rezolus 5.20.0 Agent";
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else {
+                "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    .to_string()
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            if banner {
+                let _ = banner_tx.send(());
+            }
+        }
+    });
+    (port, banner_rx)
+}
+
+/// A child process killed when this is dropped.
+struct KillOnDrop(Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A pipe whose buffer is already full, so the first write to it blocks until
+/// the reader drains it. Its write end is for a child's stderr.
+fn full_pipe() -> (std::io::PipeReader, std::io::PipeWriter) {
+    use std::os::fd::AsRawFd;
+    let (reader, mut writer) = std::io::pipe().expect("failed to create a pipe");
+    let fd = writer.as_raw_fd();
+    let set_nonblocking = |on: bool| {
+        // SAFETY: fcntl on a pipe descriptor this function owns.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            let flags = if on {
+                flags | libc::O_NONBLOCK
+            } else {
+                flags & !libc::O_NONBLOCK
+            };
+            assert_eq!(libc::fcntl(fd, libc::F_SETFL, flags), 0);
+        }
+    };
+    set_nonblocking(true);
+    loop {
+        match writer.write(&[b'.'; 4096]) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) => panic!("failed to fill the pipe: {e}"),
+        }
+    }
+    set_nonblocking(false);
+    (reader, writer)
+}
+
+/// An agent that cannot stream is refused at startup with a message naming
+/// its version and a 5.x hindsight, and nothing is created: the log is
+/// flushed before the exit, and the agent is probed before the output file
+/// and the buffer directory exist.
+///
+/// stderr is a pipe that is already full, read only 200 ms after the
+/// stand-in has sent its banner, the last request of the probe. The log's
+/// writer thread is still blocked when hindsight exits, so the refusal
+/// reaches stderr only if the exit waits for the log to be flushed (up to
+/// about a second).
+#[test]
+fn an_agent_older_than_the_stream_is_refused_with_a_message_and_nothing_created() {
+    let (agent, banner_sent) = spawn_old_agent();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("snapshot.dendro");
+    let config = write_config(dir.path(), agent, 2, &output);
+
+    let (mut reader, writer) = full_pipe();
+    let child = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("hindsight")
+        .arg(&config)
+        .stdout(Stdio::null())
+        .stderr(writer)
+        .spawn()
+        .expect("failed to run rezolus hindsight");
+    // Killed after a minute, or when the test fails first, so a hindsight
+    // that keeps running cannot hang the test on the pipe.
+    let child = Arc::new(Mutex::new(KillOnDrop(child)));
+    {
+        let child = Arc::downgrade(&child);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(60));
+            if let Some(child) = child.upgrade() {
+                let _ = child.lock().unwrap().0.kill();
+            }
+        });
+    }
+    banner_sent
+        .recv_timeout(Duration::from_secs(60))
+        .expect("hindsight never asked the agent for its banner");
+    std::thread::sleep(Duration::from_millis(200));
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    let status = child.lock().unwrap().0.wait().unwrap();
+    let stderr = String::from_utf8_lossy(&bytes);
+    let stderr = stderr.trim_start_matches('.');
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    for needle in [
+        "cannot serve its replication stream",
+        "5.20.0",
+        "5.21.0",
+        "5.x hindsight",
+    ] {
+        assert!(stderr.contains(needle), "{needle:?} in:\n{stderr}");
+    }
+    let left: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        left,
+        vec!["hindsight.toml".to_string()],
+        "nothing is created"
+    );
 }

@@ -21,10 +21,10 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     // An individual plot draws a line per cgroup, named and coloured by the
     // cgroup, also when one cgroup is selected; inferred from the result, one
     // series would be a plain line in the accent colour.
-    let plot = |group: &mut Group, opts: PlotOpts, query: String| {
+    let plot = |group: &mut Group, opts: PlotBuilder, query: String| {
         group.plot_promql(
             if individual {
-                opts.with_style("multi")
+                opts.with_style(ChartStyle::Multi)
             } else {
                 opts
             },
@@ -50,7 +50,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     if individual {
         plot(
             group,
-            PlotOpts::gauge(
+            Plot::gauge(
                 "Memory (Including Descendants)",
                 "individual-memory",
                 Unit::Bytes,
@@ -59,7 +59,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         );
         plot(
             group,
-            PlotOpts::gauge(
+            Plot::gauge(
                 "Swap (Including Descendants)",
                 "individual-memory-swap",
                 Unit::Bytes,
@@ -98,7 +98,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         ] {
             plot(
                 group,
-                PlotOpts::gauge(title, format!("individual-memory-{kind}"), Unit::Bytes),
+                Plot::gauge(title, format!("individual-memory-{kind}"), Unit::Bytes),
                 format!("sum by (name) (cgroup_memory_stat{{kind=\"{kind}\",{filter}}})"),
             );
         }
@@ -106,7 +106,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter(
+        Plot::counter(
             "Total CPU Cores",
             format!("{prefix}-total-cores"),
             Unit::Count,
@@ -116,7 +116,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter(
+        Plot::counter(
             "User CPU Cores",
             format!("{prefix}-user-cores"),
             Unit::Count,
@@ -132,7 +132,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter(
+        Plot::counter(
             "System CPU Cores",
             format!("{prefix}-system-cores"),
             Unit::Count,
@@ -148,7 +148,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter(
+        Plot::counter(
             "CPU Migrations",
             format!("{prefix}-cpu-migrations"),
             Unit::Rate,
@@ -158,7 +158,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter(
+        Plot::counter(
             "CPU Throttled Time",
             format!("{prefix}-cpu-throttled-time"),
             Unit::Time,
@@ -168,7 +168,20 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter(
+        Plot::counter(
+            "Uninterruptible Tasks",
+            format!("{prefix}-uninterruptible-tasks"),
+            Unit::Count,
+        ),
+        format!(
+            "{} / 1000000000",
+            rate("cgroup_scheduler_uninterruptible_wait")
+        ),
+    );
+
+    plot(
+        group,
+        Plot::counter(
             "ext4 Blocked Time",
             format!("{prefix}-ext4-blocked-time"),
             Unit::Time,
@@ -178,7 +191,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter(
+        Plot::counter(
             "XFS Log Blocked Time",
             format!("{prefix}-xfs-log-blocked-time"),
             Unit::Time,
@@ -188,7 +201,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter("IPC", format!("{prefix}-ipc"), Unit::Count),
+        Plot::counter("IPC", format!("{prefix}-ipc"), Unit::Count),
         if individual {
             format!(
                 "sum by (name) (irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{{{filter}}}[5m]))"
@@ -202,13 +215,13 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     plot(
         group,
-        PlotOpts::counter("TLB Flushes", format!("{prefix}-tlb-flush"), Unit::Rate),
+        Plot::counter("TLB Flushes", format!("{prefix}-tlb-flush"), Unit::Rate),
         rate("cgroup_cpu_tlb_flush"),
     );
 
     plot(
         group,
-        PlotOpts::counter("Syscalls", format!("{prefix}-syscall"), Unit::Rate),
+        Plot::counter("Syscalls", format!("{prefix}-syscall"), Unit::Rate),
         rate("cgroup_syscall"),
     );
 
@@ -235,7 +248,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         let op_lower = op.to_lowercase();
         plot(
             group,
-            PlotOpts::counter(
+            Plot::counter(
                 format!("Syscall {op}"),
                 format!("{prefix}-syscall-{op_lower}"),
                 Unit::Rate,

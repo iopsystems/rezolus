@@ -25,7 +25,7 @@ mod snapshot;
 pub use snapshot::SnapshotBuilder;
 
 /// Serialize sampler metric mutations with snapshot and contract tests.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn test_registry() -> TestRegistryGuard {
     TestRegistryGuard {
         _guard: snapshot::BUILDER_TEST_LOCK
@@ -34,12 +34,12 @@ pub(crate) fn test_registry() -> TestRegistryGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) struct TestRegistryGuard {
     _guard: std::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 impl TestRegistryGuard {
     /// Build registered sampler columns without reacquiring the registry lock.
     pub(crate) fn stream_groups(&self) -> Vec<metriken_exposition::group_builder::StreamGroup> {
@@ -297,6 +297,10 @@ async fn stream(
 /// metriken-exposition adds (the producer epoch, and the frame interval and
 /// update floor `.negotiated()` sets).
 ///
+/// The producer identity (`metriken.producer.*`: `rezolus`, this version and
+/// the machine's hostname) names the recording's producer, from which the
+/// readers tell an agent's recording from another (`dashboard::identity`).
+///
 /// `dashboard` is the section template for this build's metrics
 /// (`dashboard::rezolus_template`) with `revision` naming this release. A
 /// stream recording keeps it in the source's metadata, and the viewers render
@@ -305,12 +309,14 @@ async fn stream(
 /// recorder, hindsight buffer or live viewer that much once per connection
 /// and once per archive source.
 fn handshake_metadata() -> std::collections::BTreeMap<String, String> {
-    [(
+    let mut metadata: std::collections::BTreeMap<String, String> = [(
         ::dashboard::source_templates::KEY_DASHBOARD.to_string(),
         handshake_dashboard().to_string(),
     )]
     .into_iter()
-    .collect()
+    .collect();
+    metadata.extend(metriken_exposition::producer_identity!().to_metadata());
+    metadata
 }
 
 /// The `dashboard` value [`handshake_metadata`] sends, built once.
@@ -438,6 +444,19 @@ mod stream_tests {
     /// tests' deadlines are stream time, and a lock wait does not count
     /// against them.
     const STREAM_DEADLINE: Duration = Duration::from_secs(60);
+
+    /// The handshake names this agent as its producer, so a recording of the
+    /// stream is read as the agent's (`dashboard::identity`), and carries the
+    /// section template.
+    #[test]
+    fn the_handshake_declares_the_agents_producer_identity() {
+        let metadata = super::handshake_metadata();
+        let identity = metriken_exposition::ProducerIdentity::from_metadata(&metadata)
+            .expect("a producer identity");
+        assert_eq!(identity.name, "rezolus");
+        assert_eq!(identity.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert!(metadata.contains_key(::dashboard::source_templates::KEY_DASHBOARD));
+    }
 
     /// A one-second subscription in `layout`, as the handler builds one.
     fn subscription(layout: Layout) -> StreamSubscription {
@@ -1658,6 +1677,8 @@ mod stream_frame_fixture {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         }
     }
 
@@ -1683,6 +1704,8 @@ mod stream_frame_fixture {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         })
         .unwrap();
         AgentRow {
@@ -1734,6 +1757,8 @@ mod stream_frame_fixture {
                     gauges: Vec::new(),
                     histograms: Vec::new(),
                     gauge_histograms: Vec::new(),
+                    float_counters: Vec::new(),
+                    float_gauges: Vec::new(),
                 })
                 .collect(),
         })

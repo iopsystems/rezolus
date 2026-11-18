@@ -74,11 +74,9 @@ fn drive_labels(drive: &Drive) -> std::collections::BTreeMap<String, String> {
     labels
 }
 
-/// The temperature gauge covers every drive; the NVMe thermal counters are a
-/// different population and live in their own group. They were one group, with
-/// the counters labeled only for NVMe drives — so a SATA drive's slot meant
-/// something on the gauge and nothing on the counters beside it, inside one
-/// group. A slot index cannot express that.
+/// The temperature gauge covers every drive; the NVMe-only metrics
+/// (`NVME_GROUPS`) are their own group, labelled for NVMe drives only (see
+/// `stats::DRIVEHEALTH_NVME_ACQ`).
 static SWEEP_IDENTITY: metriken::group::SlotIdentity =
     metriken::group::SlotIdentity::grouped(SWEEP_IDENTITY_GROUPS);
 
@@ -327,7 +325,8 @@ impl Sampler for DriveHealth {
                 if let Some(celsius) = r.temperature_c {
                     let _ = DRIVE_TEMPERATURE.set(idx, celsius);
                 }
-                // NVMe thermal-throttle counters (from the same log-page read).
+                // NVMe thermal-throttle counters and Temperature Sensors 1 to
+                // 8, from the same log-page read.
                 if let Some(h) = r.nvme {
                     let counters: [(&CounterGroup, u64); 6] = [
                         (&DRIVE_TEMPERATURE_WARNING_TIME, h.warning_temp_time_s),

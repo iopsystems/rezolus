@@ -264,7 +264,8 @@ struct Recording {
 impl Recording {
     /// Reread the archive after each commit, until the channel closes (the
     /// session was dropped, which stops the recorder and closes its writer
-    /// first), a write fails, or the agent refuses a reconnect.
+    /// first), a write fails, the agent refuses a reconnect, or the agent's
+    /// rows cannot be recorded.
     fn run(self, mut events: tokio::sync::mpsc::Receiver<mr::Event>) {
         let label = self.label.clone();
         while let Some(event) = events.blocking_recv() {
@@ -288,6 +289,12 @@ impl Recording {
                     self.stop(format!(
                         "the agent can no longer serve /metrics/stream: {reason}"
                     ));
+                    break;
+                }
+                // The live view records one agent, so it stops with it.
+                mr::Event::SourceFailed { reason, .. } => {
+                    error!("{label}: the agent's rows could not be recorded: {reason}");
+                    self.stop(format!("the agent's rows could not be recorded: {reason}"));
                     break;
                 }
                 mr::Event::LabelsNotApplied { labels, .. } => {
@@ -437,6 +444,24 @@ mod tests {
             Some(format!("rezolus {}", env!("CARGO_PKG_VERSION")))
         );
         assert_eq!(routes, embedded_routes());
+        // The recording of the agent's real stream names its producer, from
+        // the identity the handshake declares.
+        let metadata = state.baseline_data().file_metadata();
+        let identity = ::dashboard::identity::Identity::read(&metadata);
+        assert!(identity.layered, "{metadata:?}");
+        assert!(identity.is_rezolus(), "{identity:?}");
+        let sorted = metadata.into_iter().collect();
+        let layers = metriken_storage::layers::Layers::read(&sorted)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            layers
+                .producer
+                .metadata
+                .get("producer_name")
+                .map(String::as_str),
+            Some("rezolus")
+        );
         drop(state);
     }
 
@@ -504,7 +529,7 @@ mod tests {
         // The last tick's gauge, which was in the WAL when refreshed:
         // `mem_free` is 1,000 - i.
         let at = (ANCHOR + 12 * SECOND) as f64 / 1e9;
-        let metriken_query::QueryResult::Vector { result } =
+        let metriken_query::QueryResult::Vector { result, .. } =
             live.query("mem_free", Some(at)).unwrap()
         else {
             panic!("an instant query gives a vector");
@@ -516,7 +541,7 @@ mod tests {
     /// A query's answer with each series' labels sorted.
     fn answer(live: &LiveReader, query: &str) -> Vec<String> {
         let (lo, hi) = live.time_range_ns().unwrap();
-        let metriken_query::QueryResult::Matrix { result } = live
+        let metriken_query::QueryResult::Matrix { result, .. } = live
             .query_range(query, lo as f64 / 1e9, hi as f64 / 1e9, 1.0)
             .unwrap()
         else {
@@ -626,7 +651,7 @@ mod tests {
         let (lo, hi) = live.time_range_ns().unwrap();
         let mixed = live.query_range("mem_free", lo as f64 / 1e9, hi as f64 / 1e9, 1.0);
         let values = match mixed {
-            Ok(metriken_query::QueryResult::Matrix { result }) => {
+            Ok(metriken_query::QueryResult::Matrix { result, .. }) => {
                 result.into_iter().flat_map(|m| m.values).collect()
             }
             _ => Vec::new(),
@@ -698,6 +723,28 @@ mod tests {
         std::thread::spawn(move || rec.run(rx)).join().unwrap();
         let why = stopped.lock().unwrap().clone().expect("a reason");
         assert!(why.contains("HTTP 404"), "{why}");
+    }
+
+    /// An agent whose rows cannot be recorded stops the recording and
+    /// records why: the live view records one agent, and no `Failed`
+    /// follows a source's failure.
+    #[test]
+    fn a_source_failure_records_why_the_recording_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = Arc::new(Mutex::new(None));
+        let rec = recording(&dir.path().join("live.dendro"), &stopped);
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.try_send(mr::Event::SourceFailed {
+            source: mr::SourceId(0),
+            reason: "a streamed frame could not be read".to_string(),
+        })
+        .unwrap();
+        tx.try_send(mr::Event::NoneRecording).unwrap();
+        // A closed channel also ends the thread, without a reason.
+        drop(tx);
+        std::thread::spawn(move || rec.run(rx)).join().unwrap();
+        let why = stopped.lock().unwrap().clone().expect("a reason");
+        assert!(why.contains("could not be read"), "{why}");
     }
 
     /// A session that is dropped closes the channel; that is not a failure.

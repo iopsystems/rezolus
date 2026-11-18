@@ -13,8 +13,9 @@ pub(crate) use ::rez::container::Container;
 /// The parquet converter for the file at `path`: its source labelled
 /// `source=<name>` when the file's `source` metadata names one source and no
 /// series carries a `source` label of its own
-/// (`dashboard::combined::parquet_source_label`), so a KPI template that
-/// selects `{source="<name>"}` matches the converted recording's series.
+/// (`dashboard::combined::parquet_source_label`): the label the 5.x viewer
+/// gave the file's series, so a template written against the file that
+/// selects `{source="<name>"}` still matches.
 pub(crate) fn parquet_converter(path: &Path) -> metriken_storage::to_dendro::ParquetToArchive {
     let converter = metriken_storage::to_dendro::ParquetToArchive::new();
     match metriken_query::ParquetReader::open(path)
@@ -43,6 +44,9 @@ pub(crate) fn convert_quiet(
     use metriken_storage::to_dendro::{convert_path, ConvertedFrom};
     let container = Container::of_path(input);
     let summary = match container {
+        Container::Parquet if super::combined_parquet::is_combined(input) => {
+            super::combined_parquet::convert(input, output)?
+        }
         Container::Parquet => {
             let w = parquet_converter(input)
                 .convert_file_path(input, output)

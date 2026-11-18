@@ -6,8 +6,11 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::mounts;
 
-// Non-Linux builds still need metric and acquisition-group registration.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod macos;
+
+// Other builds still need metric and acquisition-group registration.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod stats {
     include!("./linux/stats.rs");
 }

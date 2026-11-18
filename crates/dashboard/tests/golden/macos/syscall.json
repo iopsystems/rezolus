@@ -1,0 +1,1206 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Syscall",
+      "id": "syscall",
+      "subgroups": [
+        {
+          "name": "Overall",
+          "description": "Aggregate syscall rate and latency across all operation categories.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Overall Rate",
+                "id": "syscall-total-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Overall Mean/Total",
+                "id": "syscall-total-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency)",
+              "promql_query_total": "histogram_sum(syscall_latency)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Overall Latency",
+                "id": "syscall-total-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency"
+            }
+          ]
+        },
+        {
+          "name": "Read",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Rate",
+                "id": "syscall-read-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"read\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Mean/Total",
+                "id": "syscall-read-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"read\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"read\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Latency",
+                "id": "syscall-Read-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"read\"}"
+            }
+          ]
+        },
+        {
+          "name": "Write",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Rate",
+                "id": "syscall-write-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"write\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Mean/Total",
+                "id": "syscall-write-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"write\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"write\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Latency",
+                "id": "syscall-Write-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"write\"}"
+            }
+          ]
+        },
+        {
+          "name": "Poll",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Poll Rate",
+                "id": "syscall-poll-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"poll\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Poll Mean/Total",
+                "id": "syscall-poll-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"poll\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"poll\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Poll Latency",
+                "id": "syscall-Poll-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"poll\"}"
+            }
+          ]
+        },
+        {
+          "name": "Socket",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Socket Rate",
+                "id": "syscall-socket-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"socket\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Socket Mean/Total",
+                "id": "syscall-socket-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"socket\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"socket\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Socket Latency",
+                "id": "syscall-Socket-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"socket\"}"
+            }
+          ]
+        },
+        {
+          "name": "Lock",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Lock Rate",
+                "id": "syscall-lock-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"lock\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Lock Mean/Total",
+                "id": "syscall-lock-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"lock\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"lock\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Lock Latency",
+                "id": "syscall-Lock-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"lock\"}"
+            }
+          ]
+        },
+        {
+          "name": "Time",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Time Rate",
+                "id": "syscall-time-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"time\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Time Mean/Total",
+                "id": "syscall-time-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"time\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"time\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Time Latency",
+                "id": "syscall-Time-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"time\"}"
+            }
+          ]
+        },
+        {
+          "name": "Sleep",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Sleep Rate",
+                "id": "syscall-sleep-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"sleep\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Sleep Mean/Total",
+                "id": "syscall-sleep-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"sleep\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"sleep\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Sleep Latency",
+                "id": "syscall-Sleep-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"sleep\"}"
+            }
+          ]
+        },
+        {
+          "name": "Yield",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Yield Rate",
+                "id": "syscall-yield-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"yield\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Yield Mean/Total",
+                "id": "syscall-yield-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"yield\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"yield\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Yield Latency",
+                "id": "syscall-Yield-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"yield\"}"
+            }
+          ]
+        },
+        {
+          "name": "Filesystem",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Filesystem Rate",
+                "id": "syscall-filesystem-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"filesystem\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Filesystem Mean/Total",
+                "id": "syscall-filesystem-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"filesystem\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"filesystem\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Filesystem Latency",
+                "id": "syscall-Filesystem-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"filesystem\"}"
+            }
+          ]
+        },
+        {
+          "name": "Sync",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Sync Rate",
+                "id": "syscall-sync-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"sync\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Sync Mean/Total",
+                "id": "syscall-sync-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"sync\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"sync\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Sync Latency",
+                "id": "syscall-Sync-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"sync\"}"
+            }
+          ]
+        },
+        {
+          "name": "Memory",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Rate",
+                "id": "syscall-memory-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"memory\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Mean/Total",
+                "id": "syscall-memory-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"memory\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"memory\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Latency",
+                "id": "syscall-Memory-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"memory\"}"
+            }
+          ]
+        },
+        {
+          "name": "Process",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Process Rate",
+                "id": "syscall-process-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"process\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Process Mean/Total",
+                "id": "syscall-process-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"process\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"process\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Process Latency",
+                "id": "syscall-Process-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"process\"}"
+            }
+          ]
+        },
+        {
+          "name": "Query",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Query Rate",
+                "id": "syscall-query-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"query\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Query Mean/Total",
+                "id": "syscall-query-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"query\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"query\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Query Latency",
+                "id": "syscall-Query-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"query\"}"
+            }
+          ]
+        },
+        {
+          "name": "IPC",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "IPC Rate",
+                "id": "syscall-ipc-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"ipc\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "IPC Mean/Total",
+                "id": "syscall-ipc-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"ipc\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"ipc\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "IPC Latency",
+                "id": "syscall-IPC-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"ipc\"}"
+            }
+          ]
+        },
+        {
+          "name": "Timer",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Timer Rate",
+                "id": "syscall-timer-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"timer\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Timer Mean/Total",
+                "id": "syscall-timer-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"timer\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"timer\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Timer Latency",
+                "id": "syscall-Timer-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"timer\"}"
+            }
+          ]
+        },
+        {
+          "name": "Event",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Event Rate",
+                "id": "syscall-event-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"event\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Event Mean/Total",
+                "id": "syscall-event-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"event\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"event\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Event Latency",
+                "id": "syscall-Event-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"event\"}"
+            }
+          ]
+        },
+        {
+          "name": "Other",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Other Rate",
+                "id": "syscall-other-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall{op=\"other\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Other Mean/Total",
+                "id": "syscall-other-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(syscall_latency{op=\"other\"})",
+              "promql_query_total": "histogram_sum(syscall_latency{op=\"other\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Other Latency",
+                "id": "syscall-Other-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency{op=\"other\"}"
+            }
+          ]
+        }
+      ],
+      "metadata": {
+        "no_collapse": true
+      }
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

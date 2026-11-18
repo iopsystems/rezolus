@@ -115,9 +115,11 @@ attribute directly, so one run per theme covers both.
 
 ## Where the script lives, and why not `tests/`
 
-`scripts/viewer_render.mjs`. CI runs `node --test tests/*.mjs`, and that glob
+`scripts/viewer_render.mjs`. CI runs
+`node --import ./tests/support/charts.mjs --test tests/*.mjs`, and that glob
 takes **every** `.mjs` in the directory, not just `*.test.mjs` — a tool parked
-there gets executed as a test and fails the suite.
+there gets executed as a test and fails the suite. (`tests/support/` is a
+subdirectory, so the glob does not take it.)
 
 ## Fixtures
 

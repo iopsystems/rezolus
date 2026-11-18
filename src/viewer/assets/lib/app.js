@@ -1,7 +1,8 @@
 // app.js — Shared dashboard logic for both server and WASM viewers.
 // Exports initDashboard(config) which sets up state and mounts the Mithril router.
 
-import { ChartsState, Chart } from './charts/chart.js';
+import { ChartsState } from './charts/chart.js';
+import { ChartView } from './ui/chart_view.js';
 import { QueryExplorer, SingleChartView } from './features/explorers.js';
 import { CgroupSelector, seedSelectedCgroups, selectedCgroupSelection, loadCgroupGroups, clearCgroupGroups } from './features/cgroup_selector.js';
 import { GpuSelector } from './features/gpu_selector.js';
@@ -9,15 +10,15 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots, baseRoute, sectionCompares, defaultLandingRoute } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, applyScope, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, singleInstantNotice, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
 setDisplayMode(true);
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor, setFamily } from './selection/selection.js';
-import { SaveModal } from './ui/overlays.js';
+import { SaveModal, notify } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
-import { createSystemInfoView, createMetadataView, renderCgroupSection } from './sections/section_views.js';
+import { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscover } from './sections/section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { readViewState, writeViewState, clearViewState } from './ui/url_state.js';
@@ -26,7 +27,7 @@ import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { MetricBrowserView } from './features/metric_browser.js';
 import { createSourceRoutes } from './features/source_routes.js';
-import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
+import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView, captureQueries } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import { contentFor, CLIENT_SECTIONS } from './ui/client_views.js';
 import {
@@ -226,6 +227,7 @@ const initComponents = () => {
         experimentQueryRange,
         baselineAlias,
         experimentAlias,
+        activeCgroupPattern,
     }));
 
     SystemInfoView = createSystemInfoView({
@@ -296,6 +298,7 @@ const attachExperiment = async (file) => {
     experimentAttached = true;
     compareMode = true;
     refreshCompareCaptures();
+    warnSingleInstant();
 
     applyMultiNodeInfo(expFileMeta);
 
@@ -335,6 +338,7 @@ const detachExperiment = async () => {
 
     applyMultiNodeInfo(null);
     clearViewerCaches();
+    warnSingleInstant();
     m.redraw();
 };
 
@@ -712,6 +716,33 @@ const resetLinkedViewState = () => {
 const reapplyFileMetadata = (fm, experimentFm = null) => {
     fileMetadata = fm || null;
     applyMultiNodeInfo(experimentFm || null);
+    warnSingleInstant();
+};
+
+// Say so, until dismissed, when a recording shown has every row at one
+// timestamp: its charts are empty and nothing else says why. Not for a live
+// agent or a followed archive, which may still gain rows. Each call replaces
+// the previous call's toasts, so a toast never outlives the recording it
+// names; `singleInstantGen` drops an answer that arrives after a later call.
+// setTimeout's longest delay; a larger one, Infinity included, fires at once.
+const UNTIL_DISMISSED = 2 ** 31 - 1;
+let singleInstantToasts = [];
+let singleInstantGen = 0;
+const warnSingleInstant = () => {
+    const gen = ++singleInstantGen;
+    for (const remove of singleInstantToasts) remove();
+    singleInstantToasts = [];
+    if (liveMode || following) return;
+    const shown = compareMode
+        ? [[CAPTURE_BASELINE, baselineAlias || 'baseline'], [CAPTURE_EXPERIMENT, experimentAlias || 'experiment']]
+        : [[CAPTURE_BASELINE, null]];
+    for (const [id, label] of shown) {
+        captureMetadata(id).then((meta) => {
+            if (gen !== singleInstantGen) return;
+            const message = singleInstantNotice(meta, label && `The ${label} recording`);
+            if (message) singleInstantToasts.push(notify('warn', message, UNTIL_DISMISSED));
+        }, () => {});
+    }
 };
 
 const applyDisplayWindow = async (win) => {
@@ -984,6 +1015,24 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     },
 });
 
+// The queries of a cgroups section: `baselineQuery` runs a PromQL range
+// query on the section's recording, reading only its sources
+// (`metadata.scope`) with the selected node applied, and `discover` resolves
+// to the cgroup names, those of every capture when `compare`.
+const cgroupQueries = (metadata, compare) => {
+    const withNode = (query) => {
+        const node = getSelectedNode();
+        return node ? injectLabel(query, 'node', node) : query;
+    };
+    const scopedQuery = (query) => executePromQLRangeQuery(
+        query, undefined, undefined, 'grid', metadata?.scope ?? null);
+    const baselineQuery = (query) => scopedQuery(withNode(query));
+    return {
+        baselineQuery,
+        discover: cgroupDiscover({ compare, baselineQuery, scopedQuery, withNode, captureQueries }),
+    };
+};
+
 const SectionContent = {
     view({ attrs }) {
         // No resolved section (route doesn't match a loaded section yet,
@@ -1116,7 +1165,7 @@ const SectionContent = {
                     Group,
                     sectionRoute,
                     runQuery,
-                    Chart,
+                    Chart: ChartView,
                     chartsState,
                 }),
             ]);
@@ -1141,22 +1190,20 @@ const SectionContent = {
             : `${sectionName} (${withData})`;
 
         if (baseRoute(attrs.section.route) === '/cgroups') {
+            const { baselineQuery, discover } = cgroupQueries(attrs.metadata, sectionCompare);
             return renderCgroupSection({
                 attrs,
                 titleText,
                 interval,
                 chartsState,
-                Chart,
+                Chart: ChartView,
                 CgroupSelector,
-                executePromQLRangeQuery: (query, ...args) => {
-                    const node = getSelectedNode();
-                    if (node) query = injectLabel(query, 'node', node);
-                    // The cgroup discovery's own queries, restricted to the
-                    // section's recording as the backend restricted its
-                    // charts' (`metadata.scope`).
-                    query = applyScope(query, attrs.metadata?.scope);
-                    return executePromQLRangeQuery(query, ...args);
-                },
+                executePromQLRangeQuery: baselineQuery,
+                // The selected node filters every capture, as it does the
+                // compare charts (`buildEffectiveQuery`).
+                discover,
+                compare: sectionCompare,
+                Group,
                 applyResultToPlot,
                 substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
@@ -1392,6 +1439,7 @@ const initDashboard = (config = {}) => {
     if ((liveMode || following) && onRefresh) {
         liveRefreshInterval = setInterval(onRefresh, 5000);
     }
+    warnSingleInstant();
 
     // Compare anchors from the link, once the compare state is known: a
     // signed ms offset, or `kind:<event kind>` (resolved per capture from
@@ -1514,11 +1562,9 @@ const initDashboard = (config = {}) => {
                     loadSection(sectionKey, {
                         cgroupPattern: activeCgroupPattern ?? (async (section) => {
                             try {
-                                await loadCgroupGroups(route, (q) => {
-                                    const node = getSelectedNode();
-                                    if (node) q = injectLabel(q, 'node', node);
-                                    return executePromQLRangeQuery(applyScope(q, section.metadata?.scope));
-                                });
+                                await loadCgroupGroups(route, cgroupQueries(
+                                    section.metadata, sectionCompares(compareMode, section.metadata),
+                                ).discover);
                             } catch (e) {
                                 console.warn('[cgroups] group discovery failed:', e);
                             }
@@ -1684,8 +1730,9 @@ const initDashboard = (config = {}) => {
 
                 // Resolve the route synchronously even on a cache miss so
                 // the old section's DOM unmounts immediately (firing each
-                // chart's onremove → echart.dispose()). cachedView falls
-                // back to a "Loading…" placeholder while data is in flight,
+                // ChartView's onremove → Chart.destroy() →
+                // echart.dispose()). cachedView falls back to a
+                // "Loading…" placeholder while data is in flight,
                 // which gets replaced by the populated view via m.redraw()
                 // once loadSection settles.
                 if (!sectionResponseCache[params.section]) {

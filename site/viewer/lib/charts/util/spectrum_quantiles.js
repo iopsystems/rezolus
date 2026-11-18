@@ -1,1 +1,0 @@
-../../../../../src/viewer/assets/lib/charts/util/spectrum_quantiles.js

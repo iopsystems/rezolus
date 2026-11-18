@@ -156,8 +156,8 @@ Arguments:
 
 Options:
   -o, --output <PATH>      Write the annotated recording to this new .dendro instead of in place
-      --queries <PATH>     Custom service extension JSON file (overrides built-in template)
-      --undo               Remove the KPIs (service extension) from each recording
+      --queries <PATH>     A KPI template (service extension JSON file) for each recording; on a recording with identity layers it is a user-layer entry, used over the template its producer sent [alias: --template]
+      --undo               Remove the KPIs (service extension) from each recording; on a recording with identity layers, remove the templates annotate set, so record's template_override=true template, else the producer's, else record's template= default, is used again
       --filter             Refused: filtered a parquet file's columns; use `rezolus recording filter`
       --templates <DIR>    Accepted and unused: annotate reads no template (a DIR that does not load is warned about)
       --node <NAME>        Refused: set a parquet footer key; a recording's labels are set when it is recorded
@@ -205,10 +205,12 @@ Options:
           Write the annotated recording to this new .dendro instead of in place
 
       --queries <PATH>
-          Custom service extension JSON file (overrides built-in template)
+          A KPI template (service extension JSON file) for each recording; on a recording with identity layers it is a user-layer entry, used over the template its producer sent
+          
+          [alias: --template]
 
       --undo
-          Remove the KPIs (service extension) from each recording
+          Remove the KPIs (service extension) from each recording; on a recording with identity layers, remove the templates annotate set, so record's template_override=true template, else the producer's, else record's template= default, is used again
 
       --filter
           Refused: filtered a parquet file's columns; use `rezolus recording filter`
@@ -253,7 +255,7 @@ Arguments:
 
 Options:
       --queries <PATH>         Service-extension JSON whose KPI checks to run, instead of the recording's own
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to check, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Without it every recording is checked.
       --annotate               Write each FAIL/WARN window into the recording as a kind=check range event
@@ -387,7 +389,7 @@ Options:
           Service-extension JSON whose KPI checks to run, instead of the recording's own
 
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to check, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Without it every recording is checked.
 
@@ -724,7 +726,12 @@ A v3 `.rez`'s recordings become sources and its tables streams; segment,
 WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings
 become sources with their labels, metadata, clock anchor and `complete`
 flag. A parquet file becomes one source, labelled with the file's
-`source` when that names one source and no series carries its own.
+`source` when that names one source and no series carries its own;
+a combined parquet (5.x `recording combine`, or the 5.x recorder given
+several endpoints) becomes one source per input file, labelled with
+its `source` and its `node` or `instance`, which the viewer opens as
+one combined view; a column carrying an exporter's own `source` forms
+a source of that name.
 An A/B tarball becomes two sources, its baseline labelled arm=baseline
 and its experiment arm=experiment, which the viewer opens as a
 comparison. Tar and parquet tables are re-encoded.
@@ -842,10 +849,6 @@ Options:
                           the worst a wrong additive call does is add an event. A mutating tool can
                           take another person's events out of a shared recording, so it is off
                           unless the operator starting the server says otherwise. Server mode only.
-      --export-dir <DIR>  Directory the export_query tool may write files into (server mode only)
-                          Without it the tool is listed but refuses every call, naming this flag.
-                          Files land under a bare name the agent chooses (or one derived from the
-                          query), never over an existing file, never outside this directory.
       --viewer-url <URL>  Address of a running `rezolus view`, e.g. http://127.0.0.1:4200 (server mode only)
                           The viewer_link tool then returns a full URL; without it the tool returns the
                           query string and hash fragment for the client to append to a viewer's address.
@@ -875,8 +878,7 @@ A good workflow is describe-metrics (see what's there) → query / detect-anomal
 
 The stdio server also has tools with no CLI form: add_event marks an instant
 or range in the recording, run_checks evaluates its KPI checks (and writes the
-verdicts with annotate=true), export_query writes a range query as CSV or
-parquet under --export-dir, viewer_link builds a link that opens a running
+verdicts with annotate=true), viewer_link builds a link that opens a running
 viewer at a section and time range (a full URL with --viewer-url), and, only
 with --allow-mutating, remove_events takes events out again.
 
@@ -916,12 +918,6 @@ Options:
           take another person's events out of a shared recording, so it is off
           unless the operator starting the server says otherwise. Server mode only.
 
-      --export-dir <DIR>
-          Directory the export_query tool may write files into (server mode only)
-          Without it the tool is listed but refuses every call, naming this flag.
-          Files land under a bare name the agent chooses (or one derived from the
-          query), never over an existing file, never outside this directory.
-
       --viewer-url <URL>
           Address of a running `rezolus view`, e.g. http://127.0.0.1:4200 (server mode only)
           The viewer_link tool then returns a full URL; without it the tool returns the
@@ -944,7 +940,7 @@ Arguments:
   <QUERY2>  Second PromQL query (e.g., 'cgroup_memory_used')
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -983,7 +979,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1007,7 +1003,7 @@ Arguments:
   <FILE>  Recording to describe: a .dendro archive
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1036,7 +1032,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1060,7 +1056,7 @@ Arguments:
   <FILE>  Recording to analyze: a .dendro archive
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1090,7 +1086,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1116,7 +1112,7 @@ Arguments:
            If omitted, analyzes all metrics in the recording
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1154,7 +1150,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1179,7 +1175,11 @@ Arguments:
   <QUERY>  PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --start <TIME>           Start of the window: Unix seconds or RFC 3339 (default: the recording's start)
+      --end <TIME>             End of the window, included: Unix seconds or RFC 3339 (default: the recording's end)
+      --step <DURATION>        Time between evaluations: seconds or humantime such as 10s (default: 1s, coarser past a million seconds)
+      --above <VALUE>          Compute each series' statistics over its points strictly above VALUE
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1206,12 +1206,40 @@ widening first to the union span when the two came from different
 acquisition tables. Queries with no rate() and no histogram have no band
 to show.
 
+The query is evaluated at the multiples of --step (counted from the
+Unix epoch) from --start to --end: by default every second of the
+recording (a coarser whole-second step on a recording of more than a
+million seconds). A query combining samplers of different cadence is
+evaluated at the slower one's rows instead, and histogram_quantile()
+and the other histogram functions without a stride argument give one
+point per row that holds observations, wherever the step falls (a
+gauge histogram gives one per step; histogram_quantiles([q], h, STEP)
+gives one per step). irate() is the rate over one step, so a
+larger step also averages over a longer interval; a rate() at --start
+reads data from before it. No point after the recording's last row is
+printed. A rate() or irate() at --end over a sampler whose rows are
+further apart than 120 s (or two of the recording's finest row
+interval, when that is longer; or a million steps, when that is
+shorter) is computed without its next row.
+
+Each series prints its point count, its first and last points, and
+lines Min:, Max:, Mean:, p50:, p90: and p99: over all its points that
+are not NaN (percentiles by nearest rank). With --above VALUE those
+statistics are over the points strictly above VALUE, and a line
+"Active: K of N points above VALUE" comes first. A series with no
+such point (none above VALUE, or every point NaN) prints no statistics
+lines.
+
 EXAMPLES:
     # Total cycles per second across all CPUs
     rezolus mcp query out.dendro 'sum(irate(cpu_cycles[1m]))'
 
     # A ratio: both operands' bands are combined
     rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'
+
+    # Block IO throughput over the seconds above 500 MB/s, in a window
+    rezolus mcp query out.dendro 'sum(irate(blockio_bytes[1m]))' \
+        --start 2026-11-13T15:00:00Z --end 2026-11-13T15:30:00Z --above 5e8
 
 Usage: rezolus mcp query [OPTIONS] <FILE> <QUERY>
 
@@ -1223,8 +1251,20 @@ Arguments:
           PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')
 
 Options:
+      --start <TIME>
+          Start of the window: Unix seconds or RFC 3339 (default: the recording's start)
+
+      --end <TIME>
+          End of the window, included: Unix seconds or RFC 3339 (default: the recording's end)
+
+      --step <DURATION>
+          Time between evaluations: seconds or humantime such as 10s (default: 1s, coarser past a million seconds)
+
+      --above <VALUE>
+          Compute each series' statistics over its points strictly above VALUE
+
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1248,7 +1288,7 @@ Arguments:
   <FILE>  Recording to analyze: a .dendro archive
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1279,7 +1319,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1302,7 +1342,6 @@ Usage: rezolus mcp install [OPTIONS]
 Options:
       --scope <SCOPE>     Where to register and where the skill goes: user (every project) or project (this directory) [default: user] [possible values: user, project]
       --allow-mutating    Register the server with --allow-mutating (enables remove_events)
-      --export-dir <DIR>  Register the server with --export-dir DIR (enables export_query); must exist
       --viewer-url <URL>  Register the server with --viewer-url URL (viewer_link returns full URLs)
       --no-skill          Register the server only; do not install the skill
       --dry-run           Report what would be done and change nothing
@@ -1332,12 +1371,12 @@ Claude Code resolves a server name local > project > user. When another scope's
 rezolus entry would win over the one written, install says so and names the
 command that removes it.
 
-The server flags given here (--allow-mutating, --export-dir, --viewer-url) are
+The server flags given here (--allow-mutating, --viewer-url) are
 baked into the registered command, so the server the client starts has them.
 
 EXAMPLES:
     rezolus mcp install
-    rezolus mcp install --scope project --export-dir ./exports
+    rezolus mcp install --scope project
     rezolus mcp install --dry-run
 
 Usage: rezolus mcp install [OPTIONS]
@@ -1351,9 +1390,6 @@ Options:
 
       --allow-mutating
           Register the server with --allow-mutating (enables remove_events)
-
-      --export-dir <DIR>
-          Register the server with --export-dir DIR (enables export_query); must exist
 
       --viewer-url <URL>
           Register the server with --viewer-url URL (viewer_link returns full URLs)

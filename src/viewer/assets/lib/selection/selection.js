@@ -2,10 +2,11 @@
 // Selection: built interactively by selecting charts (write mode).
 // Report: loaded from JSON import or parquet metadata (read-only mode).
 
-import { ChartsState, Chart } from '../charts/chart.js';
+import { ChartsState } from '../charts/chart.js';
+import { ChartView } from '../ui/chart_view.js';
 import { CompareChartWrapper } from '../viewer_core.js';
 import { compareToggle } from '../ui/chart_controls.js';
-import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
+import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, plotOwnOpts, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { runCgroupVariants } from '../features/cgroup_selection.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
@@ -148,8 +149,13 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     promql_query: e.promql_query,
     // Optional on pre-fix payloads; null degrades to single-query compare.
     promql_query_experiment: e.promql_query_experiment || null,
-    // An individual cgroup chart's queries when it draws cgroup groups.
+    // The queries of an individual cgroup chart saved with a query per
+    // cgroup group.
     cgroup_queries: e.cgroup_queries || null,
+    // The uuids of the sources the queries read; absent from entries saved
+    // before plots carried a scope, which carry the recording's matchers in
+    // their query text instead.
+    scope: Array.isArray(e.scope) ? e.scope : null,
     category_members: e.category_members || null,
     single_capture: e.single_capture === true || undefined,
     note: e.note || '',
@@ -280,6 +286,7 @@ const persistStore = (key, store) => {
                 promql_query: e.promql_query,
                 promql_query_experiment: e.promql_query_experiment || undefined,
                 cgroup_queries: e.cgroup_queries || undefined,
+                scope: e.scope || undefined,
                 category_members: e.category_members || undefined,
                 single_capture: e.single_capture || undefined,
                 note: e.note,
@@ -506,7 +513,7 @@ export const pinnedChart = (entry, spec, attrs, {
                 // own.
                 categoryMembers: entry.category_members,
             })
-            : m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+            : m(ChartView, { spec, chartsState: attrs.chartsState, interval }),
         toggle: compare && compareToggle(spec, {
             compareMode: attrs.compareMode,
             toggles,
@@ -537,12 +544,17 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
         promql_query_experiment: spec.promql_query_experiment || null,
         // An individual cgroup chart's group queries (cgroup_selector.js).
         cgroup_queries: spec.cgroup_queries || null,
+        // The sources the chart's queries read in a combined archive.
+        scope: spec.scope || null,
         category_members: compareMeta?.categoryMembers || null,
         // Pinned from a recording shown beside a comparison: draws as one
         // capture wherever the entry is rendered.
         single_capture: compareMeta?.singleCapture === true || undefined,
         note: '',
-        chartOpts: JSON.parse(JSON.stringify(spec.opts)),
+        // The plot's own opts: a percentile chart showing a +Inf quantile
+        // has a range.max for this render only (data.js markOverflow).
+        // Every stored or exported chartOpts is copied from here.
+        chartOpts: JSON.parse(JSON.stringify(plotOwnOpts(spec))),
     });
     // Capture compare metadata on first pin in compare mode. Don't
     // overwrite later pins so the first author's intent wins (e.g.,
@@ -706,6 +718,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
         promql_query: e.promql_query,
         promql_query_experiment: e.promql_query_experiment || undefined,
         cgroup_queries: e.cgroup_queries || undefined,
+        scope: e.scope || undefined,
         category_members: e.category_members || undefined,
         single_capture: e.single_capture || undefined,
         note: includeNotes ? e.note : '',
@@ -938,6 +951,7 @@ const chartLoaderMixin = (store, component) => ({
                 promql_query: entry.promql_query,
                 // Bridge: per-side experiment query for category KPIs.
                 promql_query_experiment: entry.promql_query_experiment || undefined,
+                scope: entry.scope || undefined,
                 data: [],
             };
             if (!entry.promql_query) {
@@ -949,12 +963,13 @@ const chartLoaderMixin = (store, component) => ({
                 // Histogram metrics need histogram_quantiles / heatmap
                 // wrapping; the dashboard pipeline does this via
                 // buildEffectiveQuery, but the stored entry only has
-                // the raw metric name. An individual cgroup chart that
-                // drew cgroup groups runs one query per group as well.
+                // the raw metric name. An individual cgroup chart saved
+                // with a query per cgroup group runs each of them.
                 const queries = entry.cgroup_queries
                     || [{ query: entry.promql_query, label: null }];
                 const result = await runCgroupVariants(queries, (q) => executePromQLRangeQuery(
-                    buildEffectiveQuery({ ...spec, promql_query: q }) || q));
+                    buildEffectiveQuery({ ...spec, promql_query: q }) || q,
+                    undefined, undefined, 'grid', entry.scope || null));
                 if (result) {
                     applyResultToPlot(spec, result);
                 }

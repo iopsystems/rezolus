@@ -38,22 +38,43 @@ where
 pub struct EndpointConfig {
     #[serde(deserialize_with = "deserialize_url")]
     pub url: Url,
-    /// The user's `source`. When `None`, the recording's `source` is resolved
-    /// on activation: the stream handshake's, `rezolus` for a recognised
-    /// agent, or a name inferred from the URL (`metriken-recorder`'s source
-    /// identity).
+    /// `source=`, the deprecated spelling of `alias=`: [`RecordingConfig`]
+    /// reads it as `alias` before anything is recorded, so it is `None` on
+    /// an endpoint `record` runs with.
+    ///
+    /// [`RecordingConfig`]: super::config::RecordingConfig
     #[serde(default)]
     pub source: Option<String>,
+    /// `alias=`: the user's name for the endpoint, a label on its recording.
+    /// A recording has no `source` of the user's; its `source` label, when it
+    /// has one, is the one its producer's handshake declares.
+    #[serde(default)]
+    pub alias: Option<String>,
+    /// `tier=`: the endpoint's role in a benchmark (`client`, `server`), a
+    /// label every endpoint in that role shares.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// `service_kind=`: the role its producer runs in (`prefill`), a label
+    /// that refines which KPI template the recording takes.
+    #[serde(default)]
+    pub service_kind: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
     pub protocol: Option<Protocol>,
     /// `template=FILE`: a KPI template (a `ServiceExtension` JSON file)
-    /// written into this endpoint's recording as `service_queries`. Relative
-    /// to the working directory on `--endpoint`, and to the config file's
-    /// directory in a `--config` file (resolved by `from_args`).
+    /// written into this endpoint's recording as `service_queries`, in its
+    /// recorder layer: a default that a template the producer sends is used
+    /// over. Relative to the working directory on `--endpoint`, and to the
+    /// config file's directory in a `--config` file (resolved by
+    /// `from_args`).
     #[serde(default)]
     pub template: Option<PathBuf>,
+    /// `template_override=true`: `template` is written in the recording's
+    /// user layer instead, so it is used over a template the producer sends.
+    /// Refused without `template`.
+    #[serde(default)]
+    pub template_override: bool,
     /// The template's text, read and checked by
     /// [`EndpointConfig::load_template`] before anything is recorded.
     #[serde(skip)]
@@ -79,6 +100,12 @@ impl EndpointConfig {
     /// into `template_json`. An error names the endpoint, and the file
     /// through `load_queries`.
     pub fn load_template(&mut self) -> Result<(), String> {
+        if self.template_override && self.template.is_none() {
+            return Err(format!(
+                "endpoint {}: template_override=true needs template=FILE",
+                self.url
+            ));
+        }
         if let Some(path) = &self.template {
             let json = crate::parquet_tools::annotate::load_queries(path)
                 .map_err(|e| format!("endpoint {}: template: {e}", self.url))?;

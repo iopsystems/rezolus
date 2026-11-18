@@ -197,6 +197,9 @@ pub struct NoiseSummary {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnomalyFeature {
     pub timestamp: f64,
+    /// Position in the analysed series, which leaves out the query result's
+    /// non-finite values (a +Inf quantile); not a position in the query
+    /// result when it held any.
     pub index: usize,
     /// `AnomalyType` rendered as a string.
     pub anomaly_type: String,
@@ -210,6 +213,8 @@ pub struct AnomalyFeature {
 /// A curated sustained regime shift (mapped down from `WindowChangePoint`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RegimeShiftFeature {
+    /// Position in the analysed series, which leaves out the query result's
+    /// non-finite values; see `AnomalyFeature::index`.
     pub index: usize,
     /// "Increase" | "Decrease" — derived from the before/after means (`WindowChangePoint` carries no direction field).
     pub direction: String,

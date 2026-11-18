@@ -1,0 +1,1114 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Softirq",
+      "id": "softirq",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-total-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-total-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing softirqs, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-total-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-total-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Hardware Interrupts",
+      "id": "softirq-hi",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-hi-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"hi\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-hi-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"hi\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-hi-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"hi\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-hi-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"hi\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "IRQ Poll",
+      "id": "softirq-irq_poll",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-irq_poll-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"irq_poll\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-irq_poll-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"irq_poll\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-irq_poll-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"irq_poll\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-irq_poll-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"irq_poll\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Network Transmit",
+      "id": "softirq-net_tx",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-net_tx-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"net_tx\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-net_tx-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"net_tx\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-net_tx-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"net_tx\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-net_tx-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"net_tx\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Network Receive",
+      "id": "softirq-net_rx",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-net_rx-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"net_rx\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-net_rx-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"net_rx\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-net_rx-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"net_rx\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-net_rx-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"net_rx\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RCU",
+      "id": "softirq-rcu",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-rcu-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"rcu\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-rcu-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"rcu\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-rcu-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"rcu\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-rcu-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"rcu\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Sched",
+      "id": "softirq-sched",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-sched-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"sched\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-sched-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"sched\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-sched-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"sched\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-sched-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"sched\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tasklet",
+      "id": "softirq-tasklet",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-tasklet-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"tasklet\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-tasklet-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"tasklet\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-tasklet-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"tasklet\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-tasklet-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"tasklet\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Timer",
+      "id": "softirq-timer",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-timer-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"timer\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-timer-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"timer\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-timer-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"timer\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-timer-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"timer\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "HR Timer",
+      "id": "softirq-hrtimer",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-hrtimer-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"hrtimer\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-hrtimer-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"hrtimer\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-hrtimer-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"hrtimer\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-hrtimer-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"hrtimer\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Block",
+      "id": "softirq-block",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-block-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq{kind=\"block\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate (per-CPU)",
+                "id": "softirq-block-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq{kind=\"block\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-block-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time{kind=\"block\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU % (per-CPU)",
+                "id": "softirq-block-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time{kind=\"block\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

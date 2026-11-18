@@ -16,12 +16,15 @@ mod gpu;
 mod hw_sensors;
 #[cfg(target_os = "macos")]
 pub(crate) mod iokit;
+#[cfg(target_os = "macos")]
+pub(crate) mod ioreport;
 mod memory;
 mod network;
 mod rezolus;
 mod scheduler;
 mod syscall;
 mod tcp;
+mod thermal;
 mod xfs;
 
 /// A registered sampler: its stable name plus its init function.
@@ -164,11 +167,13 @@ fn is_module_prefix(prefix: &str, module: &str) -> bool {
 /// `attribute_sampler` resolves it to `"unattributed"` instead, regardless
 /// of `linux_name`.
 ///
-/// `blockio` and `drivehealth` also have macOS samplers, which compile the
-/// shared `stats.rs` inside their own module, so on macOS their metrics
-/// attribute to the real sampler. Their `stats.rs` names the groups' sampler
-/// with a `GROUP_SAMPLER` constant: the sampler's name on Linux and macOS,
-/// and this function's result elsewhere.
+/// `blockio`, `cpu_frequency`, `cpu_power`, `drivehealth`, `filesystem`,
+/// `hw_sensors`, `memory_meminfo`, `memory_vmstat`, `network_traffic`,
+/// `tcp_mib`, `tcp_retransmit` and `tcp_traffic` also
+/// have macOS samplers, which compile the shared `stats.rs` inside their own
+/// module, so on macOS their metrics attribute to the real sampler. Their
+/// `stats.rs` names the groups' sampler with a `GROUP_SAMPLER` constant: the
+/// sampler's name on Linux and macOS, and this function's result elsewhere.
 ///
 /// An [`crate::agent::timing::AcquisitionGroup`] declared for such a
 /// sampler's metrics must register under whichever of the two this platform
@@ -338,14 +343,7 @@ mod attribution_tests {
     ///   samplers, etc). Passing on one platform does not certify the table
     ///   rows that platform never registers.
     /// - It cannot check metrics the agent's OWN `attribute_sampler` calls
-    ///   `unattributed` — there is no ground truth to compare against. On
-    ///   macOS today this silently excludes `gpu_apple`'s own metrics:
-    ///   `gpu/macos/stats.rs` is a sibling module of `gpu/macos/apple.rs`,
-    ///   not a descendant of the `apple` sampler's registered module, so
-    ///   `attribute_sampler`'s module-prefix rule misses it. That's a
-    ///   pre-existing quirk in `attribute_sampler` itself, unrelated to this
-    ///   guard or to `METRIC_SAMPLERS`/`AMBIGUOUS_METRICS` — not something
-    ///   this commit fixes.
+    ///   `unattributed` — there is no ground truth to compare against.
     ///
     /// What IS tight: every metric the registry has an opinion on (agent
     /// attributes it to a real sampler, not `unattributed`) and whose name
@@ -489,11 +487,12 @@ mod unbacked_group_tests {
     /// binary. Being unbacked is the CORRECT state for that bucket; bounding it
     /// is the entire point of this mechanism.
     ///
-    /// Linux and macOS only. On macOS it catches a `blockio` or `drivehealth`
-    /// `GROUP_SAMPLER` naming a sampler that does not exist; one left as
-    /// `unattributed` passes here and is caught by the router's routing
-    /// `debug_assert` in the snapshot tests. Elsewhere no BPF sampler has a
-    /// `SamplerEntry`, so the check would say nothing.
+    /// Linux and macOS only. On macOS it catches a `blockio`, `drivehealth`,
+    /// `memory_meminfo` or `memory_vmstat` `GROUP_SAMPLER` naming a sampler
+    /// that does not exist; one left as `unattributed` passes here and is
+    /// caught by the router's routing `debug_assert` in the snapshot tests.
+    /// Elsewhere no BPF sampler has a `SamplerEntry`, so the check would say
+    /// nothing.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn every_registered_group_names_a_real_sampler() {
