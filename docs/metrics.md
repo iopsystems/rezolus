@@ -1343,7 +1343,7 @@ only when a scrape finds the interval elapsed. A consumer that polls at exactly
 the configured interval therefore gets a new reading every other poll, about
 every two intervals. To read on every poll, set the interval below the poll
 period minus the sweep time. Polling more often than the interval brings the
-read period to within one poll of the interval.
+read period to within one poll period plus the sweep time of the interval.
 
 The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc`,
