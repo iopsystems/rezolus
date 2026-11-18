@@ -27,6 +27,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
+  cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
+  `memory.stat` fields for up to 4096 cgroups, off the scrape path at a
+  configurable interval (60s default), and the cgroups dashboard plots every
+  kind for the selected cgroups. A host without cgroup v2 or without the
+  memory controller reports the sampler as unsupported, not failed.
+  `/metrics/binary` reuses the `memory_cgroup` group's encoded bytes across
+  scrapes until its next sweep, so between sweeps its series cost a copy
+  rather than a re-encode per scrape. (#1537)
+
 - **A time window and per-series statistics on `query`.** The MCP `query`
   tool takes `start`, `end` (RFC 3339 or Unix seconds) and `step`
   (humantime or seconds); without them it evaluates every second of the

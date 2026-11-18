@@ -6,6 +6,10 @@ mod macos;
 
 #[cfg(not(target_os = "linux"))]
 mod stats {
+    mod cgroup {
+        include!("./linux/cgroup/stats.rs");
+    }
+
     #[cfg(not(target_os = "macos"))]
     mod meminfo {
         include!("./linux/meminfo/stats.rs");

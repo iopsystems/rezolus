@@ -12,8 +12,8 @@ pub struct Sampler {
     gpu_perf_level: Option<String>,
     /// Read interval for samplers that poll a slow, expensive source on their
     /// own cadence rather than on the scrape/TTL sample cycle (currently
-    /// `drivehealth`). A humantime string (e.g. `"60s"`). `None` means use the
-    /// sampler's built-in default.
+    /// `drivehealth` and `memory_cgroup`). A humantime string (e.g. `"60s"`).
+    /// `None` means use the sampler's built-in default.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     interval: Option<String>,

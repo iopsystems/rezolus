@@ -15,7 +15,7 @@ use metriken_exposition::group_builder::{
     Acquisition, GroupId, Membership, ReadGuard, Route, Router, GROUP_METADATA_KEY,
 };
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 /// Keyed by `(sampler, name)` and looked up for every routed metric twice a
@@ -110,6 +110,7 @@ pub(super) fn group_registry() -> &'static GroupRegistry {
 /// stamped, read before and after the group's values and unioned. A default
 /// group has none.
 pub(crate) struct RezolusRouter {
+    pub(super) skipped: Mutex<HashSet<(&'static str, &'static str)>>,
     sampler_mods: Vec<(&'static str, &'static str)>,
     groups: &'static GroupRegistry,
     /// Each module path's sampler, resolved once. Attribution is a scan of
@@ -122,6 +123,7 @@ pub(crate) struct RezolusRouter {
 impl RezolusRouter {
     pub(crate) fn new() -> Self {
         Self {
+            skipped: Mutex::new(HashSet::new()),
             sampler_mods: crate::agent::samplers::sampler_modules(),
             groups: group_registry(),
             attribution: Mutex::new(HashMap::default()),
@@ -167,6 +169,15 @@ impl Router for RezolusRouter {
                 membership: Membership::Present,
             });
         };
+        if ag.caches_snapshots()
+            && self
+                .skipped
+                .lock()
+                .unwrap()
+                .contains(&(ag.sampler, ag.name))
+        {
+            return None;
+        }
         if matches!(
             metric.value(),
             Some(Value::Histogram(_) | Value::GaugeHistogram(_))
