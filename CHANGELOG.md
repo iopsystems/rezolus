@@ -203,6 +203,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **A `rate` or `irate` at the end of a range has the value it has in a
+  longer range, when a row of the series follows the end.** With
+  metriken-query 0.50.2, each series' first row after the end is read,
+  however far after it is, so a chart's or a query's last points are no
+  longer held from the row before. In MCP `query` this now holds for a
+  sampler whose rows are more than 120 s apart too.
+
 - **`rezolus view` uses less memory.** With metriken-storage 0.13.1,
   `--cache-size-mb` bounds a `.dendro`'s opened segments and the blocks
   decoded from them together. Before, each table kept its opened segments in

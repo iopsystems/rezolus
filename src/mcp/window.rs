@@ -14,8 +14,8 @@ pub(crate) const DEFAULT_STEP: f64 = 1.0;
 const MAX_POINTS: f64 = 1_000_000.0;
 
 /// How far past the window's end the engine reads, at least, so that a
-/// sampler whose rows are up to this far apart has its row after `end`.
-/// Capped at [`MAX_POINTS`] steps.
+/// strided histogram function over a sampler whose rows are up to this far
+/// apart has its row after `end`. Capped at [`MAX_POINTS`] steps.
 const ROW_REACH: f64 = 120.0;
 
 /// Unix seconds past this are the year 2286: milliseconds or nanoseconds
@@ -102,19 +102,23 @@ pub(crate) fn resolve(
     })
 }
 
-/// Run `query` over `window`. Points are at multiples of `step` (counted
-/// from the Unix epoch) from `start` to `end`, except for a query that
-/// combines samplers of different cadence, which metriken-query evaluates at
-/// the slower one's rows. The engine reads no row after the end it is
-/// given, and a rate at a point interpolates from the first row after it,
-/// so the engine is asked for `read_end`, [`ROW_REACH`] or more past the end
-/// of the covered part (`covered_end`), and the points before `start` or
-/// after `covered_end` are dropped. A sampler whose rows
-/// are further apart than that, or than a million steps when that is
-/// shorter, can still be computed at `end` without its next row. The read
-/// past `end` evaluates up to that many more points per series, so a
-/// one-point window at a 10 us step costs as much as a million-point one;
-/// metriken-query reading the row after its end would make it unnecessary.
+/// Run `query` over `window`. Points are at multiples of `step` (counted from
+/// the Unix epoch) from `start` to `end`, except for a query that combines
+/// samplers of different cadence, which metriken-query evaluates at the
+/// slower one's rows. A grid `rate`/`irate` reads each series' first row
+/// after the end it is given (metriken-query 0.50.2), but the strided
+/// histogram functions (`histogram_quantiles([q], h, STEP)`, and
+/// `histogram_mean`, `histogram_count`, `histogram_sum` and
+/// `histogram_heatmap` with a `STEP`) read no row after it, and their point
+/// at a step needs the row after that step. So the engine is asked for
+/// `read_end`, [`ROW_REACH`] or more past the end of the covered part
+/// (`covered_end`), and the points before `start` or after `covered_end` are
+/// dropped. A strided histogram over a sampler whose rows are further apart
+/// than that, or than a million steps when that is shorter, can still miss
+/// its points near `end`, its last point then at the sampler's last row read,
+/// off the step grid. The read past `end` evaluates up to that many more
+/// points per series, so a one-point window at a 10 us step costs as much as
+/// a million-point one.
 ///
 /// An unstrided histogram function (`histogram_quantile(q, h)` and the
 /// others metriken-query lists) gives one point per row wherever the step
