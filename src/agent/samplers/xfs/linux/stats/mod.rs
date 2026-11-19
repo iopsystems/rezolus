@@ -49,11 +49,11 @@ const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(1);
 const SYS_FS_XFS: &str = "/sys/fs/xfs";
 
 use crate::agent::bpf::filesystems::{self, Assignment};
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
 use crate::agent::*;
 use metriken::CounterGroup;
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -226,9 +226,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     XFS_STATS_ACQ.set_member_bound(0);
 
     Ok(Some(Box::new(XfsStats {
-        interval,
-        last_read: Mutex::new(None),
-        reading: Arc::new(AtomicBool::new(false)),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch),
         state: Arc::new(Mutex::new(SweepState::default())),
     })))
 }
@@ -241,12 +239,8 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 };
 
 struct XfsStats {
-    /// Minimum spacing between sweeps.
-    interval: Duration,
-    /// When the last sweep was dispatched; `None` until the first.
-    last_read: Mutex<Option<Instant>>,
-    /// True while a sweep is in flight, so sweeps never overlap.
-    reading: Arc<AtomicBool>,
+    /// Admits one sweep at a time, at most once per interval from dispatch.
+    worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
 }
 
@@ -257,15 +251,6 @@ struct SweepState {
     labeled: Vec<bool>,
 }
 
-/// Clears the in-flight latch when the sweep ends, by return or by unwind.
-struct InFlight(Arc<AtomicBool>);
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 #[async_trait]
 impl Sampler for XfsStats {
     fn name(&self) -> &'static str {
@@ -273,31 +258,21 @@ impl Sampler for XfsStats {
     }
 
     async fn refresh(&self) {
-        // Throttle: dispatch a sweep at most once per `interval`. Cheap time
-        // check on the scrape path.
-        {
-            let mut last = self.last_read.lock().unwrap();
-            match *last {
-                Some(t) if t.elapsed() < self.interval => return,
-                _ => *last = Some(Instant::now()),
-            }
-        }
-
-        // Never overlap sweeps.
-        if self.reading.swap(true, Ordering::AcqRel) {
+        // Cheap on the scrape path: a try-lock and a time check.
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
-
-        let reading = self.reading.clone();
+        };
         let state = self.state.clone();
 
         // Off the async worker: one ~160 µs sysfs read per XFS mount. This
         // task is `XFS_STATS_ACQ`'s single writer (principle 18); `refresh()`
         // only dispatches it.
-        tokio::task::spawn_blocking(move || {
-            let _in_flight = InFlight(reading);
-            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-            sweep(&mut state, Path::new(SYS_FS_XFS), &filesystems::current());
+        permit.spawn(move || {
+            sweep(
+                &mut recover_lock(NAME, &state),
+                Path::new(SYS_FS_XFS),
+                &filesystems::current(),
+            );
         });
     }
 }
