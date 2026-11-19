@@ -33,9 +33,14 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   `sum_over_time`, `count_over_time`, `last_over_time`,
   `present_over_time`, `stdvar_over_time`, `stddev_over_time` and
   `quantile_over_time` of a gauge; and subqueries (`expr[r:s]`) as the
-  argument of a `*_over_time` function. `increase` is not extrapolated to
-  the window's start, as Prometheus does. A `bool` comparison of two rates
-  whose acquisition bands overlap the threshold has the band `[0, 1]`.
+  argument of a `*_over_time` function. Unlike Prometheus, `increase` is
+  not extrapolated: for a series that starts inside the window it is the
+  increase since the series' first row. `increase` carries the rate's
+  acquisition band times the window, except a point summed over a process
+  group's members, which has none. A `bool` comparison gives 1 or 0 with
+  a band: `[1, 1]` or `[0, 0]` where the operands' bands decide it, and
+  `[0, 1]` where they leave it undecided (for example a rate whose band
+  contains the threshold).
 
 - **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
   cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
@@ -215,7 +220,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
-- **A grid `irate` has a point at the start of the range.** With
+- **A scalar operation on a histogram function scales its uncertainty band
+  with its value** (for example `histogram_quantile(0.99, x) / 1e6`), in the
+  viewer and `recording check`. With metriken-query 0.50.3 the band kept the
+  unscaled magnitude. (metriken-query 0.51.0)
+
+- **A grid `irate` no longer misses the range's first point when its
+  `[range]` is shorter than the step plus four counter intervals.** With
   metriken-query 0.51.0, `irate(x[r])` reads back its step and four of the
   counter's intervals, or `r` when that is longer, so the first point is
   no longer missing when `r` did not reach the row at or before one step
