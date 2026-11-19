@@ -1253,8 +1253,9 @@ firmware. On SMU 13.0.4 (`smu13_driver_if_v13_0_4.h`), bit 0 is SPL, 1 FPPT,
 This sampler reads on its own interval (`[samplers.gpu_amd_sysfs] interval`,
 default 1s), dispatched via `spawn_blocking`, and serves cached values in
 between. A scrape arriving up to 50ms early counts as due, so timer jitter does
-not make a consumer polling at the interval miss readings. On a Radeon 780M a `gpu_metrics` read took about 0.3 ms, 2.3 ms at
-worst, and a `pp_dpm_fclk` read about 0.04 ms, 0.5 ms at worst.
+not make a consumer polling at the interval miss readings. On a Radeon 780M a
+`gpu_metrics` read took about 0.3 ms, 2.3 ms at worst, and a `pp_dpm_fclk` read
+about 0.04 ms, 0.5 ms at worst.
 
 ### gpu_apple
 
@@ -2007,8 +2008,9 @@ On macOS, see [hw_sensors on macOS](#hw_sensors-on-macos).
 Reads run in a nonoverlapping blocking task, dispatched by consumer activity
 at most once per interval (5 seconds by default). A scrape arriving up to 50ms
 early counts as due, so timer jitter does not make a consumer polling at the
-interval miss readings. Discovery runs with the first sweep at least 60
-seconds (less the same 50ms) after the previous discovery; descriptive metadata is cached between passes.
+interval miss readings. Discovery runs on the first sweep, then on the first
+sweep at least 60 seconds, less half the read interval, after the previous
+discovery; descriptive metadata is cached between passes.
 Failed, disabled, faulted, removed or unreadable measurements are absent from
 the live endpoint rather than zero. If every channel in a family fails, its
 last successful acquisition window remains unchanged; a recorder that

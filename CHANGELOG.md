@@ -672,8 +672,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   an overrunning read is 50ms shorter too. The allowance is at most half the
   interval, so a configured interval under 100ms keeps reads at least half an
   interval apart. `hw_sensors` on Linux rediscovers sensors on the first sweep
-  at least 60s less 50ms after the last discovery, so a sweep admitted early
-  at the 60s mark does not push rediscovery to the next sweep.
+  at least 60s, less half the read interval, after the last discovery, so
+  early admissions do not push rediscovery to the next sweep.
 
 - **A Prometheus series is stored as the exporter serves it, with its
   unit** (metriken-recorder 0.15, metriken-storage 0.13, metriken-query

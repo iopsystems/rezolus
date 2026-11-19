@@ -186,7 +186,13 @@ since the same due check admits it. The `memory_cgroup` reference
 documentation still said reads were anchored on the previous sweep's finish,
 left over from #1542's first cadence; it now points at the cadence paragraph.
 Linux `hw_sensors` has a second time gate, the 60 s rediscovery throttle,
-checked inside the sweep. With reads 5 s apart less 50 ms, the twelfth sweep
-can land just under 60 s after the last discovery and the throttle would wait
-for the thirteenth; the throttle now compares against 60 s less
-`SCRAPE_TOLERANCE`. No other worker sampler has a time gate of its own.
+checked inside the sweep. When refreshes arrive faster than the read
+interval, every sweep is admitted up to 50 ms early, so twelve sweeps at the
+5 s default can span as little as 59.4 s and a 60 s throttle would wait for
+the thirteenth. Subtracting `SCRAPE_TOLERANCE` from the threshold covers only
+a consumer polling at the interval, where the early admissions do not add up;
+the review of the first fix found that. The throttle now compares against
+60 s less half the read interval (57.5 s at the default), so the twelfth
+sweep rediscovers whether sweeps start 5 s or 4.95 s apart. A consumer
+polling slower than the interval spaces sweeps by its own period, and
+rediscovery then comes on its first poll at least 57.5 s after the last one. No other worker sampler has a time gate of its own.

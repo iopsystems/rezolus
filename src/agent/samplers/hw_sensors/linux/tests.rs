@@ -679,6 +679,28 @@ fn rediscovery_throttle_includes_the_first_tick() {
     assert!(discovery.due(start + Duration::from_secs(60), Duration::from_secs(60)));
 }
 
+#[test]
+fn rediscovery_runs_on_the_twelfth_sweep_however_early_each_is_admitted() {
+    let interval = Duration::from_secs(5);
+    for spacing in [
+        interval - super::SCRAPE_TOLERANCE,
+        interval,
+        interval + Duration::from_millis(1),
+    ] {
+        let start = Instant::now();
+        let mut discovery = super::Throttle::new();
+        let after = super::rediscovery_after(interval);
+        assert!(discovery.due(start, after));
+        for n in 1..12 {
+            assert!(
+                !discovery.due(start + spacing * n, after),
+                "{spacing:?} {n}"
+            );
+        }
+        assert!(discovery.due(start + spacing * 12, after), "{spacing:?}");
+    }
+}
+
 #[tokio::test]
 async fn refresh_dispatches_a_background_sweep_and_respects_cadence() {
     let _globals = SENSOR_GLOBALS.lock().await;
