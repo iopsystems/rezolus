@@ -27,6 +27,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **More PromQL in the viewer and MCP `query`.** With metriken-query 0.51.0:
+  `increase(x[r])`; the comparison operators `==`, `!=`, `>`, `<`, `>=` and
+  `<=`, with and without `bool`; `min_over_time`, `max_over_time`,
+  `sum_over_time`, `count_over_time`, `last_over_time`,
+  `present_over_time`, `stdvar_over_time`, `stddev_over_time` and
+  `quantile_over_time` of a gauge; and subqueries (`expr[r:s]`) as the
+  argument of a `*_over_time` function. `increase` is not extrapolated to
+  the window's start, as Prometheus does. A `bool` comparison of two rates
+  whose acquisition bands overlap the threshold has the band `[0, 1]`.
+
 - **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
   cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
   `memory.stat` fields for up to 4096 cgroups, off the scrape path at a
@@ -204,6 +214,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   The scheduler and cgroups dashboards plot them. (#1589)
 
 ### Fixed
+
+- **A grid `irate` has a point at the start of the range.** With
+  metriken-query 0.51.0, `irate(x[r])` reads back its step and four of the
+  counter's intervals, or `r` when that is longer, so the first point is
+  no longer missing when `r` did not reach the row at or before one step
+  before the start (for example `irate(x[1s])` at a 1 s step).
 
 - **A `rate` or `irate` at the end of a range has the value it has in a
   longer range, when a row of the series follows the end.** With

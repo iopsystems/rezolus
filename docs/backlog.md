@@ -910,10 +910,10 @@ Also found on these runs, separate from the sampler:
   previous occupant of its CSS id** — By design (fixed forward by #1232). The
   first run's `/rzt.slice` reused id 107, and the 5.20.0 recorder filed all of
   its CPU under `/system.slice/slipwayd.service` for the whole recording.
-- **metriken-query supports no `increase` or `max_over_time`, and a bare
-  selector on `cgroup_cpu_usage` fails with "Metric not found" while `rate()`
-  works** — Open. Reproduced on recordings from both the 5.20.0 and the current
-  recorder. It forced these measurements to integrate `rate()`.
+- **A bare selector on `cgroup_cpu_usage` fails with "Metric not found"
+  while `rate()` works** — Open. Reproduced on recordings from both the 5.20.0
+  and the current recorder. (`increase` and `max_over_time`, missing when
+  these measurements were taken, are in metriken-query 0.51.0.)
 
 ## Agent — `process_cpu_usage` contention
 
