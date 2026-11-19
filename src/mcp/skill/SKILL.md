@@ -42,8 +42,8 @@ Rules that hold on every recording:
 
 - A missing metric is not zero. A sampler that was off or a kernel without
   the hook leaves the metric absent; say so rather than reading it as idle.
-- `irate()` and `rate()` values carry an uncertainty band `[lo, hi]` from the
-  acquisition window: in `query` JSON it is the `bands` (and `intervals`)
+- `rate()`, `irate()` and `increase()` values, and `bool` comparisons of
+  them, carry an uncertainty band `[lo, hi]` from the acquisition window: in `query` JSON it is the `bands` (and `intervals`)
   list aligned with `values`. A difference inside the band is not a
   difference. A recording with no acquisition windows (for example a
   parquet file upgraded to a `.dendro`) has no band, which says nothing about its

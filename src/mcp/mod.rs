@@ -1156,7 +1156,7 @@ fn format_query_result(result: &QueryResult, above: Option<f64>) -> String {
                 if !series.values.is_empty() {
                     let first = &series.values[0];
                     let last = &series.values[series.values.len() - 1];
-                    // Acquisition-window uncertainty bounds (rate()/irate() only).
+                    // Acquisition-window uncertainty bounds, where the result carries them.
                     let ivl = series.intervals.as_ref();
                     let bound = |i: usize| -> String {
                         ivl.and_then(|v| v.get(i))

@@ -27,6 +27,22 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **More PromQL in the viewer and MCP `query`.** With metriken-query 0.51.0:
+  `increase(x[r])`; the comparison operators `==`, `!=`, `>`, `<`, `>=` and
+  `<=`, with and without `bool`; `min_over_time`, `max_over_time`,
+  `sum_over_time`, `count_over_time`, `last_over_time`,
+  `present_over_time`, `stdvar_over_time`, `stddev_over_time` and
+  `quantile_over_time` of a gauge; and subqueries (`expr[r:s]`) as the
+  argument of a `*_over_time` function. Unlike Prometheus, `increase` is
+  not extrapolated: for a series that starts inside the window it is the
+  increase since the series' first row. `increase` carries the rate's
+  acquisition band times the window, except a grid point summed over
+  several sources of one recording (an agent restart, or a copy read with
+  its original), which has none. A `bool` comparison gives 1 or 0 with
+  a band: `[1, 1]` or `[0, 0]` where the operands' bands decide it, and
+  `[0, 1]` where they leave it undecided (for example a rate whose band
+  contains the threshold).
+
 - **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
   cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
   `memory.stat` fields for up to 4096 cgroups, off the scrape path at a
@@ -204,6 +220,19 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   The scheduler and cgroups dashboards plot them. (#1589)
 
 ### Fixed
+
+- **A scalar operation on a histogram function scales its uncertainty band
+  with its value** (for example `histogram_quantile(0.99, x) / 1e6`), in the
+  viewer and in the MCP `query` tool's JSON `bands`. With metriken-query
+  0.50.3, `bands` kept the unscaled magnitude while `intervals` was scaled.
+  (metriken-query 0.51.0)
+
+- **A grid `irate` no longer misses the range's first point when its
+  `[range]` is shorter than the step plus four counter intervals.** With
+  metriken-query 0.51.0, `irate(x[r])` reads back its step and four of the
+  counter's intervals, or `r` when that is longer, so the first point is
+  no longer missing when `r` did not reach the row at or before one step
+  before the start (for example `irate(x[1s])` at a 1 s step).
 
 - **A `rate` or `irate` at the end of a range has the value it has in a
   longer range, when a row of the series follows the end.** With
