@@ -13,7 +13,7 @@ const NAME: &str = "drivehealth";
 
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
-use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::samplers::iokit::{CfString, NvmeSmart, Service};
 use crate::agent::*;
 use metriken::CounterGroup;
@@ -87,7 +87,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     Ok(Some(Box::new(DriveHealth {
         drives: Arc::new(drives),
         // Device commands need an idle interval even when a sweep overruns.
-        worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun),
+        worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun)
+            .with_tolerance(SCRAPE_TOLERANCE),
     })))
 }
 

@@ -656,15 +656,24 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 ### Changed
 
 - **A `drivehealth` or `memory_cgroup` read that finishes a full interval
-  or more after its dispatch is followed by a full interval with no read.**
+  or more after its dispatch is followed by an idle interval with no read.**
   Otherwise the next read is due one interval after the previous dispatch.
-  A read is dispatched only by a scrape that finds the interval elapsed, so a
-  consumer polling at exactly the interval gets the previous reading on some
-  polls; to read on every poll, set the interval slightly below the poll
-  period. `drivehealth`,
-  `memory_cgroup` and the Linux `hw_sensors` sampler use the same admission
-  code (`BlockingWorker`, `src/agent/samplers/blocking.rs`) for cadence,
-  overlap and cancellation; each sampler has its own worker. (#1542)
+  `drivehealth`, `memory_cgroup` and the Linux `hw_sensors` sampler use the
+  same admission code (`BlockingWorker`, `src/agent/samplers/blocking.rs`) for
+  cadence, overlap and cancellation; each sampler has its own worker. (#1542)
+
+- **Every sampler that reads on a blocking worker admits a scrape arriving up
+  to 50ms early**, as `gpu_intel_pmu`, `gpu_amd_sysfs` and `network_efa`
+  already did: `drivehealth`, `memory_cgroup`, `memory_slabinfo`, `xfs_stats`,
+  `filesystem` and `hw_sensors`, on Linux and macOS. Before, a consumer
+  polling at exactly a sampler's interval got the previous reading on some
+  polls because of timer jitter, and for `xfs_stats` (1s, cumulative
+  counters) the next delta then covered two intervals. The idle interval after
+  an overrunning read is 50ms shorter too. The allowance is at most half the
+  interval, so a configured interval under 100ms keeps reads at least half an
+  interval apart. `hw_sensors` on Linux rediscovers sensors on the first sweep
+  at least 60s, less half the read interval, after the last discovery, so
+  early admissions do not push rediscovery to the next sweep.
 
 - **A Prometheus series is stored as the exporter serves it, with its
   unit** (metriken-recorder 0.15, metriken-storage 0.13, metriken-query

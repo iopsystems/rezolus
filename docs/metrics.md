@@ -579,8 +579,10 @@ scrape/TTL sample cycle: at most once per `interval` the sampler dispatches the
 reads (all drives in parallel) to a blocking thread pool and returns
 immediately, so the sample cycle stays ~microseconds; the gauge retains its last
 value between reads. The cadence defaults to 60s and is configurable via
-`interval` in `[samplers.drivehealth]`. A sweep that finishes a full interval or
-more after its dispatch is followed by a full interval with no device commands,
+`interval` in `[samplers.drivehealth]`. A scrape arriving up to 50ms early
+counts as due, so timer jitter does not make a consumer polling at `interval`
+miss readings. A sweep that finishes a full interval or more after its dispatch
+is followed by an idle interval (less the same 50ms) with no device commands,
 counted from its end. On macOS the drives are read one after
 another in one blocking task.
 
@@ -830,7 +832,9 @@ Occupancy moves slowly, so sweeps are throttled and run off the scrape/TTL
 sample cycle: at most once per `interval` the sampler dispatches the sweep to a
 blocking thread pool and returns immediately; the gauges keep their last value
 between sweeps. The cadence defaults to 60s and is configurable via `interval`
-in `[samplers.filesystem]`. Measured cost (release, 87-line mount table, 3
+in `[samplers.filesystem]`. A scrape arriving up to 50ms early counts as due, so
+timer jitter does not make a consumer polling at `interval` miss readings.
+Measured cost (release, 87-line mount table, 3
 local filesystems): a 330–570 µs sweep once per interval, most of it the
 kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
 
@@ -943,8 +947,9 @@ listed one, because the mount was replaced or unmounted, is dropped. A
 `getattrlist` that fails leaves only `filesystem_volume_used` unset. Each call
 looks the path up, which walks every mount above it, so a volume mounted
 beneath a network, autofs or macFUSE mount is skipped. The sweep runs on a
-blocking thread at most once per `interval` (60s by default); one still
-running after three intervals is logged as a warning. With 10 volumes,
+blocking thread at most once per `interval` (60s by default), with the same
+50ms allowance for an early scrape as on Linux; one still running after three
+intervals is logged as a warning. With 10 volumes,
 `getfsstat` and the `statfs` and `getattrlist` calls took 36 µs in a debug
 build, 12 µs of it `getattrlist`.
 
@@ -986,7 +991,10 @@ is the planned `xfs_log` BPF sampler's job.
 
 One read of the file costs about 160 µs, so the sweep runs off the scrape
 cycle on the blocking pool at most once per `interval` (default 1 s,
-`[samplers.xfs_stats]`); the counters keep their last values between sweeps.
+`[samplers.xfs_stats]`); the counters keep their last values between sweeps. A
+scrape arriving up to 50ms early counts as due, so timer jitter does not make a
+consumer polling at `interval` miss a sweep and see the next delta cover two
+intervals.
 
 Every series is per mount, labeled `mount`, `fstype`, `devnum` and
 `block_device` exactly as the `filesystem` and ext4 samplers label the same
@@ -1244,8 +1252,10 @@ firmware. On SMU 13.0.4 (`smu13_driver_if_v13_0_4.h`), bit 0 is SPL, 1 FPPT,
 
 This sampler reads on its own interval (`[samplers.gpu_amd_sysfs] interval`,
 default 1s), dispatched via `spawn_blocking`, and serves cached values in
-between. On a Radeon 780M a `gpu_metrics` read took about 0.3 ms, 2.3 ms at
-worst, and a `pp_dpm_fclk` read about 0.04 ms, 0.5 ms at worst.
+between. A scrape arriving up to 50ms early counts as due, so timer jitter does
+not make a consumer polling at the interval miss readings. On a Radeon 780M a
+`gpu_metrics` read took about 0.3 ms, 2.3 ms at worst, and a `pp_dpm_fclk` read
+about 0.04 ms, 0.5 ms at worst.
 
 ### gpu_apple
 
@@ -1297,8 +1307,8 @@ interval = "60s"
 
 Reads run on a blocking worker independently of the scrape cadence; snapshots
 retain the previous observation and its acquisition window between reads.
-The first scrape dispatches a read immediately; subsequent scrapes dispatch
-another only after the interval has elapsed since the previous sweep finished.
+The first scrape dispatches a read immediately; the cadence of later reads is
+described below.
 This is useful for memory trends and leak detection, but can miss short spikes
 and cgroups created and destroyed between sweeps. Discovery and deletion are
 also observed only on a sweep. A shorter interval trades collection cost for
@@ -1343,12 +1353,11 @@ gets no series. If discovery fails or every attempted read fails, the entire
 previous observation (values, labels, and window) remains unchanged. An empty
 hierarchy is a successful sweep and removes the previous groups.
 
-A sweep is dispatched only when a scrape finds the interval elapsed since the
-previous sweep was dispatched. A sweep that finishes a full interval or more
-after its dispatch is followed by a full interval with no sweep, counted from
-its end. A consumer polling at exactly the configured interval gets the previous
-reading on some polls, because of timing jitter; to read on every poll, set the
-interval slightly below the poll period.
+A sweep is dispatched only when a scrape finds the interval, less 50ms, elapsed
+since the previous sweep was dispatched; the 50ms keeps timer jitter from making
+a consumer polling at the interval miss readings. A sweep that finishes a full
+interval or more after its dispatch is followed by an idle interval (less the
+same 50ms) with no sweep, counted from its end.
 
 The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc`,
@@ -1499,7 +1508,8 @@ written after the programs attach, so fills in the agent's first instant are
 ### memory_slabinfo
 
 Sizes of slab caches from `/proc/slabinfo`, read at most once per `interval`
-(60 s by default) off the scrape cycle, since the file is root-only, lists every
+(60 s by default, and a scrape up to 50ms early counts as due) off the scrape
+cycle, since the file is root-only, lists every
 cache on the machine and is generated under the slab lock.
 
 `memory_slab_cache_bytes` is published for every cache the file lists, labeled
@@ -1783,7 +1793,8 @@ by default). On an im4gn.16xlarge sending about 55 Gbit/s over EFA, the first
 file read took 1.8 ms at p50 and 2.8 ms at worst, and the other 21 files about
 0.5 ms together. So this sampler reads on its own interval
 (`[samplers.network_efa] interval`, default 1s), dispatched via
-`spawn_blocking`, and serves cached values in between. A port read that
+`spawn_blocking`, and serves cached values in between; a scrape arriving up to
+50ms early counts as due. A port read that
 returns an error ends that port's read for the interval, because the RDMA core
 caches only a successful fetch and each further file would send the stats
 commands again. At start, the agent warns when a port's `lifespan` is above
@@ -1995,8 +2006,11 @@ interval = "5s"
 On macOS, see [hw_sensors on macOS](#hw_sensors-on-macos).
 
 Reads run in a nonoverlapping blocking task, dispatched by consumer activity
-at most once per interval (5 seconds by default). Discovery runs every 60
-seconds during sampling; descriptive metadata is cached between passes.
+at most once per interval (5 seconds by default). A scrape arriving up to 50ms
+early counts as due, so timer jitter does not make a consumer polling at the
+interval miss readings. Discovery runs on the first sweep, then on the first
+sweep at least 60 seconds, less half the read interval, after the previous
+discovery; descriptive metadata is cached between passes.
 Failed, disabled, faulted, removed or unreadable measurements are absent from
 the live endpoint rather than zero. If every channel in a family fails, its
 last successful acquisition window remains unchanged; a recorder that

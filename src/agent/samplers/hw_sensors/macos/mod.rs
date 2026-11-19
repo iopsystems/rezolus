@@ -23,7 +23,7 @@ mod stats {
     include!("../linux/stats.rs");
 }
 
-use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 use discovery::{Candidate, Family, Origin};
 use metriken::GaugeGroup;
@@ -305,9 +305,9 @@ impl Readers {
 }
 
 struct HwSensors {
-    /// Admits one read at a time, at most once per interval from dispatch,
-    /// and warns once about a read still running after `STUCK_INTERVALS`
-    /// intervals.
+    /// Admits one read at a time, at most once per interval from dispatch less
+    /// `SCRAPE_TOLERANCE`, and warns once about a read still running after
+    /// `STUCK_INTERVALS` intervals.
     worker: BlockingWorker,
     readers: Arc<Mutex<Readers>>,
 }
@@ -334,6 +334,7 @@ impl HwSensors {
         debug!("{NAME}: reading every {interval:?}");
         Self {
             worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_tolerance(SCRAPE_TOLERANCE)
                 .with_stuck_warning(interval * STUCK_INTERVALS),
             readers: Arc::new(Mutex::new(readers)),
         }

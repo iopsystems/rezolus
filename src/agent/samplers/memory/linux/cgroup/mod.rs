@@ -15,7 +15,7 @@ const NAME: &str = "memory_cgroup";
 const ROOT: &str = "/sys/fs/cgroup";
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 
-use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 use anyhow::Context;
 use metriken::GaugeGroup;
@@ -45,7 +45,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     );
     Ok(Some(Box::new(CgroupMemory {
         state: Arc::new(Mutex::new(State::default())),
-        worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun),
+        worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun)
+            .with_tolerance(SCRAPE_TOLERANCE),
     })))
 }
 

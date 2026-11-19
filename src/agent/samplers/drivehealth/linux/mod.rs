@@ -24,7 +24,7 @@ const NAME: &str = "drivehealth";
 /// command; 60s keeps the amortized cost negligible on large JBODs.
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
-use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 use metriken::CounterGroup;
 
@@ -238,7 +238,8 @@ impl DriveHealth {
         Self {
             drives: Arc::new(drives),
             // Device commands need an idle interval even when a sweep overruns.
-            worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun),
+            worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun)
+                .with_tolerance(SCRAPE_TOLERANCE),
         }
     }
 }

@@ -96,7 +96,7 @@ const SYS_FS_EXT4: &str = "/sys/fs/ext4";
 /// A sweep still running after this many intervals is reported as stuck.
 const STUCK_INTERVALS: u32 = 3;
 
-use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
 use metriken::CounterGroup;
@@ -402,9 +402,9 @@ impl SweepState {
 }
 
 struct Filesystem {
-    /// Admits one sweep at a time, at most once per interval from dispatch,
-    /// and warns once about a sweep still running after `STUCK_INTERVALS`
-    /// intervals: most likely parked in a path lookup.
+    /// Admits one sweep at a time, at most once per interval from dispatch less
+    /// `SCRAPE_TOLERANCE`, and warns once about a sweep still running after
+    /// `STUCK_INTERVALS` intervals: most likely parked in a path lookup.
     worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
 }
@@ -418,6 +418,7 @@ impl Filesystem {
 
         Self {
             worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_tolerance(SCRAPE_TOLERANCE)
                 .with_stuck_warning(interval * STUCK_INTERVALS),
             state: Arc::new(Mutex::new(SweepState::new())),
         }

@@ -56,7 +56,7 @@ const NAME: &str = "filesystem";
 
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
-use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
 use metriken::{metric, GaugeGroup};
@@ -432,9 +432,9 @@ struct SweepState {
 }
 
 struct Filesystem {
-    /// Admits one sweep at a time, at most once per interval from dispatch,
-    /// and warns once about a sweep still running after `STUCK_INTERVALS`
-    /// intervals: most likely waiting in a path lookup.
+    /// Admits one sweep at a time, at most once per interval from dispatch less
+    /// `SCRAPE_TOLERANCE`, and warns once about a sweep still running after
+    /// `STUCK_INTERVALS` intervals: most likely waiting in a path lookup.
     worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
 }
@@ -446,6 +446,7 @@ impl Filesystem {
         debug!("{NAME}: sweeping every {interval:?}");
         Self {
             worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_tolerance(SCRAPE_TOLERANCE)
                 .with_stuck_warning(interval * STUCK_INTERVALS),
             state: Arc::new(Mutex::new(SweepState {
                 slots: Slots::new(MAX_MOUNTS),

@@ -46,7 +46,7 @@
 
 const NAME: &str = "gpu_amd_sysfs";
 
-use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
@@ -71,11 +71,6 @@ const SYSFS_DRM: &str = "/sys/class/drm";
 const VENDOR_AMD: &str = "0x1002";
 
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(1);
-
-/// How early a scrape may arrive and still be served with a fresh read, so
-/// that a consumer scraping at `interval` does not have every other scrape
-/// rejected by timer jitter.
-const SCRAPE_TOLERANCE: Duration = Duration::from_millis(50);
 
 /// Larger than any `gpu_metrics` format, so that a format this sampler does
 /// not accept still reads whole and is reported by its header.

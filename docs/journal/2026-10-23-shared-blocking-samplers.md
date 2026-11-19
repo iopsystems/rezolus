@@ -171,3 +171,32 @@ so a consumer polling at exactly its interval misses some readings to jitter;
 `docs/metrics.md` says so for `memory_cgroup`. `xfs_stats` is 1 s with
 cumulative counters, the case `gpu_intel_pmu`'s comment describes.
 `with_tolerance` would fix it; it is not applied here.
+
+## Tolerance everywhere (2026-11-19)
+
+The follow-up PR applies `with_tolerance(SCRAPE_TOLERANCE)` to those six
+samplers, so all nine samplers on the worker (twelve worker instances,
+counting the Linux and macOS implementations separately) admit a scrape up to
+50 ms early. `SCRAPE_TOLERANCE` moved into `blocking.rs` from the three samplers
+that each defined it. The worker now caps the tolerance at half the interval:
+without the cap, a configured interval of 50 ms or less would admit a read on
+every refresh. No default interval comes near that (the shortest is 1 s). The
+tolerance also shortens the idle interval after an overrunning read by 50 ms,
+since the same due check admits it. The `memory_cgroup` reference
+documentation still said reads were anchored on the previous sweep's finish,
+left over from #1542's first cadence; it now points at the cadence paragraph.
+Linux `hw_sensors` has a second time gate, the 60 s rediscovery throttle,
+checked inside the sweep. When refreshes arrive faster than the read
+interval, every sweep is admitted up to 50 ms early, so the twelfth sweep
+after a discovery can start 59.4 s after it at the 5 s default, and a 60 s
+throttle would wait for the thirteenth. Subtracting `SCRAPE_TOLERANCE` from
+the threshold covers only a consumer polling at the interval, where the early
+admissions do not add up; the review of the first fix found that. The
+throttle now compares against 60 s less half the read interval (57.5 s at the
+default), so the twelfth sweep rediscovers whether sweeps start 5 s or 4.95 s
+apart. A consumer polling slower than the interval spaces sweeps by its own
+period, and rediscovery then comes on its first poll at least 57.5 s after
+the last one. At a configured read interval from 40 s to just under 60 s the
+threshold falls to the interval or below, so every sweep rediscovers, where
+before every second sweep did. No other worker sampler has a time gate of its
+own.

@@ -90,7 +90,7 @@ const NAME: &str = "memory_slabinfo";
 
 const SLABINFO: &str = "/proc/slabinfo";
 
-use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
 
@@ -143,7 +143,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     SLABINFO_ACQ.set_member_bound(0);
 
     Ok(Some(Box::new(Slabinfo {
-        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+            .with_tolerance(SCRAPE_TOLERANCE),
         state: Arc::new(Mutex::new(SweepState::new(all, page_size()))),
     })))
 }
@@ -164,7 +165,8 @@ fn page_size() -> u64 {
 }
 
 struct Slabinfo {
-    /// Admits one sweep at a time, at most once per interval from dispatch.
+    /// Admits one sweep at a time, at most once per interval from dispatch,
+    /// less `SCRAPE_TOLERANCE`.
     worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
 }

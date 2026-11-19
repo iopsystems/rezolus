@@ -21,7 +21,7 @@ mod corsair_axi;
 mod discovery;
 mod stats;
 
-use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 use discovery::{Descriptor, Family};
 use metriken::GaugeGroup;
@@ -272,19 +272,34 @@ struct ReadHealth(Vec<(Family, usize, usize)>);
 struct SweepState {
     slots: [Slots; 7],
     rediscovery: Throttle,
+    /// `REDISCOVERY_INTERVAL` less half the read interval: see
+    /// `rediscovery_after`.
+    rediscovery_after: Duration,
     discovery_health: Option<DiscoveryHealth>,
     read_health: Option<ReadHealth>,
 }
 
 impl SweepState {
-    fn new() -> Self {
+    fn new(interval: Duration) -> Self {
         Self {
             slots: std::array::from_fn(|_| Slots::new(MAX_SENSORS)),
             rediscovery: Throttle::new(),
+            rediscovery_after: rediscovery_after(interval),
             discovery_health: None,
             read_health: None,
         }
     }
+}
+
+/// How long after a discovery the sweep that rediscovers may start. Sweeps
+/// are admitted up to `SCRAPE_TOLERANCE` early, and when refreshes arrive
+/// faster than the read interval each sweep starts that early, so the twelfth
+/// sweep after a discovery can start 59.4s after it at a 5s interval. With the threshold at
+/// `REDISCOVERY_INTERVAL` less half the read interval, the twelfth sweep
+/// rediscovers whether sweeps start one interval apart or `SCRAPE_TOLERANCE`
+/// less.
+fn rediscovery_after(interval: Duration) -> Duration {
+    REDISCOVERY_INTERVAL.saturating_sub(interval / 2)
 }
 
 fn family_index(family: Family) -> usize {
@@ -359,7 +374,8 @@ fn report_reads(last: &mut Option<ReadHealth>, current: ReadHealth) {
 
 fn sweep(state: &mut SweepState, sysfs: &Path, corsair_axi: bool) {
     let now = Instant::now();
-    if state.rediscovery.due(now, REDISCOVERY_INTERVAL) {
+    let after = state.rediscovery_after;
+    if state.rediscovery.due(now, after) {
         let started = Instant::now();
         let found = discovery::discover(sysfs, corsair_axi);
         let descriptor_count = found.descriptors.len();
@@ -423,8 +439,9 @@ impl HwSensors {
         debug!("{NAME}: reading every {interval:?}, rediscovering every {REDISCOVERY_INTERVAL:?}");
         Self {
             worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_tolerance(SCRAPE_TOLERANCE)
                 .with_stuck_warning(interval * STUCK_INTERVALS),
-            state: Arc::new(Mutex::new(SweepState::new())),
+            state: Arc::new(Mutex::new(SweepState::new(interval))),
             sysfs,
             corsair_axi,
         }

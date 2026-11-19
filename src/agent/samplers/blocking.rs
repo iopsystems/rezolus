@@ -15,7 +15,17 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
-/// When the next read is due after a read that ran.
+/// How early a scrape may arrive and still be admitted, for samplers that pass
+/// it to [`BlockingWorker::with_tolerance`].
+///
+/// Scrape timers jitter by well under a millisecond in practice. 50ms is far
+/// above that and at most 5% of the default interval of every sampler that
+/// uses it (1s for the shortest).
+pub(super) const SCRAPE_TOLERANCE: Duration = Duration::from_millis(50);
+
+/// When the next read is due after a read that ran. A worker built with
+/// [`BlockingWorker::with_tolerance`] admits each read up to that tolerance,
+/// capped at half the interval, before the time described here.
 #[derive(Clone, Copy)]
 pub(super) enum Cadence {
     /// One interval after the previous read was dispatched. After a read that
@@ -58,8 +68,9 @@ impl BlockingWorker {
     }
 
     /// Admit a read up to `tolerance` before the interval has elapsed, so that
-    /// a consumer polling at the interval is not rejected by timer jitter.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    /// a consumer polling at the interval is not rejected by timer jitter. The
+    /// tolerance applies up to half the interval, so reads stay at least half
+    /// an interval apart from dispatch to dispatch.
     pub(super) fn with_tolerance(mut self, tolerance: Duration) -> Self {
         self.tolerance = tolerance;
         self
@@ -106,9 +117,13 @@ impl BlockingWorker {
             }
             return None;
         }
-        if schedule.last.is_some_and(|last| {
-            now.saturating_duration_since(last) < self.interval.saturating_sub(self.tolerance)
-        }) {
+        let due = self
+            .interval
+            .saturating_sub(self.tolerance.min(self.interval / 2));
+        if schedule
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) < due)
+        {
             return None;
         }
         let previous_last = schedule.last.replace(now);
@@ -125,8 +140,9 @@ impl BlockingWorker {
 /// `spawn` moves the permit into the blocking closure, so a task cancelled
 /// before it runs drops the permit and restores the previous cadence anchor.
 /// Dropping an unspawned permit does the same. Once the closure starts, the
-/// sampler's cadence applies whether or not the read returns an error; a read
-/// that unwinds is followed by a full interval.
+/// sampler's cadence applies whether or not the read returns an error; after a
+/// read that unwinds, the next one is due one interval (less any tolerance)
+/// after the unwind.
 pub(super) struct Permit {
     worker: BlockingWorker,
     previous_last: Option<Instant>,
@@ -147,7 +163,8 @@ impl Permit {
             if catch_unwind(AssertUnwindSafe(work)).is_err() {
                 self.outcome = Some(Outcome::Panicked);
                 error!(
-                    "{}: sweep unwound; next admission delayed by the configured interval",
+                    "{}: sweep unwound; next admission delayed by the configured interval, less any \
+                     tolerance",
                     self.worker.name
                 );
             }
@@ -165,7 +182,7 @@ impl Permit {
         let mut schedule = recover_lock(self.worker.name, &self.worker.schedule);
         match outcome {
             Outcome::Queued => schedule.last = self.previous_last,
-            // An unwinding panic always gets a full retry interval, including
+            // An unwinding panic anchors the retry on the unwind, including for
             // a dispatch-based sampler whose sweep ran longer than its interval.
             Outcome::Panicked => schedule.last = Some(now),
             Outcome::Ran
