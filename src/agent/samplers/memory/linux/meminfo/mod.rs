@@ -235,6 +235,7 @@ Hugetlb:        41943040 kB
 
     #[test]
     fn kilobyte_lines_scale_to_bytes_and_page_counts_do_not() {
+        let _registry = crate::agent::exposition::http::test_registry();
         let gauges = field_map();
         parse(SAMPLE, &gauges);
         assert_eq!(MEMORY_DIRTY.value(), 307200 * 1024);
@@ -269,6 +270,7 @@ Hugetlb:        41943040 kB
     /// A key the kernel does not print leaves its gauge alone.
     #[test]
     fn a_missing_line_leaves_its_gauge_untouched() {
+        let _registry = crate::agent::exposition::http::test_registry();
         let gauges = field_map();
         parse("MemTotal: 1024 kB\n", &gauges);
         assert_eq!(MEMORY_TOTAL.value(), 1024 * 1024);

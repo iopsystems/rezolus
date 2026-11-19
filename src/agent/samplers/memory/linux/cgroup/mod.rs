@@ -341,6 +341,19 @@ mod tests {
         state.sweep(root)
     }
 
+    /// Take the registry lock and clear every slot of the cgroup memory
+    /// groups. The groups are process-wide statics, so without this a test
+    /// starts from the slots the previous test left labelled.
+    fn clean_registry() -> crate::agent::exposition::http::TestRegistryGuard {
+        let registry = crate::agent::exposition::http::test_registry();
+        let guard = CGROUP_MEMORY_ACQ.acquire_blocking();
+        for slot in 0..MAX_CGROUPS {
+            clear_slot(slot);
+        }
+        guard.finish();
+        registry
+    }
+
     #[test]
     fn controller_diagnostics_distinguish_availability_and_child_enablement() {
         let dir = tempfile::tempdir().unwrap();
@@ -375,7 +388,7 @@ mod tests {
     #[test]
     #[ignore = "creates 4097 cgroupfs fixtures to measure a capacity-sized sweep"]
     fn capacity_sweep_cost() {
-        let _registry = crate::agent::exposition::http::test_registry();
+        let _registry = clean_registry();
         let root = tempfile::tempdir().unwrap();
         let stat = KINDS
             .iter()
@@ -440,7 +453,7 @@ mod tests {
 
     #[test]
     fn failed_sweep_preserves_values_membership_and_window_until_recovery() {
-        let _registry = crate::agent::exposition::http::test_registry();
+        let _registry = clean_registry();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let existing = root.join("existing");
@@ -503,7 +516,7 @@ mod tests {
     #[test]
     fn id_is_the_cgroup_inode_whatever_the_slot_order() {
         use std::os::unix::fs::MetadataExt;
-        let _registry = crate::agent::exposition::http::test_registry();
+        let _registry = clean_registry();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let paths: Vec<PathBuf> = (0..8).map(|i| root.join(format!("group{i}"))).collect();
@@ -549,7 +562,7 @@ mod tests {
     // Hold the registry lock across both mutations and stream assertions.
     #[test]
     fn discovers_nested_cgroups_and_clears_missing_values_and_deleted_groups() {
-        let registry = crate::agent::exposition::http::test_registry();
+        let registry = clean_registry();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let parent = root.join("outer.slice/user.slice/service.slice");
