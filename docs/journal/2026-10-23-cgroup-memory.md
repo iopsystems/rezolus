@@ -423,6 +423,8 @@ Read cadence: `last_read` is set when a sweep completes and a sweep is admitted
 only from a scrape, so a consumer polling at exactly the interval reads every
 other poll. #1542 keeps completion anchoring; anchoring on dispatch unless the
 previous sweep overran is the suggested follow-up there. This PR documents the behavior in `docs/metrics.md` and `config/agent.toml`.
+#1542 (`3e7751f2`) then anchored on dispatch unless the sweep overran, and
+rewrote those two passages.
 
 Principle 16, measured by the reviewer on this head (release build, 56-vCPU
 x86 VM, Debian 13, kernels 6.12.63 and 7.1.13, `memory_cgroup` only at a 5s

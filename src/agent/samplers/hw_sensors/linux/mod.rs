@@ -21,13 +21,13 @@ mod corsair_axi;
 mod discovery;
 mod stats;
 
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
 use crate::agent::*;
 use discovery::{Descriptor, Family};
 use metriken::GaugeGroup;
 use stats::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -259,14 +259,6 @@ impl Throttle {
     }
 }
 
-struct InFlight(Arc<AtomicBool>);
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DiscoveryHealth {
     descriptors: usize,
@@ -415,10 +407,7 @@ fn sweep(state: &mut SweepState, sysfs: &Path, corsair_axi: bool) {
 }
 
 struct HwSensors {
-    interval: Duration,
-    last_read: Mutex<Throttle>,
-    reading: Arc<AtomicBool>,
-    stuck_warned: AtomicBool,
+    worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
     sysfs: PathBuf,
     corsair_axi: bool,
@@ -433,40 +422,13 @@ impl HwSensors {
         }
         debug!("{NAME}: reading every {interval:?}, rediscovering every {REDISCOVERY_INTERVAL:?}");
         Self {
-            interval,
-            last_read: Mutex::new(Throttle::new()),
-            reading: Arc::new(AtomicBool::new(false)),
-            stuck_warned: AtomicBool::new(false),
+            worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_stuck_warning(interval * STUCK_INTERVALS),
             state: Arc::new(Mutex::new(SweepState::new())),
             sysfs,
             corsair_axi,
         }
     }
-
-    fn warn_if_stuck(&self) {
-        let Some(dispatched) = self.last_read.lock().unwrap().last else {
-            return;
-        };
-        let running = dispatched.elapsed();
-        if running > self.interval * STUCK_INTERVALS
-            && !self.stuck_warned.swap(true, Ordering::AcqRel)
-        {
-            warn!(
-                "{NAME}: a blocking sensor sweep has run for {running:?}, over {STUCK_INTERVALS} intervals; no second worker was dispatched"
-            );
-        }
-    }
-}
-
-fn lock_state(state: &Mutex<SweepState>) -> std::sync::MutexGuard<'_, SweepState> {
-    state.lock().unwrap_or_else(|poisoned| {
-        // Slot ownership survives: discarding it would permit lifetime slot
-        // reuse after a panic. Sweep mutations are bounded and internally
-        // ordered, so retaining the allocation map is safer than relabeling.
-        warn!("{NAME}: recovering sensor sweep state after a worker panic");
-        state.clear_poison();
-        poisoned.into_inner()
-    })
 }
 
 #[async_trait]
@@ -476,27 +438,15 @@ impl Sampler for HwSensors {
     }
 
     async fn refresh(&self) {
-        if self.reading.load(Ordering::Acquire) {
-            self.warn_if_stuck();
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
-        {
-            let mut throttle = self.last_read.lock().unwrap();
-            if !throttle.due(Instant::now(), self.interval) {
-                return;
-            }
-        }
-        if self.reading.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.stuck_warned.store(false, Ordering::Release);
-        let reading = self.reading.clone();
+        };
         let state = self.state.clone();
         let sysfs = self.sysfs.clone();
         let corsair_axi = self.corsair_axi;
-        tokio::task::spawn_blocking(move || {
-            let _in_flight = InFlight(reading);
-            sweep(&mut lock_state(&state), &sysfs, corsair_axi);
+        permit.spawn(move || {
+            // Retain lifetime slot ownership if a previous sweep unwound.
+            sweep(&mut recover_lock(NAME, &state), &sysfs, corsair_axi);
         });
     }
 }
