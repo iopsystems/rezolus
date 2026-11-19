@@ -23,10 +23,9 @@ pub(super) enum Cadence {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     FromDispatch,
     /// One interval after the previous read was dispatched, or, when that read
-    /// ran for a full interval or longer, one interval after it finished, so
-    /// an overrunning read is followed by a full interval with no read. A
-    /// consumer polling every `interval` gets a read on every poll unless a
-    /// read overruns.
+    /// finished a full interval or more after its dispatch, one interval after
+    /// it finished, so an overrunning read is followed by a full interval with
+    /// no read.
     IdleAfterOverrun,
 }
 
@@ -116,7 +115,8 @@ impl BlockingWorker {
 /// `spawn` moves the permit into the blocking closure, so a task cancelled
 /// before it runs drops the permit and restores the previous cadence anchor.
 /// Dropping an unspawned permit does the same. Once the closure starts, the
-/// sampler's cadence applies whether or not the read succeeds.
+/// sampler's cadence applies whether or not the read returns an error; a read
+/// that unwinds is followed by a full interval.
 pub(super) struct Permit {
     worker: BlockingWorker,
     previous_last: Option<Instant>,

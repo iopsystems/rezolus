@@ -579,9 +579,9 @@ scrape/TTL sample cycle: at most once per `interval` the sampler dispatches the
 reads (all drives in parallel) to a blocking thread pool and returns
 immediately, so the sample cycle stays ~microseconds; the gauge retains its last
 value between reads. The cadence defaults to 60s and is configurable via
-`interval` in `[samplers.drivehealth]`. A sweep that runs for the interval or
-longer is followed by a full interval with no device commands, counted from its
-end. On macOS the drives are read one after
+`interval` in `[samplers.drivehealth]`. A sweep that finishes a full interval or
+more after its dispatch is followed by a full interval with no device commands,
+counted from its end. On macOS the drives are read one after
 another in one blocking task.
 
 Pass-through ioctls require `CAP_SYS_RAWIO` (the agent already runs privileged
@@ -1340,12 +1340,12 @@ gets no series. If discovery fails or every attempted read fails, the entire
 previous observation (values, labels, and window) remains unchanged. An empty
 hierarchy is a successful sweep and removes the previous groups.
 
-A sweep starts only when a scrape finds the interval elapsed since the previous
-sweep started. A sweep that runs for the interval or longer is followed by a
-full interval with no sweep, counted from its end. A consumer that polls at
-exactly the configured interval gets a new reading on every poll unless a sweep
-overruns; a poll that arrives before the interval has elapsed gets the previous
-reading.
+A sweep is dispatched only when a scrape finds the interval elapsed since the
+previous sweep was dispatched. A sweep that finishes a full interval or more
+after its dispatch is followed by a full interval with no sweep, counted from
+its end. A consumer polling at exactly the configured interval gets the previous
+reading on some polls, because of timing jitter; to read on every poll, set the
+interval slightly below the poll period.
 
 The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc`,

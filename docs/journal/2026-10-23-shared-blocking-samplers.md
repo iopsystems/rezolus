@@ -1,8 +1,8 @@
 # Shared blocking sampler admission
 
 This follows the worker-helper suggestion from the local review of PR #1537.
-It is stacked on `feat/cgroup-memory-accounting` at `615695c8`. The memory
-feature and its other review follow-ups remain in the parent PR.
+It was stacked on `feat/cgroup-memory-accounting`; #1537 merged as `e6b7288a`,
+and this PR now targets main.
 
 ## Behavior
 
@@ -11,19 +11,20 @@ cadence for cgroup memory, Linux hardware sensors, and Linux/macOS drive
 health. Refresh tries a short scheduling mutex and immediately returns if
 it is contended, a worker is already queued/running, or the interval has not
 elapsed. Sampler state is cloned only after admission. The resulting permit
-owns the worker slot until the blocking closure is dropped, including
+admits no other read until the blocking closure is dropped, including
 cancellation before execution and unwinding. Cancellation before the closure
 starts restores the previous cadence anchor, so no interval is consumed without
 a read. A task that has started cannot be cancelled through its join handle.
 
 Hardware sensors measure from dispatch. Cgroup memory and Linux/macOS drive
 health use `Cadence::IdleAfterOverrun`: the next read is due one interval after
-the previous dispatch, or, when that read ran for a full interval or longer, one
-interval after it finished. The review of `bf36bf2e` caught that preserving
+the previous dispatch, or, when that read finished a full interval or more after
+its dispatch, one interval after it finished. The review of `bf36bf2e` caught that preserving
 drive health's nominal dispatch cadence would permit back-to-back device commands
 after an overrun; a 90s sweep with a 60s interval next becomes eligible at 150s.
-Until 2026-11-18 these samplers measured from completion after every read; see
-the last section. Rejected refreshes
+Before `3e7751f2` this branch measured cgroup memory and drive health from
+completion after every read (main's drive health anchored on dispatch); see the
+last section. Rejected refreshes
 never advance either clock. Hardware sensors retain their warning once a sweep
 exceeds three intervals; it resets on the next admitted worker. Sensor rediscovery retains
 its independent 60-second throttle.

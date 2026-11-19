@@ -653,11 +653,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
-- A `drivehealth` or `memory_cgroup` read that runs for its interval or
-  longer is followed by a full interval with no read, counted from its end;
-  otherwise the next read is due one interval after the previous one started.
-  A consumer polling every `interval` gets a reading on every poll unless a
-  read overruns. `drivehealth`,
+- **A `drivehealth` or `memory_cgroup` read that finishes a full interval
+  or more after its dispatch is followed by a full interval with no read.**
+  Otherwise the next read is due one interval after the previous dispatch.
+  A read is dispatched only by a scrape that finds the interval elapsed, so a
+  consumer polling at exactly the interval gets the previous reading on some
+  polls; to read on every poll, set the interval slightly below the poll
+  period. `drivehealth`,
   `memory_cgroup` and the Linux `hw_sensors` sampler use the same admission
   code (`BlockingWorker`, `src/agent/samplers/blocking.rs`) for cadence,
   overlap and cancellation; each sampler has its own worker. (#1542)
