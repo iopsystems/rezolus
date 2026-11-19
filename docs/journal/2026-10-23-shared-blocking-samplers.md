@@ -150,3 +150,24 @@ minus its duration. `docs/metrics.md`, `config/agent.toml` and the CHANGELOG
 describe the new rule. Tests cover a read just short of the interval, one of
 exactly the interval, and a spawned read that completes; each fails under a
 mutation of the rule it covers.
+
+## The remaining gates migrated (2026-11-19)
+
+The eight samplers listed above moved onto `BlockingWorker` in three PRs:
+#1709 (`memory_slabinfo`, `xfs_stats`), #1710 (Linux and macOS
+`filesystem`, macOS `hw_sensors`; `with_stuck_warning` became available on
+macOS) and #1711 (`gpu_intel_pmu`, `gpu_amd_sysfs`, `network_efa`). All eight
+use `Cadence::FromDispatch`, as before. `gpu_intel_pmu`, `gpu_amd_sysfs` and
+`network_efa` admitted a scrape up to 50 ms early so that a consumer scraping
+at the interval was not rejected by timer jitter; `with_tolerance` carries that
+rule. Each sampler's lock handling stayed as it was, apart from those that took
+a poisoned guard silently, which now use `recover_lock`. No sampler under
+`src/agent/samplers` has its own blocking-read gate now. `gpu_nvidia` and
+`gpu_amd_smi` read inline in `refresh`, with no gate.
+
+Every other sampler on the worker (`drivehealth`, `memory_cgroup`,
+`xfs_stats`, `memory_slabinfo`, `filesystem`, `hw_sensors`) has no tolerance,
+so a consumer polling at exactly its interval misses some readings to jitter;
+`docs/metrics.md` says so for `memory_cgroup`. `xfs_stats` is 1 s with
+cumulative counters, the case `gpu_intel_pmu`'s comment describes.
+`with_tolerance` would fix it; it is not applied here.
