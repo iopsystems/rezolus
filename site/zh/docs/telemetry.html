@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-Hans"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>度量 - Rezolus 文档</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    html { scroll-padding-top: 5rem; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+    details summary::-webkit-details-marker { display: none; }
+    details summary { list-style: none; }
+
+        .brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1rem;
+            letter-spacing: 0.15em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #58a6ff 0%, #79c0ff 100%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            mask-size: contain;
+            -webkit-mask-size: contain;
+            mask-repeat: no-repeat;
+            -webkit-mask-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/zh/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
+<div class="hidden md:flex items-center gap-8 text-base font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">文档</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+<a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/telemetry.html">English</a>
+</div>
+<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="打开菜单"
+class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+<div id="nav-menu" hidden
+class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">使用</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">架构</a>
+<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="telemetry.html">度量</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI 与配置</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/telemetry.html">English</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.19.0</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">入门</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">使用</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">核心概念</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">架构</a>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="telemetry.html">度量</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">采样器</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">类型</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">参考</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI 与配置</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
+
+<h1 class="text-4xl font-extrabold tracking-tight mb-12">度量</h1>
+
+<!-- Samplers -->
+<section class="mb-8" id="samplers">
+<h2 class="text-xl font-bold mb-2">采样器</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400">按子系统分组的插桩类别。每一项都可以在 agent 配置中单独启用或禁用。</p>
+</section>
+
+<!-- CPU -->
+<section class="mb-12" id="cpu">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-blue-600" data-icon="memory">memory</span>
+<h3 class="text-xl font-bold">CPU</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">使用</h4><p class="text-base text-slate-400">按状态划分的 CPU 时间，以及 softirq 明细</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">按状态划分的每 CPU 纳秒数： <code>user</code>, <code>system</code></span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">softirq</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">按类型划分的每 CPU 中断次数：hi、timer、net_tx、net_rx、block、irq_poll、tasklet、sched、hrtimer、rcu</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">softirq_time</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 花在 softirq 上的纳秒数，类型同上</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cgroup_cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">按状态划分的每 cgroup 纳秒数： <code>user</code>, <code>system</code></span></div>
+</div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">频率</h4><p class="text-base text-slate-400">APERF、MPERF、TSC 周期计数器</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_aperf</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 实际性能周期数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_mperf</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 最大性能周期数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_tsc</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 时间戳计数器周期数</span></div>
+</div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">性能计数器</h4><p class="text-base text-slate-400">周期、指令、分支预测、缓存、TLB</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_cycles</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 周期数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_instructions</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 退休指令数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_branch_instructions</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 分支指令数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_branch_misses</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 分支预测失败数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_dtlb_miss</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 数据 TLB 缺失（带 <code>op</code>：在 Intel 上为 load、store）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_l3_access</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU L3 缓存访问数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_l3_miss</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU L3 缓存缺失数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_tlb_flush</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">按原因划分的每 CPU TLB 刷新次数：task_switch、remote_shootdown、local_shootdown 等</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cgroup_cpu_cycles</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 cgroup 周期数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cgroup_cpu_instructions</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 cgroup 退休指令数</span></div>
+</div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">带宽与迁移</h4><p class="text-base text-slate-400">CFS 限流、CPU 迁移事件</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_cores</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">在线逻辑核心数（gauge）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cpu_migrations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 迁移次数，带 <code>direction</code>: from, to</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cgroup_cpu_bandwidth_*</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 cgroup 的 CFS 配额、周期、被限流时间与周期计数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cgroup_cpu_migrations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 cgroup CPU 迁移次数</span></div>
+</div>
+</details>
+</section>
+
+<!-- Scheduler -->
+<section class="mb-12" id="scheduler">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-green-600" data-icon="schedule">schedule</span>
+<h3 class="text-xl font-bold">调度器</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">运行队列</h4><p class="text-base text-slate-400">调度延迟、运行时间、离开 CPU 的时间、上下文切换</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">scheduler_runqueue_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">任务在运行队列中等待时间的直方图（ns）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">scheduler_running</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">任务在 CPU 上运行时间的直方图（ns）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">scheduler_offcpu</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">任务离开 CPU 时间的直方图（ns）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">scheduler_context_switch</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 非自愿上下文切换次数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">scheduler_runqueue_wait</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 CPU 等待的总纳秒数</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cgroup_scheduler_*</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 cgroup：runqueue_wait、offcpu、context_switch</span></div>
+</div>
+</details>
+</section>
+
+<!-- Block I/O -->
+<section class="mb-12" id="blockio">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-purple-600" data-icon="storage">storage</span>
+<h3 class="text-xl font-bold">块 I/O</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">延迟</h4><p class="text-base text-slate-400">按操作类型划分的 I/O 延迟分布</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">blockio_device_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns），带 <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">blockio_queue_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns），带 <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">blockio_total_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns），带 <code>op</code>: read, write, flush, discard</span></div></div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">请求</h4><p class="text-base text-slate-400">操作次数、传输字节数、大小分布</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">blockio_operations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">blockio_bytes</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器（字节），带 <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">blockio_size</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（字节），带 <code>op</code>: read, write, flush, discard</span></div>
+</div>
+</details>
+</section>
+
+<!-- Network -->
+<section class="mb-12" id="network">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-amber-600" data-icon="lan">lan</span>
+<h3 class="text-xl font-bold">网络</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">流量</h4><p class="text-base text-slate-400">汇总的字节数与包数</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_bytes</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_packets</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>direction</code>: receive, transmit</span></div>
+</div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">网络接口</h4><p class="text-base text-slate-400">丢包、发送错误、超时</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_drop</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">丢包计数器</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_transmit_busy</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">发送忙计数器</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_transmit_complete</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">完成发送计数器</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_transmit_timeout</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">发送超时事件</span></div>
+</div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">Ethtool (ENA)</h4><p class="text-base text-slate-400">AWS EC2 Elastic Network Adapter 配额计数器</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_ena_bandwidth_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">带 <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_ena_pps_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">超出每秒包数限制</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_ena_conntrack_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">超出连接跟踪限制</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">network_ena_linklocal_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">超出链路本地流量限制</span></div>
+</div>
+</details>
+</section>
+
+<!-- TCP -->
+<section class="mb-12" id="tcp">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-rose-600" data-icon="cable">cable</span>
+<h3 class="text-xl font-bold">TCP</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">流量</h4><p class="text-base text-slate-400">字节数、包数与分段大小分布</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_bytes</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_packets</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_size</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（字节），带 <code>direction</code>: receive, transmit</span></div>
+</div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">延迟</h4><p class="text-base text-slate-400">连接建立、包投递、抖动、RTT</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_connect_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns）—— 建立连接所需时间</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_packet_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns）—— 从接收到读取的延迟</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_jitter</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns）—— 包间抖动</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_srtt</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns）—— 平滑往返时间</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">tcp_retransmit</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器 —— 重传包数</span></div>
+</div>
+</details>
+</section>
+
+<!-- Syscall -->
+<section class="mb-12" id="syscall">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-cyan-600" data-icon="terminal">terminal</span>
+<h3 class="text-xl font-bold">系统调用</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">次数与延迟</h4><p class="text-base text-slate-400">按系统调用类别划分的调用次数与延迟分布</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="space-y-2 mb-4">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">syscall</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>op</code> 标签（类别见下）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">syscall_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">直方图（ns），带 <code>op</code> 标签（类别相同）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">cgroup_syscall</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 cgroup 计数器，标签相同 <code>op</code> 标签</span></div>
+</div>
+<p class="text-slate-400 mb-2">系统调用类别（<code>op</code> 取值）：</p>
+<div class="flex flex-wrap gap-2">
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">read</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">write</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">poll</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">lock</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">time</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">sleep</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">socket</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">yield</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">filesystem</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">memory</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">process</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">query</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">ipc</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">timer</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">event</code>
+<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-400">other</code>
+</div>
+</div>
+</details>
+</section>
+
+<!-- Memory -->
+<section class="mb-12" id="memory">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-indigo-600" data-icon="dynamic_form">dynamic_form</span>
+<h3 class="text-xl font-bold">内存</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">Meminfo &amp; VMStat</h4><p class="text-base text-slate-400">系统内存 gauge 与 NUMA 分配计数器</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_total</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Gauge（字节）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_free</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Gauge（字节）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_available</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Gauge（字节）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_buffers</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Gauge（字节）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_cached</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Gauge（字节）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_numa_hit</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器 —— 落在目标节点上的分配</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_numa_miss</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器 —— 未落在目标节点上的分配</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_numa_foreign</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器 —— 本应分配到该节点、实际落在别处</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_numa_interleave</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器 —— 交错策略下的分配</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_numa_local</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器 —— 本地节点上的分配</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">memory_numa_other</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器 —— 远端节点上的分配</span></div>
+</div>
+</details>
+</section>
+
+<!-- GPU -->
+<section class="mb-12" id="gpu">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-emerald-600" data-icon="developer_board">developer_board</span>
+<h3 class="text-xl font-bold">GPU</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">NVIDIA</h4><p class="text-base text-slate-400">显存、功耗、温度、时钟、利用率（Linux）</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_memory</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（字节），带 <code>state</code>: free, used</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（毫瓦）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU 计数器（毫焦）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_temperature</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（摄氏度）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_clock</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（Hz），带 <code>clock</code>: compute, graphics, memory, video</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（百分比）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_memory_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（百分比）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_pcie_bandwidth</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（字节/秒），带 <code>direction</code>: receive</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_pcie_throughput</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（字节/秒），带 <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_sm_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（%）—— 仅 Hopper 及以上</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_sm_occupancy</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（%）—— 仅 Hopper 及以上</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_dram_bandwidth_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（%）—— 仅 Hopper 及以上</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_tensor_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（%），带 <code>pipe</code>：any、hmma（FP16/BF16/TF32）、imma（整数）、dfma（FP64）—— 仅 Hopper 及以上</span></div>
+</div>
+</details>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">Apple Silicon</h4><p class="text-base text-slate-400">功耗、时钟、利用率（macOS）</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（毫瓦）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU 计数器（毫焦）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_clock</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（Hz），带 <code>clock</code>: graphics</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">gpu_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">每 GPU gauge（百分比）</span></div>
+</div>
+</details>
+</section>
+
+<!-- Rezolus Self-Monitoring -->
+<section class="mb-12" id="rezolus">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-slate-600" data-icon="speed">speed</span>
+<h3 class="text-xl font-bold">Rezolus（自监控）</h3>
+</div>
+
+<details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
+<summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
+<div><h4 class="text-base font-bold">资源占用</h4><p class="text-base text-slate-400">Rezolus 进程的 CPU、内存、I/O 与上下文切换</p></div>
+<span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
+</summary>
+<div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">rezolus_cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器（ns），带 <code>state</code>: user, system</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">rezolus_memory_usage_resident_set_size</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">Gauge（字节）</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">rezolus_memory_page_reclaims</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">rezolus_memory_page_faults</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">rezolus_blockio_operations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>op</code>: read, write</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3 md:pl-[18.75rem]"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem] md:-ml-[18.75rem]">rezolus_context_switch</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[26.5rem]">计数器，带 <code>kind</code>: voluntary, involuntary</span></div>
+</div>
+</details>
+</section>
+
+<!-- Metric Types -->
+<section class="mb-12" id="types">
+<h2 class="text-xl font-bold mb-6">度量类型</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-6">Rezolus 记录中的每个度量都属于以下三种形态之一。列元数据记录了类型，Viewer 据此选择相应的图表渲染方式。</p>
+<div class="space-y-3">
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-4">
+<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">counter</code><span class="text-base text-slate-400">UInt64，单调递增</span></div>
+<p class="text-lg text-slate-500 dark:text-slate-400">单调不减的累计值。速率与差值在查询时通过 <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">rate()</code> / <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">irate()</code>得出。例如： <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">cpu_usage</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">syscall</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">blockio_operations</code>.</p>
+</div>
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-4">
+<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">gauge</code><span class="text-base text-slate-400">Int64，瞬时值</span></div>
+<p class="text-lg text-slate-500 dark:text-slate-400">可升可降的瞬时值。直接使用，不做速率推导。例如： <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">cpu_cores</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">memory_used</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">gpu_utilization</code>.</p>
+</div>
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-4">
+<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">histogram</code><span class="text-base text-slate-400">List&lt;UInt64&gt;，H2 分桶</span></div>
+<p class="text-lg text-slate-500 dark:text-slate-400">每次快照的完整分桶分布，而不只是 summary 分位数。可通过 <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">histogram_quantiles()</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">histogram_mean()</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">histogram_sum()</code>等函数查询。例如： <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">scheduler_runqueue_latency</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">syscall_latency</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-base">tcp_packet_latency</code>.</p>
+</div>
+</div>
+</section>
+
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-lg">
+<a href="architecture.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">← 架构</a>
+<a href="api.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">API 参考 →</a>
+</div>
+
+
+</main>
+</div>
+<script>
+// Mobile nav. The header links are `hidden md:flex` and the docs sidebar is
+// `hidden lg:flex`, so below 1024px there is otherwise no navigation at all.
+const navToggle = document.getElementById('nav-toggle');
+const navMenu = document.getElementById('nav-menu');
+const setNav = (open) => {
+    navToggle.setAttribute('aria-expanded', String(open));
+    navToggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
+    navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
+    navMenu.hidden = !open;
+};
+if (navToggle && navMenu) {
+    navToggle.addEventListener('click', () => setNav(navToggle.getAttribute('aria-expanded') !== 'true'));
+    navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
+    window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => { if (e.matches) setNav(false); });
+}
+</script>
+</body></html>
