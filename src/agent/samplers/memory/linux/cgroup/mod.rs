@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use walkdir::WalkDir;
+use walkdir::{DirEntryExt, WalkDir};
 
 mod stats;
 use stats::*;
@@ -96,6 +96,8 @@ struct CgroupMemory {
 #[derive(Default)]
 struct State {
     slots: HashMap<PathBuf, usize>,
+    /// The cgroup id each occupied slot is labelled with.
+    ids: HashMap<usize, u64>,
     warned_capacity: bool,
 }
 
@@ -146,7 +148,8 @@ impl State {
     fn sample(&mut self, root: &Path) -> std::io::Result<usize> {
         // Failure to access the mount must not stamp a successful acquisition.
         std::fs::read_dir(root).map_err(|e| path_error(root, e))?;
-        let mut paths = HashSet::new();
+        // Each cgroup's directory inode, which on cgroup v2 is its cgroup id.
+        let mut paths = HashMap::new();
         for entry in WalkDir::new(root).min_depth(1) {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -162,7 +165,8 @@ impl State {
             if entry.file_type().is_dir() {
                 let probe = entry.path().join("memory.current");
                 if probe.try_exists().map_err(|e| path_error(&probe, e))? {
-                    paths.insert(entry.into_path());
+                    let id = entry.ino();
+                    paths.insert(entry.into_path(), id);
                 }
             }
         }
@@ -173,30 +177,30 @@ impl State {
         let retained = self
             .slots
             .keys()
-            .filter(|path| paths.contains(*path))
+            .filter(|path| paths.contains_key(*path))
             .count();
         let targets = paths
             .iter()
-            .filter(|path| self.slots.contains_key(*path))
+            .filter(|(path, _)| self.slots.contains_key(*path))
             .chain(
                 paths
                     .iter()
-                    .filter(|path| !self.slots.contains_key(*path))
+                    .filter(|(path, _)| !self.slots.contains_key(*path))
                     .take(MAX_CGROUPS - retained),
             );
         let readings: Vec<_> = targets
-            .map(|path| {
+            .map(|(path, id)| {
                 let total = read_bytes(&path.join("memory.current"));
                 let swap = read_bytes(&path.join("memory.swap.current"));
                 let values = std::fs::read_to_string(path.join("memory.stat"))
                     .map(|data| parse_stat(&data))
                     .unwrap_or([None; KINDS.len()]);
-                (path, total, swap, values)
+                (path, *id, total, swap, values)
             })
             .collect();
         let count = readings
             .iter()
-            .filter(|(_, total, swap, values)| {
+            .filter(|(_, _, total, swap, values)| {
                 total.is_some() || swap.is_some() || values.iter().any(Option::is_some)
             })
             .count();
@@ -207,17 +211,25 @@ impl State {
             warn!("{NAME}: more than {MAX_CGROUPS} cgroups; excess groups are omitted");
             self.warned_capacity = true;
         }
+        let ids = &mut self.ids;
         self.slots.retain(|path, slot| {
-            if paths.contains(path) {
+            if paths.contains_key(path) {
                 return true;
             }
             clear_slot(*slot);
+            ids.remove(slot);
             false
         });
         let used: HashSet<usize> = self.slots.values().copied().collect();
         let mut free = (0..MAX_CGROUPS).filter(|slot| !used.contains(slot));
-        for (path, total, swap, values) in readings {
+        for (path, id, total, swap, values) in readings {
             let slot = if let Some(slot) = self.slots.get(path) {
+                // A cgroup removed and created again at the same path between
+                // sweeps has a new id, so it is labelled as a new occupant.
+                if self.ids.get(slot) != Some(&id) {
+                    label_slot(*slot, path.strip_prefix(root).unwrap(), id);
+                    self.ids.insert(*slot, id);
+                }
                 *slot
             } else if total.is_none() && swap.is_none() && values.iter().all(Option::is_none) {
                 // Discovered, then gone before it could be read: no slot and
@@ -225,7 +237,8 @@ impl State {
                 continue;
             } else if let Some(slot) = free.next() {
                 self.slots.insert(path.clone(), slot);
-                label_slot(slot, path.strip_prefix(root).unwrap());
+                self.ids.insert(slot, id);
+                label_slot(slot, path.strip_prefix(root).unwrap(), id);
                 slot
             } else {
                 unreachable!("staged readings fit the active slot capacity");
@@ -292,8 +305,11 @@ fn memory_name(relative: &Path) -> String {
     crate::agent::bpf::cgroup_name_label(part(0), part(1), part(2), parts.len() as i32)
 }
 
-fn label_slot(slot: usize, relative: &Path) {
+/// Label `slot` with the cgroup's `name`, its `path` under the cgroupfs root,
+/// and its kernel cgroup `id`, which stays the same across agent restarts.
+fn label_slot(slot: usize, relative: &Path, id: u64) {
     let metadata = HashMap::from([
+        ("id".into(), id.to_string()),
         ("name".into(), memory_name(relative)),
         ("path".into(), format!("/{}", relative.to_string_lossy())),
     ]);
@@ -481,6 +497,52 @@ mod tests {
         std::fs::remove_dir_all(&existing).unwrap();
         std::fs::remove_dir_all(&added).unwrap();
         assert_eq!(state.sweep(root).unwrap(), 0);
+    }
+
+    #[test]
+    fn id_is_the_cgroup_inode_whatever_the_slot_order() {
+        use std::os::unix::fs::MetadataExt;
+        let _registry = crate::agent::exposition::http::test_registry();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let paths: Vec<PathBuf> = (0..8).map(|i| root.join(format!("group{i}"))).collect();
+        for path in &paths {
+            std::fs::create_dir(path).unwrap();
+            std::fs::write(path.join("memory.current"), "4096").unwrap();
+        }
+        let id = |slot: usize| CGROUP_MEMORY_USAGE.load_metadata(slot).unwrap()["id"].clone();
+        let inode = |path: &Path| std::fs::metadata(path).unwrap().ino().to_string();
+        // Each fresh State assigns slots in its own HashMap order.
+        let mut orders = HashSet::new();
+        for _ in 0..4 {
+            let mut state = State::default();
+            state.sweep(root).unwrap();
+            let order: Vec<usize> = paths.iter().map(|p| state.slots[p]).collect();
+            orders.insert(order);
+            for path in &paths {
+                assert_eq!(id(state.slots[path]), inode(path), "{}", path.display());
+            }
+        }
+        assert!(orders.len() > 1, "the sweeps assigned slots in one order");
+
+        // Created again at the same path between sweeps: the slot is kept and
+        // relabelled with the new cgroup's id. The new directory exists before
+        // the old one is removed, so their inodes differ.
+        let mut state = State::default();
+        state.sweep(root).unwrap();
+        let path = &paths[0];
+        let slot = state.slots[path];
+        let old = inode(path);
+        let staged = root.join("staged");
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join("memory.current"), "8192").unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+        std::fs::rename(&staged, path).unwrap();
+        state.sweep(root).unwrap();
+        assert_eq!(state.slots[path], slot);
+        assert_ne!(inode(path), old);
+        assert_eq!(id(slot), inode(path));
+        assert_eq!(CGROUP_MEMORY_USAGE.value(slot), Some(8192));
     }
 
     // Hold the registry lock across both mutations and stream assertions.

@@ -1328,12 +1328,15 @@ up to the last three path components, prefixed with `.../` for deeper paths.
 Components use BPF's 63-byte bound and systemd `\x2d` decoding, so the shared
 Cgroups selector matches both sources. The additional `path` label preserves
 the full path relative to `/sys/fs/cgroup`, with a leading `/`; use it to
-distinguish cgroups whose abbreviated names collide.
+distinguish cgroups whose abbreviated names collide. `id` is the kernel's
+cgroup id, the inode number of the cgroup's directory, so it is the same across
+agent restarts. A cgroup removed and created again at the same path has a new
+`id` and so becomes a new series. The BPF cgroup metrics' `id` is a different
+number (a css id), so join the two families on `name`, not `id`.
 
-Up to 4096 cgroups are tracked concurrently, independently of kernel cgroup
-IDs. Discovery runs each sweep; deleted groups are removed and their slots
-reused. Above 4096, which cgroups are tracked is arbitrary, and a warning is
-logged once per agent process. In a successful sweep, missing files,
+Up to 4096 cgroups are tracked concurrently. Discovery runs each sweep; deleted
+groups are removed and their slots reused. Above 4096, which cgroups are
+tracked is arbitrary, and a warning is logged once per agent process. In a successful sweep, missing files,
 unsupported fields, and failed individual reads yield absent values rather
 than zeros; a cgroup discovered but gone before any of its files could be read
 gets no series. If discovery fails or every attempted read fails, the entire

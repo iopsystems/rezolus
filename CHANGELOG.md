@@ -35,7 +35,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   memory controller reports the sampler as unsupported, not failed.
   `/metrics/binary` reuses the `memory_cgroup` group's encoded bytes across
   scrapes until its next sweep, so between sweeps its series cost a copy
-  rather than a re-encode per scrape. (#1537)
+  rather than a re-encode per scrape. (#1537) Each cgroup's `id` label is its
+  kernel cgroup id, so a cgroup keeps its series across agent restarts.
+  (#1708)
 
 - **A time window and per-series statistics on `query`.** The MCP `query`
   tool takes `start`, `end` (RFC 3339 or Unix seconds) and `step`
