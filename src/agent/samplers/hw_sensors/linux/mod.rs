@@ -21,7 +21,7 @@ mod corsair_axi;
 mod discovery;
 mod stats;
 
-use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 use discovery::{Descriptor, Family};
 use metriken::GaugeGroup;
@@ -423,6 +423,7 @@ impl HwSensors {
         debug!("{NAME}: reading every {interval:?}, rediscovering every {REDISCOVERY_INTERVAL:?}");
         Self {
             worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_tolerance(SCRAPE_TOLERANCE)
                 .with_stuck_warning(interval * STUCK_INTERVALS),
             state: Arc::new(Mutex::new(SweepState::new())),
             sysfs,

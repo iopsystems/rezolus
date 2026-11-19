@@ -50,7 +50,7 @@ const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(1);
 const SYS_FS_XFS: &str = "/sys/fs/xfs";
 
 use crate::agent::bpf::filesystems::{self, Assignment};
-use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 use metriken::CounterGroup;
 
@@ -227,7 +227,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     XFS_STATS_ACQ.set_member_bound(0);
 
     Ok(Some(Box::new(XfsStats {
-        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+            .with_tolerance(SCRAPE_TOLERANCE),
         state: Arc::new(Mutex::new(SweepState::default())),
     })))
 }
@@ -240,7 +241,8 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 };
 
 struct XfsStats {
-    /// Admits one sweep at a time, at most once per interval from dispatch.
+    /// Admits one sweep at a time, at most once per interval from dispatch,
+    /// less `SCRAPE_TOLERANCE`.
     worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
 }

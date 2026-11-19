@@ -239,6 +239,39 @@ fn tolerance_admits_a_read_that_early_and_no_earlier() {
 }
 
 #[test]
+fn tolerance_applies_up_to_half_the_interval() {
+    let interval = Duration::from_millis(60);
+    let worker = BlockingWorker::new("test", interval, Cadence::FromDispatch)
+        .with_tolerance(SCRAPE_TOLERANCE);
+    let start = Instant::now();
+    let mut permit = worker.try_acquire_at(start).unwrap();
+    permit.outcome = Some(Outcome::Ran);
+    permit.finish_at(start + Duration::from_millis(1));
+    let due = start + interval / 2;
+    assert!(worker
+        .try_acquire_at(due - Duration::from_nanos(1))
+        .is_none());
+    assert!(worker.try_acquire_at(due).is_some());
+}
+
+#[test]
+fn tolerance_shortens_the_idle_interval_after_an_overrun() {
+    let tolerance = Duration::from_millis(50);
+    let worker =
+        BlockingWorker::new("test", INTERVAL, Cadence::IdleAfterOverrun).with_tolerance(tolerance);
+    let start = Instant::now();
+    let mut permit = worker.try_acquire_at(start).unwrap();
+    permit.outcome = Some(Outcome::Ran);
+    let finished = start + Duration::from_secs(90);
+    permit.finish_at(finished);
+    let due = finished + INTERVAL - tolerance;
+    assert!(worker
+        .try_acquire_at(due - Duration::from_nanos(1))
+        .is_none());
+    assert!(worker.try_acquire_at(due).is_some());
+}
+
+#[test]
 fn an_unwound_read_anchors_on_the_unwind_not_the_dispatch() {
     for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
         let worker = BlockingWorker::new("test", INTERVAL, cadence);

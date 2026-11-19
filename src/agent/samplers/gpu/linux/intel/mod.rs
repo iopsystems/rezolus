@@ -74,7 +74,7 @@
 
 const NAME: &str = "gpu_intel_pmu";
 
-use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 
 use perf_event::events::Event;
@@ -96,14 +96,6 @@ use stats::*;
 /// (`DEFAULT_PERIOD_MS`) and is far finer than the timescale these counters move
 /// on, while keeping the driver read rate off the scrape cadence.
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(1);
-
-/// How early a scrape may arrive and still be served with a fresh read.
-///
-/// Scrape timers jitter by well under a millisecond in practice; 50ms is far
-/// above that and still two orders of magnitude below the default interval, so
-/// it cannot meaningfully raise the driver read rate. See the note in
-/// `refresh` for the aliasing this prevents.
-const SCRAPE_TOLERANCE: Duration = Duration::from_millis(50);
 
 /// Maximum number of Intel GPUs tracked. Hosts with more are truncated (logged
 /// once at init).

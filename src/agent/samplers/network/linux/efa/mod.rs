@@ -47,7 +47,7 @@ mod stats;
 
 use stats::*;
 
-use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
@@ -62,11 +62,6 @@ use std::time::Duration;
 const SYSFS_INFINIBAND: &str = "/sys/class/infiniband";
 
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(1);
-
-/// How early a scrape may arrive and still be served with a fresh read, so
-/// that a consumer scraping at `interval` does not have every other scrape
-/// rejected by timer jitter.
-const SCRAPE_TOLERANCE: Duration = Duration::from_millis(50);
 
 /// What a port slot means across every port counter.
 static PORT_IDENTITY: metriken::group::SlotIdentity =

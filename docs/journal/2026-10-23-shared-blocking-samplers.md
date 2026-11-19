@@ -171,3 +171,16 @@ so a consumer polling at exactly its interval misses some readings to jitter;
 `docs/metrics.md` says so for `memory_cgroup`. `xfs_stats` is 1 s with
 cumulative counters, the case `gpu_intel_pmu`'s comment describes.
 `with_tolerance` would fix it; it is not applied here.
+
+## Tolerance everywhere (2026-11-19)
+
+The follow-up PR applies `with_tolerance(SCRAPE_TOLERANCE)` to those six
+samplers, so all twelve samplers on the worker admit a scrape up to 50 ms
+early. `SCRAPE_TOLERANCE` moved into `blocking.rs` from the three samplers
+that each defined it. The worker now caps the tolerance at half the interval:
+without the cap, a configured interval of 50 ms or less would admit a read on
+every refresh. No default interval comes near that (the shortest is 1 s). The
+tolerance also shortens the idle interval after an overrunning read by 50 ms,
+since the same due check admits it. The `memory_cgroup` reference
+documentation still said reads were anchored on the previous sweep's finish,
+left over from #1542's first cadence; it now points at the cadence paragraph.
