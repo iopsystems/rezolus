@@ -1,7 +1,29 @@
 # The layout of a rezolus dendro archive
 
 - **Opened:** 2026-09-25
-- **Status:** **OPEN — design, nothing built.** Intent-first: this is what the
+- **Status:** **OPEN — partly built.** Checked against the code on
+  2026-11-19:
+  - **Built: the writer records long.** rezolus #1394 (2026-10-02) sends
+    groups of slots long on the agent's stream. metriken-recorder records
+    with `Layout::Long` by default. metriken-storage builds long segments
+    and `<table>/occupants` streams in its `long_table` and `occupants`
+    modules.
+  - **Not built: the reshaping converter this entry was opened for.**
+    `recording upgrade` does not reshape. It copies a v3 `.rez`'s segment
+    bytes unchanged (metriken-storage `rez/to_dendro.rs`), and re-encodes a
+    tar `.rez`, a parquet file or a `.parquet.ab.tar` column for column
+    (`to_dendro.rs`). An upgraded recording therefore keeps the wide
+    layout.
+  - **Sorting at seal is off.** It exists as metriken-storage's
+    `WriterConfig::sort_long`, which defaults to `false`, and nothing in
+    rezolus or metriken-recorder sets it. Long segments are written in
+    arrival order. Compaction and copies re-encode without sorting
+    (`Encoder::for_sources` sets `sort_long: false`), so no long segment is
+    sorted.
+  - **History.** Until 2026-11-19 this line read "OPEN — design, nothing
+    built". It went stale when the writer shipped. The original status
+    follows.
+  Intent-first: this is what the
   reshaping `recording upgrade --to dendro` will write, and what the 6.0 writer
   (#1224) must then write identically. Revised 2026-09-27 after the gate
   (below): every group table with slots is written long, keyed by occupant.
