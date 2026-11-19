@@ -20,7 +20,6 @@ use tokio::task::JoinHandle;
 pub(super) enum Cadence {
     /// One interval after the previous read was dispatched. After a read that
     /// ran for longer than the interval, the next one is due when it finishes.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     FromDispatch,
     /// One interval after the previous read was dispatched, or, when that read
     /// finished a full interval or more after its dispatch, one interval after
@@ -56,7 +55,8 @@ impl BlockingWorker {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    /// Warn once when a read has been running for longer than `after`; the
+    /// warning resets when the next read is admitted.
     pub(super) fn with_stuck_warning(mut self, after: Duration) -> Self {
         self.warn_after = Some(after);
         self
@@ -68,7 +68,7 @@ impl BlockingWorker {
         self.try_acquire_at(Instant::now())
     }
 
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(super) fn is_running(&self) -> bool {
         recover_lock(self.name, &self.schedule)
             .running_since
@@ -89,7 +89,8 @@ impl BlockingWorker {
             if self.warn_after.is_some_and(|after| running > after) && !schedule.stuck_warned {
                 schedule.stuck_warned = true;
                 warn!(
-                    "{}: a blocking sweep has run for {running:?}; no second worker was dispatched",
+                    "{}: a sweep has been running for {running:?}; its values hold until it \
+                     returns, and no other sweep starts",
                     self.name
                 );
             }

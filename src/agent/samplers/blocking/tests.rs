@@ -115,7 +115,6 @@ fn concurrent_callers_admit_one_worker() {
     assert!(worker.try_acquire().is_some());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn stuck_warning_resets_only_when_a_new_worker_is_admitted() {
     let worker = BlockingWorker::new("test", INTERVAL, Cadence::FromDispatch)

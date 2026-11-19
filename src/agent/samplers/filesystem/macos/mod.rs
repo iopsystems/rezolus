@@ -56,15 +56,15 @@ const NAME: &str = "filesystem";
 
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
 use metriken::{metric, GaugeGroup};
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 mod stats {
     include!("../linux/stats.rs");
@@ -432,12 +432,11 @@ struct SweepState {
 }
 
 struct Filesystem {
-    interval: Duration,
-    last_read: Mutex<Option<Instant>>,
+    /// Admits one sweep at a time, at most once per interval from dispatch,
+    /// and warns once about a sweep still running after `STUCK_INTERVALS`
+    /// intervals: most likely waiting in a path lookup.
+    worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
-    /// Set while a sweep runs on the blocking pool.
-    reading: Arc<AtomicBool>,
-    stuck_warned: AtomicBool,
 }
 
 impl Filesystem {
@@ -446,41 +445,13 @@ impl Filesystem {
         FILESYSTEM_SWEEP_ACQ.set_member_bound(0);
         debug!("{NAME}: sweeping every {interval:?}");
         Self {
-            interval,
-            last_read: Mutex::new(None),
+            worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_stuck_warning(interval * STUCK_INTERVALS),
             state: Arc::new(Mutex::new(SweepState {
                 slots: Slots::new(MAX_MOUNTS),
                 dropped: 0,
             })),
-            reading: Arc::new(AtomicBool::new(false)),
-            stuck_warned: AtomicBool::new(false),
         }
-    }
-
-    /// A sweep running for more than [`STUCK_INTERVALS`] intervals is most
-    /// likely waiting in a path lookup; warn once.
-    fn warn_if_stuck(&self) {
-        let Some(started) = *self.last_read.lock().unwrap() else {
-            return;
-        };
-        let running = started.elapsed();
-        if running > self.interval * STUCK_INTERVALS
-            && !self.stuck_warned.swap(true, Ordering::AcqRel)
-        {
-            warn!(
-                "{NAME}: a sweep has been running for {running:?}, over {STUCK_INTERVALS} \
-                 intervals; filesystem gauges hold their last values until it returns"
-            );
-        }
-    }
-}
-
-/// Clears the in-flight flag when the sweep returns or unwinds.
-struct InFlight(Arc<AtomicBool>);
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -621,30 +592,12 @@ impl Sampler for Filesystem {
     }
 
     async fn refresh(&self) {
-        // Checked before the throttle, so a running sweep does not advance
-        // `last_read`, which times it.
-        if self.reading.load(Ordering::Acquire) {
-            self.warn_if_stuck();
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
-        {
-            let mut last = self.last_read.lock().unwrap();
-            match *last {
-                Some(t) if t.elapsed() < self.interval => return,
-                _ => *last = Some(Instant::now()),
-            }
-        }
-        if self.reading.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.stuck_warned.store(false, Ordering::Release);
-
+        };
         let state = self.state.clone();
-        let reading = self.reading.clone();
-        tokio::task::spawn_blocking(move || {
-            let _in_flight = InFlight(reading);
-            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-            let published = sweep(&mut state, mounted(), read_fresh);
+        permit.spawn(move || {
+            let published = sweep(&mut recover_lock(NAME, &state), mounted(), read_fresh);
             debug!("{NAME}: sweep published {published} volume(s)");
         });
     }
