@@ -46,6 +46,7 @@
 
 const NAME: &str = "gpu_amd_sysfs";
 
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
 use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
@@ -54,8 +55,7 @@ use metriken::GaugeGroup;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 mod gpu_metrics;
 mod stats;
@@ -126,9 +126,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     Ok(Some(Box::new(AmdSysfs {
         gpus: Arc::new(std::sync::Mutex::new(gpus)),
-        interval,
-        last_read: std::sync::Mutex::new(None),
-        reading: Arc::new(AtomicBool::new(false)),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+            .with_tolerance(SCRAPE_TOLERANCE),
     })))
 }
 
@@ -142,12 +141,9 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 struct AmdSysfs {
     /// Shared with the `spawn_blocking` task.
     gpus: Arc<std::sync::Mutex<Vec<Gpu>>>,
-    /// Minimum time between reads (principle 17).
-    interval: Duration,
-    /// When the last read was dispatched.
-    last_read: std::sync::Mutex<Option<Instant>>,
-    /// Guards against overlapping reads if one runs long.
-    reading: Arc<AtomicBool>,
+    /// Admits one read at a time, at most once per interval from dispatch
+    /// (principle 17), less `SCRAPE_TOLERANCE`.
+    worker: BlockingWorker,
 }
 
 #[async_trait]
@@ -157,27 +153,16 @@ impl Sampler for AmdSysfs {
     }
 
     async fn refresh(&self) {
-        {
-            let mut last = self.last_read.lock().unwrap();
-            let due = self.interval.saturating_sub(SCRAPE_TOLERANCE);
-            match *last {
-                Some(t) if t.elapsed() < due => return,
-                _ => *last = Some(Instant::now()),
-            }
-        }
-
-        if self.reading.swap(true, Ordering::AcqRel) {
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
+        };
 
         let gpus = self.gpus.clone();
-        let reading = self.reading.clone();
 
-        tokio::task::spawn_blocking(move || {
+        permit.spawn(move || {
             if let Ok(mut gpus) = gpus.lock() {
                 sweep(&mut gpus, &GPU_AMD_SYSFS_ACQ);
             }
-            reading.store(false, Ordering::Release);
         });
     }
 }

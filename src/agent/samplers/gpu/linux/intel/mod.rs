@@ -74,13 +74,13 @@
 
 const NAME: &str = "gpu_intel_pmu";
 
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
 use crate::agent::*;
 
 use perf_event::events::Event;
 use perf_event::ReadFormat;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 mod drm_memory;
 mod pmu;
@@ -282,9 +282,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     Ok(Some(Box::new(IntelPmu {
         gpus: Arc::new(std::sync::Mutex::new(gpus)),
-        interval,
-        last_read: std::sync::Mutex::new(None),
-        reading: Arc::new(AtomicBool::new(false)),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+            .with_tolerance(SCRAPE_TOLERANCE),
     })))
 }
 
@@ -299,12 +298,9 @@ struct IntelPmu {
     /// Shared with the blocking read task, which needs `&mut` on each `Gpu` to
     /// read its perf group.
     gpus: Arc<std::sync::Mutex<Vec<Gpu>>>,
-    /// Minimum time between reads (principle 17).
-    interval: Duration,
-    /// When the last read was dispatched.
-    last_read: std::sync::Mutex<Option<Instant>>,
-    /// Guards against overlapping reads if one runs long.
-    reading: Arc<AtomicBool>,
+    /// Admits one read at a time, at most once per interval from dispatch
+    /// (principle 17), less `SCRAPE_TOLERANCE`.
+    worker: BlockingWorker,
 }
 
 #[async_trait]
@@ -314,16 +310,17 @@ impl Sampler for IntelPmu {
     }
 
     async fn refresh(&self) {
-        // Throttle: dispatch at most once per `interval`. This is the only work
-        // done on the sample cycle; everything else happens off-worker.
+        // Admission is the only work done on the sample cycle; everything else
+        // happens off-worker.
         //
-        // The comparison carries a tolerance, and it is load-bearing rather
-        // than cosmetic. A consumer scraping at the same period as `interval`
-        // — the common case, since both default to 1s — arrives each cycle a
-        // few hundred microseconds early or late depending on jitter. A strict
-        // `<` then rejects roughly every other scrape, and because these are
-        // cumulative counters the exported series alternates between an
-        // unchanged value and one that jumped two intervals' worth. Measured on
+        // The worker admits a read up to `SCRAPE_TOLERANCE` early
+        // (`with_tolerance` in `init`). A consumer scraping at the same period
+        // as `interval` (the common case, since both default to 1s) arrives
+        // each cycle a few hundred microseconds early or late depending on
+        // jitter. Without the tolerance a strict check rejects roughly every
+        // other scrape, and because these are cumulative counters the exported
+        // series alternates between an unchanged value and one that jumped two
+        // intervals' worth. Measured on
         // an Arc A770 at a steady 2400 MHz, the recorded `actual-frequency`
         // deltas read `0, 4799, 0, 4800, ...`, which differentiates to a
         // plausible-looking 4800 MHz — double the truth, with no gap to hint
@@ -331,27 +328,16 @@ impl Sampler for IntelPmu {
         //
         // Admitting a read that is within `SCRAPE_TOLERANCE` of due costs at
         // most that much extra driver traffic and keeps one reading per scrape.
-        {
-            let mut last = self.last_read.lock().unwrap();
-            let due = self.interval.saturating_sub(SCRAPE_TOLERANCE);
-            match *last {
-                Some(t) if t.elapsed() < due => return,
-                _ => *last = Some(Instant::now()),
-            }
-        }
-
-        // Never overlap reads.
-        if self.reading.swap(true, Ordering::AcqRel) {
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
+        };
 
         // Offload: every source here is a syscall against the driver (a perf
         // group read, a DRM ioctl), not an mmap load, so it must not run on the
         // async worker.
         let gpus = self.gpus.clone();
-        let reading = self.reading.clone();
 
-        tokio::task::spawn_blocking(move || {
+        permit.spawn(move || {
             if let Ok(mut gpus) = gpus.lock() {
                 // Acquisition-group bracket (principle 18): ONE group for the
                 // whole device sweep, not one per GPU or per metric family.
@@ -369,7 +355,6 @@ impl Sampler for IntelPmu {
                 engines.finish();
                 devices.finish();
             }
-            reading.store(false, Ordering::Release);
         });
     }
 }

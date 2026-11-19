@@ -221,3 +221,20 @@ fn cancelling_a_queued_task_releases_its_permit() {
         });
     }
 }
+
+#[test]
+fn tolerance_admits_a_read_that_early_and_no_earlier() {
+    let tolerance = Duration::from_millis(50);
+    for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
+        let worker = BlockingWorker::new("test", INTERVAL, cadence).with_tolerance(tolerance);
+        let start = Instant::now();
+        let mut permit = worker.try_acquire_at(start).unwrap();
+        permit.outcome = Some(Outcome::Ran);
+        permit.finish_at(start + Duration::from_millis(1));
+        let due = start + INTERVAL - tolerance;
+        assert!(worker
+            .try_acquire_at(due - Duration::from_nanos(1))
+            .is_none());
+        assert!(worker.try_acquire_at(due).is_some());
+    }
+}

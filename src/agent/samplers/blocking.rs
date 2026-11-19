@@ -41,6 +41,7 @@ pub(super) struct BlockingWorker {
     name: &'static str,
     interval: Duration,
     cadence: Cadence,
+    tolerance: Duration,
     warn_after: Option<Duration>,
     schedule: Arc<Mutex<Schedule>>,
 }
@@ -51,9 +52,18 @@ impl BlockingWorker {
             name,
             interval,
             cadence,
+            tolerance: Duration::ZERO,
             warn_after: None,
             schedule: Arc::new(Mutex::new(Schedule::default())),
         }
+    }
+
+    /// Admit a read up to `tolerance` before the interval has elapsed, so that
+    /// a consumer polling at the interval is not rejected by timer jitter.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(super) fn with_tolerance(mut self, tolerance: Duration) -> Self {
+        self.tolerance = tolerance;
+        self
     }
 
     #[cfg(target_os = "linux")]
@@ -95,10 +105,9 @@ impl BlockingWorker {
             }
             return None;
         }
-        if schedule
-            .last
-            .is_some_and(|last| now.saturating_duration_since(last) < self.interval)
-        {
+        if schedule.last.is_some_and(|last| {
+            now.saturating_duration_since(last) < self.interval.saturating_sub(self.tolerance)
+        }) {
             return None;
         }
         let previous_last = schedule.last.replace(now);
