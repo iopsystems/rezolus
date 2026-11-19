@@ -95,9 +95,12 @@ rezolus view http://linux-host:4241
 ```
 
 Viewing and analyzing an existing recording does not require Linux eBPF or
-root. Local collection on macOS is limited to CPU and Apple GPU metrics;
-it does not provide Linux scheduler, syscall, or block-I/O instrumentation.
-The macOS installer does not install Linux systemd services.
+root. Local collection on macOS covers CPU usage, CPU frequency and CPU and SoC
+energy (Apple silicon), memory, network traffic, TCP counters, block-I/O
+counters, filesystem space, NVMe drive health and Apple GPU metrics (the TCP
+counters need root); it does not provide Linux scheduler,
+syscall, or block-I/O latency instrumentation. The macOS installer does not
+install Linux systemd services.
 
 [Build from source](docs/installation.md#building-from-source) ·
 [Docker](docker/README.md) · [Troubleshooting](docs/troubleshooting.md)
@@ -126,8 +129,8 @@ System and service endpoints can also share an archive:
 
 ```bash
 rezolus record --duration 60s \
-  --endpoint http://localhost:4241,source=system \
-  --endpoint http://localhost:9121/metrics,source=valkey \
+  --endpoint http://localhost:4241,alias=system \
+  --endpoint http://localhost:9121/metrics,alias=valkey \
   -o combined.dendro
 ```
 
@@ -142,9 +145,9 @@ for annotation and template instructions (archives require an explicit
 | Area | Examples | Availability |
 | --- | --- | --- |
 | CPU and scheduler | Usage, runqueue latency, cycles/instructions, cache/TLB behavior, migrations, frequency | Linux; PMU counters depend on hardware and available counter slots |
-| I/O and networking | Block-I/O latency and sizes, TCP behavior, interface statistics, syscall latency/counts | Linux; individual samplers depend on kernel support |
+| I/O and networking | Block-I/O latency and sizes, TCP behavior, interface statistics, AWS EFA counters, syscall latency/counts | Linux; individual samplers depend on kernel support |
 | Containers | Cgroup CPU usage and counters, migrations, syscalls, bandwidth/throttling | Linux cgroups; coverage varies by metric |
-| GPUs | Utilization, memory activity, clocks, power, temperature, and hardware counters | NVIDIA NVML/GPM, AMD SMI/PMU, Intel i915 PMU, Apple GPU; metric sets differ |
+| GPUs | Utilization, memory activity, clocks, power, temperature, and hardware counters | NVIDIA NVML/GPM, AMD SMI/PMU/sysfs, Intel i915 PMU, Apple GPU; metric sets differ |
 | Memory and capacity | Memory/NUMA statistics, local filesystem occupancy, drive health | Platform and device dependent |
 | Services | Inference and datastore KPIs alongside system telemetry | Prometheus-compatible metrics and service templates |
 
@@ -198,7 +201,7 @@ rezolus mcp query run.dendro 'sum(irate(cpu_cycles[1m]))'
 
 For a multi-recording archive, first run `describe-recording` without a selector
 to list the recordings. The recordings of one run are read together, each
-series under its recording's labels; pass `--recording source=system` (or
+series under its recording's labels; pass `--recording alias=system` (or
 another matching label set) to read one alone, as `extract-features` and a
 comparison's tools require. MCP tools take the equivalent `recording` object.
 A selector must identify exactly one recording.
@@ -229,6 +232,7 @@ lookback and disk requirements before enabling it.
 | Task | Read next |
 | --- | --- |
 | Install packages, build from source, or check platform requirements | [Installation](docs/installation.md), [Docker](docker/README.md) |
+| Upgrade from 5.x: what 6.0 refuses and what to run instead | [Upgrading to 6.0](https://rezolus.com/docs/upgrade.html) |
 | Record, compare, export, retain history, or analyze recordings | [Usage guide](docs/usage.md) |
 | Find a metric's meaning, unit, and labels | [Metrics](docs/metrics.md) |
 | Configure service KPI dashboards | [KPI definitions and annotation](docs/parquet_metadata.md#service_queries) |

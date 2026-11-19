@@ -16,8 +16,10 @@ pub fn parse_smart_temperature(buf: &[u8]) -> Option<i64> {
     Some(kelvin - 273)
 }
 
-/// Thermal-throttling telemetry decoded from the NVMe SMART / Health log page
-/// (0x02). All counters are monotonic, so a coarse read cadence loses no events.
+/// The fields of the NVMe SMART / Health log page (0x02) that drivehealth
+/// publishes: the Composite temperature, Temperature Sensors 1 to 8, and the
+/// thermal-throttle counters. The counters are monotonic, so a coarse read
+/// cadence loses no events.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct NvmeHealth {
     /// Composite temperature in °C (`None` if not reported).

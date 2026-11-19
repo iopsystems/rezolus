@@ -70,8 +70,10 @@ pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -
     let Some((start, end, step)) = window.resolve(data.time_range(), data.interval()) else {
         return ChartData::Empty;
     };
-    match data.query_range(&query, start, end, step) {
-        Ok(QueryResult::Matrix { result }) => {
+    let opts = metriken_query::QueryOptions::default()
+        .with_scope(def.scope.as_deref().and_then(dashboard::combined::scope_of));
+    match data.query_range_opts(&query, start, end, step, &opts) {
+        Ok(QueryResult::Matrix { result, .. }) => {
             let metrics: Vec<&Labels> = result.iter().map(|s| &s.metric).collect();
             let labels = series_labels(&metrics);
             let series: Vec<Series> = result
@@ -79,7 +81,14 @@ pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -
                 .zip(labels)
                 .map(|(s, label)| Series {
                     label,
-                    points: s.values,
+                    points: if def.factor == 1.0 {
+                        s.values
+                    } else {
+                        s.values
+                            .into_iter()
+                            .map(|(t, v)| (t, v * def.factor))
+                            .collect()
+                    },
                 })
                 .filter(|s| !s.points.is_empty())
                 .collect();
@@ -98,7 +107,7 @@ type Labels = HashMap<String, String>;
 
 /// Display labels for the series of one matrix result, in order, by the
 /// rules of the browser viewer (`data.js` with `seriesNamer` from
-/// `assets/lib/labels.js`):
+/// metriken-charts' `assets/charts/util/labels.js`):
 /// - a `percentile`/`quantile` label names its series `p99`-style;
 /// - a series with both `id` and `vendor` is `<vendor> <id>`;
 /// - otherwise a series is named by the visible labels whose values differ
@@ -236,6 +245,80 @@ mod tests {
             kind,
             percentiles: pcts,
             unit_system: None,
+            factor: 1.0,
+            scope: None,
+        }
+    }
+
+    /// Each host's CPU section of a combined archive charts only that
+    /// host's series in the TUI: the plot's scope goes with its query, as
+    /// the browser sends it.
+    #[test]
+    fn a_combined_archives_section_charts_only_its_recording() {
+        use crate::viewer::combined_test::{section, two_hosts, view};
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = view(&two_hosts(dir.path()), &[]);
+        let data = state.baseline_data();
+        let mut busy = Vec::new();
+        for route in ["/cpu", "/cpu@h2"] {
+            let cpu = section(&state, route);
+            let query = cpu["groups"][0]["subgroups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|sg| sg["plots"].as_array().unwrap())
+                .find(|p| p["opts"]["id"] == "busy-pct")
+                .unwrap_or_else(|| panic!("{route}: no busy-pct plot"))
+                .clone();
+            let def = super::super::model::parse_plot(&query).unwrap();
+            assert!(def.scope.is_some(), "{route}");
+            match load_chart(data.as_ref(), &def, TimeWindow::All) {
+                ChartData::Lines(series) => {
+                    assert_eq!(series.len(), 1, "{route}: {series:?}");
+                    busy.push(series[0].points.last().unwrap().1);
+                }
+                other => panic!("{route}: {other:?}"),
+            }
+        }
+        assert!((busy[0] - 0.25).abs() < 1e-9, "{busy:?}");
+        assert!((busy[1] - 0.75).abs() < 1e-9, "{busy:?}");
+    }
+
+    /// Each loaded value is multiplied by the plot's factor (the stored
+    /// unit's, from `format.unit`) before the chart formats it.
+    #[test]
+    fn a_plots_factor_scales_its_points() {
+        use std::time::{Duration, SystemTime};
+        let store = metriken_query::MemoryStore::builder()
+            .sampling_interval_ms(1000)
+            .build();
+        for (i, value) in [2_i64, 3].into_iter().enumerate() {
+            store.ingest_snapshot(metriken_exposition::Snapshot::V2(
+                metriken_exposition::SnapshotV2 {
+                    systemtime: SystemTime::UNIX_EPOCH
+                        + Duration::from_secs(1_700_000_000 + i as u64),
+                    duration: Duration::from_secs(0),
+                    metadata: HashMap::new(),
+                    counters: vec![],
+                    gauges: vec![metriken_exposition::Gauge::new(
+                        "m".to_string(),
+                        value,
+                        HashMap::new(),
+                    )],
+                    histograms: vec![],
+                    gauge_histograms: Vec::new(),
+                },
+            ));
+        }
+        let mut scaled = def(PlotKind::Line, vec![]);
+        scaled.factor = 1e9;
+        match load_chart(&store, &scaled, TimeWindow::All) {
+            ChartData::Lines(series) => {
+                let values: Vec<f64> = series[0].points.iter().map(|p| p.1).collect();
+                assert_eq!(values, [2e9, 3e9]);
+            }
+            other => panic!("{other:?}"),
         }
     }
 
@@ -317,6 +400,31 @@ mod tests {
             ("pod", "p"),
         ]);
         assert_eq!(series_labels(&[&a]), vec!["h"]);
+    }
+
+    /// An internal label (`__uid__`) sorts before every visible key; the
+    /// legend is what it would be without it.
+    #[test]
+    fn a_series_is_not_named_by_an_internal_label() {
+        let a = labels(&[
+            ("__name__", "rpc_seconds"),
+            ("__uid__", "7"),
+            ("alias", "svc"),
+        ]);
+        assert_eq!(series_labels(&[&a]), vec!["svc"]);
+        let b = labels(&[
+            ("__name__", "rpc_seconds"),
+            ("__uid__", "7"),
+            ("alias", "svc"),
+            ("op", "get"),
+        ]);
+        let c = labels(&[
+            ("__name__", "rpc_seconds"),
+            ("__uid__", "8"),
+            ("alias", "svc"),
+            ("op", "put"),
+        ]);
+        assert_eq!(series_labels(&[&b, &c]), vec!["get", "put"]);
     }
 
     #[test]

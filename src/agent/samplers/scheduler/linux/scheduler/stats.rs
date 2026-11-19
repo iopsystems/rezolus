@@ -35,6 +35,10 @@ pub static OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_offcpu",
 );
+pub static UNINTERRUPTIBLE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
+    "scheduler_runqueue_uninterruptible",
+);
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static RUNQLAT_ACQ_REG: &'static AcquisitionGroup = &RUNQLAT_ACQ;
@@ -42,6 +46,8 @@ static RUNQLAT_ACQ_REG: &'static AcquisitionGroup = &RUNQLAT_ACQ;
 static RUNNING_ACQ_REG: &'static AcquisitionGroup = &RUNNING_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static OFFCPU_ACQ_REG: &'static AcquisitionGroup = &OFFCPU_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static UNINTERRUPTIBLE_ACQ_REG: &'static AcquisitionGroup = &UNINTERRUPTIBLE_ACQ;
 
 // Per-cgroup (`CgroupCounters`) groups for the per-cgroup
 // breakdown — see `docs/principles.md` principle 18 and
@@ -49,8 +55,9 @@ static OFFCPU_ACQ_REG: &'static AcquisitionGroup = &OFFCPU_ACQ;
 // `CGROUP_SCHEDULER_IVCSW`/`CGROUP_SCHEDULER_VCSW` share ONE group: both
 // are the `cgroup_scheduler_context_switch` family (distinguished by the
 // `kind` label) — like-entities collapse per principle 18.
-// `cgroup_scheduler_runqueue_wait`/`cgroup_scheduler_offcpu` are distinct
-// families and keep their own groups.
+// `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu` and
+// `cgroup_scheduler_uninterruptible_wait` are distinct families and keep their
+// own groups.
 pub static CGROUP_WAIT_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_wait",
@@ -58,6 +65,10 @@ pub static CGROUP_WAIT_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
 pub static CGROUP_OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_offcpu",
+);
+pub static CGROUP_UNINTERRUPTIBLE_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
+    "scheduler_runqueue_cgroup_uninterruptible",
 );
 pub static CGROUP_CONTEXT_SWITCH_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
@@ -68,6 +79,8 @@ pub static CGROUP_CONTEXT_SWITCH_ACQ: AcquisitionGroup = AcquisitionGroup::new_s
 static CGROUP_WAIT_ACQ_REG: &'static AcquisitionGroup = &CGROUP_WAIT_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static CGROUP_OFFCPU_ACQ_REG: &'static AcquisitionGroup = &CGROUP_OFFCPU_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_UNINTERRUPTIBLE_ACQ_REG: &'static AcquisitionGroup = &CGROUP_UNINTERRUPTIBLE_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static CGROUP_CONTEXT_SWITCH_ACQ_REG: &'static AcquisitionGroup = &CGROUP_CONTEXT_SWITCH_ACQ;
 
@@ -118,6 +131,14 @@ pub static SCHEDULER_OFFCPU: RwLockCounterHistogram =
     RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
+    name = "scheduler_uninterruptible",
+    description = "Distribution of the amount of time tasks were off-CPU in uninterruptible sleep (D state), a subset of scheduler_offcpu. Idle kernel threads (TASK_IDLE) are excluded, as in the load average",
+    metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_uninterruptible" }
+)]
+pub static SCHEDULER_UNINTERRUPTIBLE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
     name = "scheduler_context_switch",
     description = "The number of involuntary context switches, where a runnable task was preempted. Switches away from the idle task are excluded, since nothing was competing for the CPU",
     metadata = { kind = "involuntary", acq_group = "scheduler_runqueue_counters" }
@@ -137,6 +158,13 @@ pub static SCHEDULER_VCSW: CounterGroup = CounterGroup::new(MAX_CPUS);
     metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_counters" }
 )]
 pub static SCHEDULER_RUNQUEUE_WAIT: CounterGroup = CounterGroup::new(MAX_CPUS);
+
+#[metric(
+    name = "scheduler_uninterruptible_wait",
+    description = "Time tasks spent in uninterruptible sleep (D state), added in full when a task next runs, on the CPU it runs on. Over windows much longer than the sleeps, the rate summed across CPUs is the mean number of tasks in D state; a long sleep shows as a spike when it ends",
+    metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_counters" }
+)]
+pub static SCHEDULER_UNINTERRUPTIBLE_WAIT: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "scheduler_discarded_samples",
@@ -162,6 +190,13 @@ pub static CGROUP_SCHEDULER_RUNQUEUE_WAIT: CounterGroup = CounterGroup::new(MAX_
     metadata = { state = "offcpu", unit = "nanoseconds", acq_group = "scheduler_runqueue_cgroup_offcpu" }
 )]
 pub static CGROUP_SCHEDULER_OFFCPU: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_scheduler_uninterruptible_wait",
+    description = "Time tasks spent in uninterruptible sleep (D state) on a per-cgroup basis, added in full when a task next runs",
+    metadata = { state = "uninterruptible", unit = "nanoseconds", acq_group = "scheduler_runqueue_cgroup_uninterruptible" }
+)]
+pub static CGROUP_SCHEDULER_UNINTERRUPTIBLE_WAIT: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_scheduler_context_switch",

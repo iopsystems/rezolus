@@ -1,23 +1,24 @@
 // Shared viewer components and helpers used by both the server-backed
 // viewer (script.js) and the static site viewer (site script.js).
 
-import { Chart } from './charts/chart.js';
+import { ChartView } from './ui/chart_view.js';
 import { expandLink, selectButton, compareToggle } from './ui/chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
-import { renderCompareChart } from './charts/compare.js';
+import { renderCompareChart } from './compare/compare.js';
 import { captureContext } from './events/capture_events.js';
 import {
-    queryRangeForCapture, queryRangeDisplayForCapture, buildEffectiveQuery,
+    queryRangeForCapture, queryRangeDisplayForCapture, buildEffectiveQueries,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
     fetchQuantileSpectrumForPlot, nativeInterval, stepAtLeast,
     listCaptures, captureMetadata, mapLimit,
     fetchEntityHeatmapForCapture, isEntityQuery,
+    withoutInfinities, boxplotWithoutInfinities, plotOwnOpts,
 } from './data.js';
-import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
+import { canonicalQuantileLabel, composeScatterLabel } from './compare/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
-import { pairedSeriesNamer } from './labels.js';
+import { pairedSeriesNamer } from './charts/util/labels.js';
 import { baseRoute, groupCompares, pinCompareMeta } from './features/group_utils.js';
 
 // Normalization helpers for compare-mode captures.
@@ -74,7 +75,9 @@ const extractBaselineCapture = (spec, options = {}) => {
                     }
                 }
                 if (label == null) continue;
-                map.set(String(label), { timeData, valueData: data[i] || [] });
+                // A percentile chart keeps +Inf for its out-of-bounds band
+                // (markOverflow); a compare overlay draws it as a gap.
+                map.set(String(label), { timeData, valueData: withoutInfinities(data[i] || []) });
             }
         }
         cap.seriesMap = map;
@@ -119,7 +122,10 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
         cap.interpolated = pair.interpolated || null;
         // Decimated boxplot columns (fetched separately via display mode) for
         // the compare envelope — null when the fetch failed or is pending.
-        cap.boxplot = Array.isArray(options.boxplot) ? (options.boxplot[0] || null) : null;
+        // ±Infinity is a gap, as on the matrix path (parseFinite).
+        cap.boxplot = Array.isArray(options.boxplot)
+            ? boxplotWithoutInfinities(options.boxplot[0] || null)
+            : null;
         return cap;
     }
 
@@ -156,7 +162,7 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
                 if (label == null) continue;
                 map.set(String(label), {
                     timeData: Array.from(s.t),
-                    valueData: Array.from(s.median),
+                    valueData: withoutInfinities(Array.from(s.median)),
                 });
             }
             cap.seriesMap = map;
@@ -216,28 +222,49 @@ const captureInterval = async (captureId, range) => {
     }
 };
 
+// The query a compare chart runs on a capture other than the baseline: the
+// plot's query (a category template's per-side one when it has one) with the
+// baseline's transforms, and the section's cgroup selection resolved as the
+// baseline's is (`buildEffectiveQueries`), whether or not the cgroup selector
+// has written the selection into the plot. Null when the plot needs a cgroup
+// selection and none is active. `intervalSec` and `stepOverride` are
+// buildEffectiveQuery's.
+export const experimentQuery = (spec, {
+    sectionRoute = null, activeCgroupPattern = null, intervalSec = null, stepOverride,
+} = {}) => {
+    const promql = spec.promql_query_experiment || spec.promql_query;
+    if (!promql) return null;
+    const queries = buildEffectiveQueries(
+        { ...spec, promql_query: promql },
+        { sectionRoute, crossCapture: true, activeCgroupPattern, intervalSec, stepOverride },
+    );
+    return queries?.[0]?.query ?? null;
+};
+
+// What a compare chart's experiment fetch is for: its query with no step
+// override, so the key does not depend on the step (the view checks the step
+// on its own) or on the baseline's metadata, which a refresh of a followed
+// archive clears while it fetches it again.
+const experimentQueryKey = ({ spec, sectionRoute = null, activeCgroupPattern = null }) =>
+    experimentQuery(spec, { sectionRoute, activeCgroupPattern, stepOverride: null });
+
+// Why an individual cgroup chart has no experiment query: nothing is selected.
+const NO_CGROUPS_SELECTED = 'no cgroups selected';
+
 // Fetch the experiment-side PromQL result and stash it on vnode.state.
 // Records `_lastFetchedStep` so the component's view can detect when
 // the granularity selector has moved and trigger another fetch.
 const fetchExperimentResult = (vnode) => {
-    const { spec, sectionRoute } = vnode.attrs;
+    const { spec, sectionRoute, activeCgroupPattern = null } = vnode.attrs;
     if (!spec.promql_query) {
         vnode.state.error = 'no PromQL query';
         return;
     }
-    // Apply the same transforms the baseline path applies (histogram
-    // wrap, counter rewrite, cgroup substitution), but deliberately
-    // SKIP node/instance label injection: those labels are tied to the
-    // baseline's topology and would return zero matches on the
-    // experiment in the common case where the two recordings have
-    // different hostnames or instance IDs.
-    // Category templates supply a per-side experiment query via
-    // spec.promql_query_experiment. When present, route it through
-    // buildEffectiveQuery instead of spec.promql_query so the same
-    // histogram/counter rewrites and step substitutions apply.
-    const baseQuery = spec.promql_query_experiment || spec.promql_query;
-    if (buildEffectiveQuery({ ...spec, promql_query: baseQuery }, { sectionRoute, crossCapture: true }) == null) {
-        vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
+    // The query this fetch is for, so the view can fetch again when it
+    // changes (a cgroup selection changes it without remounting the chart).
+    vnode.state._fetchedQuery = experimentQueryKey(vnode.attrs);
+    if (vnode.state._fetchedQuery == null) {
+        vnode.state.error = NO_CGROUPS_SELECTED;
         return;
     }
     // The range this fetch is for, so the view can fetch again when the
@@ -281,10 +308,7 @@ const fetchExperimentResult = (vnode) => {
             // site's script.js builds one) takes it from the capture's
             // metadata.
             const intervalSec = await captureInterval(CAPTURE_EXPERIMENT, range);
-            const query = buildEffectiveQuery(
-                { ...spec, promql_query: baseQuery },
-                { sectionRoute, crossCapture: true, intervalSec },
-            );
+            const query = experimentQuery(spec, { sectionRoute, activeCgroupPattern, intervalSec });
             // A per-entity heatmap is fetched as the baseline's was, at the
             // baseline's column spacing, so the two pair column for column.
             const res = entityHeatmap(spec, query)
@@ -480,7 +504,7 @@ const FETCH_FAILED = Symbol('fetch failed');
 // the launch stamp lets the older run's result be discarded rather than
 // land last and overwrite the newer step's captures.
 const fetchExtraCaptures = (vnode) => {
-    const { spec, sectionRoute } = vnode.attrs;
+    const { spec, sectionRoute, activeCgroupPattern = null } = vnode.attrs;
     if (!spec.promql_query) return;
     const launch = (vnode.state._extrasLaunch = (vnode.state._extrasLaunch || 0) + 1);
     (async () => {
@@ -493,11 +517,7 @@ const fetchExtraCaptures = (vnode) => {
                 if (vnode.state._extrasLaunch === launch) vnode.state.extraCaptures = [];
                 return;
             }
-            const baseQuery = spec.promql_query_experiment || spec.promql_query;
-            const query = buildEffectiveQuery(
-                { ...spec, promql_query: baseQuery },
-                { sectionRoute, crossCapture: true },
-            );
+            const query = experimentQuery(spec, { sectionRoute, activeCgroupPattern });
             if (query == null) {
                 if (vnode.state._extrasLaunch === launch) vnode.state.extraCaptures = [];
                 return;
@@ -518,10 +538,9 @@ const fetchExtraCaptures = (vnode) => {
                 } catch (_) { range = null; }
                 if (!range) return null;
                 const step = effectiveExperimentStep(vnode.attrs, range);
-                const capQuery = buildEffectiveQuery(
-                    { ...spec, promql_query: baseQuery },
-                    { sectionRoute, crossCapture: true, intervalSec: await captureInterval(cap.id, range) },
-                );
+                const capQuery = experimentQuery(spec, {
+                    sectionRoute, activeCgroupPattern, intervalSec: await captureInterval(cap.id, range),
+                });
                 const [result, boxplot] = await Promise.all([
                     (entityHeatmap(spec, capQuery)
                         ? fetchEntityHeatmapForCapture(
@@ -552,6 +571,35 @@ const fetchExtraCaptures = (vnode) => {
     })();
 };
 
+// One query function per capture of a comparison, the baseline's first: the
+// baseline's is `baselineQuery`, and each other capture's runs a query over
+// that capture's own range. `baselineQuery` applies only the section's scope;
+// anything else a query needs, such as the selected node, the caller puts in
+// the query string. A capture whose metadata cannot be read, or that has no
+// usable range, gets no function.
+export const captureQueries = async (baselineQuery, {
+    listCaptures: list = listCaptures,
+    captureMetadata: metadata = captureMetadata,
+    queryRangeForCapture: queryCapture = queryRangeForCapture,
+} = {}) => {
+    const caps = await list().catch(() => []);
+    const others = (Array.isArray(caps) ? caps : []).filter((c) => c.id !== CAPTURE_BASELINE);
+    const ranges = await Promise.all(others.map(async (cap) => {
+        try {
+            return rangeFromMeta(await metadata(cap.id));
+        } catch (_) {
+            return null;
+        }
+    }));
+    return [
+        baselineQuery,
+        ...others.flatMap((cap, i) => {
+            const range = ranges[i];
+            return range ? [(query) => queryCapture(cap.id, query, range.start, range.end, range.step)] : [];
+        }),
+    ];
+};
+
 export const CompareChartWrapper = {
     oninit(vnode) {
         vnode.state.experimentResult = null;
@@ -570,11 +618,25 @@ export const CompareChartWrapper = {
     },
 
     view(vnode) {
-        // Re-fetch if the user changed the granularity selector since the
-        // last fetch. CompareChartWrapper's oninit only runs once per
-        // component lifetime; without this check the cached result from
-        // the previous step would render forever.
-        if (!vnode.state.error && !vnode.state._fetchInFlight) {
+        // Fetch again when what was fetched no longer matches the view: the
+        // experiment's query (a cgroup, node or GPU selection), the step (the
+        // granularity selector), or the experiment's range (a followed
+        // archive grew). oninit runs once per component, so without these
+        // checks the first result would stay on screen.
+        if (!vnode.state._fetchInFlight && vnode.state._fetchedQuery !== undefined
+            && experimentQueryKey(vnode.attrs) !== vnode.state._fetchedQuery) {
+            // The query changed under this component (a cgroup, node or GPU
+            // selection): what was fetched, or the error it gave, belongs to
+            // the old query.
+            vnode.state.error = null;
+            vnode.state.experimentResult = null;
+            vnode.state.extraCaptures = [];
+            vnode.state._capExtrasResult = null;
+            vnode.state._spectrumByKind = {};
+            vnode.state._spectrumPending = null;
+            fetchExperimentResult(vnode);
+            fetchExtraCaptures(vnode);
+        } else if (!vnode.state.error && !vnode.state._fetchInFlight) {
             const want = effectiveExperimentStep(vnode.attrs, { step: 0 });
             if (want > 0 && vnode.state._lastFetchedStep != null
                 && want !== vnode.state._lastFetchedStep) {
@@ -594,6 +656,9 @@ export const CompareChartWrapper = {
 
         const { spec, chartsState, interval, anchors, family, toggles, setChartToggle, captureLabels, categoryMembers } = vnode.attrs;
 
+        if (vnode.state.error === NO_CGROUPS_SELECTED) {
+            return m('div.chart-loading', 'No cgroups selected');
+        }
         if (vnode.state.error) {
             return m('div.chart-error', `compare error: ${vnode.state.error}`);
         }
@@ -694,7 +759,9 @@ export const CompareChartWrapper = {
         }
 
         const result = renderCompareChart({
-            spec,
+            // The compare overlays draw +Inf as a gap, so they take the
+            // plot's own format, without the range markOverflow added.
+            spec: plotOwnOpts(spec) === spec.opts ? spec : { ...spec, opts: plotOwnOpts(spec) },
             captures: [baselineCap, experimentCap, ...extraCaps],
             anchors: anchors || { baseline: 0, experiment: 0 },
             // The family-baseline setting (null for a plain A/B): every
@@ -707,13 +774,13 @@ export const CompareChartWrapper = {
             setChartToggle,
             chartsState,
             interval,
-            Chart,
+            Chart: ChartView,
             captureLabels,
         });
 
         switch (result && result.kind) {
             case 'spec':
-                return m(Chart, { spec: result.spec, chartsState, interval });
+                return m(ChartView, { spec: result.spec, chartsState, interval });
             case 'vnode':
                 return result.vnode;
             case 'split': {
@@ -724,12 +791,12 @@ export const CompareChartWrapper = {
                 return m('div.compare-split-subgroup',
                     specs.map((s) => m('div.chart-wrapper', [
                         s._splitLabel && m('div.compare-split-label', s._splitLabel),
-                        m(Chart, { spec: s, chartsState, interval }),
+                        m(ChartView, { spec: s, chartsState, interval }),
                     ])));
             }
             case 'fallback':
             default:
-                return m(Chart, { spec, chartsState, interval });
+                return m(ChartView, { spec, chartsState, interval });
         }
     },
 };
@@ -748,7 +815,7 @@ export function createGroupComponent(getState) {
             const {
                 chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
                 toggles, setChartToggle, anchors, family, experimentQueryRange,
-                baselineAlias, experimentAlias,
+                baselineAlias, experimentAlias, activeCgroupPattern = null,
             } = state;
             // A recording beside a comparison draws as one capture.
             const compareMode = groupCompares(state.compareMode, attrs);
@@ -834,8 +901,11 @@ export function createGroupComponent(getState) {
                     experimentQueryRange,
                     captureLabels,
                     categoryMembers,
+                    // The cgroup selection, which the experiment's query
+                    // resolves as the baseline's does.
+                    activeCgroupPattern,
                 })
-                : m(Chart, { spec: renderSpec, chartsState, interval });
+                : m(ChartView, { spec: renderSpec, chartsState, interval });
 
             const renderChart = (spec) => {
                 if (spec.pending === 'hidden') return null;

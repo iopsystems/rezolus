@@ -60,16 +60,14 @@ docker run --rm -it --privileged --network=host \
     --source redis
 ```
 
-The archive holds a recording per endpoint: `source=rezolus` for the system
-metrics and `source=redis` for Redis. The viewer at http://localhost:8080
-opens it as an A/B comparison of the system recording against the Redis
-recording, with further services as extra overlays; no dashboard queries the
-service metrics. Service KPI dashboards (valkey, vllm, sglang and the other
-templates) are not shown, because the template queries select a `source`
-label that `.dendro` series do not carry, and no per-endpoint parquet copies
-are written. For the merged dashboard with service KPIs, use the 5.x
-`rezolus-capture` (the v5.27.0 script or Docker image), which writes a
-merged `capture.parquet`.
+The archive holds a recording per endpoint: `alias=rezolus` for the system
+metrics and `alias=redis` for Redis. The viewer at http://localhost:8080
+opens it as one view, with the Redis endpoint shown as its own recording
+beside the system sections. The sidebar's `redis` section is built from the
+`valkey` template, whose KPIs query `redis/*` names that redis_exporter does
+not publish, so it lists them as unavailable; read the exporter's series in
+the Query Explorer, e.g. `irate(redis_commands_processed_total[5s])`. No
+per-endpoint parquet copies are written.
 
 ### System + service metrics (e.g., Valkey)
 
@@ -146,8 +144,8 @@ CAPTURE MODE (exactly one required):
 OPTIONS:
   --endpoint <URL>            Service metrics endpoint (Prometheus-compatible).
                               Can be specified multiple times.
-  --source <NAME>             Source name for service metrics, the source label
-                              of that endpoint's recording (required with
+  --source <NAME>             Name for service metrics, the alias label of that
+                              endpoint's recording (required with
                               --endpoint, one per endpoint in order; not
                               `rezolus`, which names the agent's recording)
   --interval <INTERVAL>       Sampling interval (default: 1s)
@@ -175,8 +173,8 @@ Mount `/data` to persist capture output on the host:
 
 The capture script writes `capture.dendro` to this directory, replacing an
 earlier one once the new capture has finished. It holds a recording per
-endpoint; select one with `--recording source=<NAME>` in `rezolus mcp`, or
-`--baseline source=<NAME>` in `rezolus view`.
+endpoint; select one with `--recording alias=<NAME>` in `rezolus mcp`, or
+`--baseline alias=<NAME>` in `rezolus view`.
 
 ## Privileged Mode
 

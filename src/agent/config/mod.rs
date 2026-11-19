@@ -35,6 +35,10 @@ const OPT_IN_SAMPLERS: &[&str] = &[
     "xfs_log",
 ];
 
+/// Parts of samplers that were not merged from older ones, each on by default:
+/// a source the sampler can leave out.
+const SAMPLER_PARTS: &[(&str, &[&str])] = &[("hw_sensors", &["corsair_axi"])];
+
 /// An old sampler, the part of the merged sampler it became, and whether it
 /// had a per-cgroup path (so its `cgroup_attribution` carries over).
 type MergedPart = (&'static str, &'static str, bool);
@@ -235,6 +239,12 @@ impl Config {
                 .iter()
                 .find(|(merged, _)| merged == name)
                 .map(|(_, parts)| parts.iter().map(|(_, part, _)| *part).collect())
+                .or_else(|| {
+                    SAMPLER_PARTS
+                        .iter()
+                        .find(|(sampler, _)| sampler == name)
+                        .map(|(_, parts)| parts.to_vec())
+                })
                 .unwrap_or_default();
             for part in self.samplers[name].parts_set() {
                 if !valid.contains(&part) {
@@ -252,7 +262,7 @@ impl Config {
         warnings
     }
 
-    /// Whether `part` of the merged sampler `name` is on: its section's
+    /// Whether `part` of sampler `name` is on: its section's
     /// switch, else on. The sampler's own `enabled` gates every part.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn part(&self, name: &str, part: &str) -> bool {
@@ -295,7 +305,7 @@ impl Config {
     /// back to the `defaults` section). `None` if unset anywhere, in which case
     /// the sampler applies its own built-in default. Consumed by samplers that
     /// read cost-bearing sources off the sample cycle (`drivehealth`,
-    /// `filesystem`, `memory_cgroup`, GPU PMUs and `hw_sensors`).
+    /// `filesystem`, `memory_cgroup`, GPU PMUs, `gpu_amd_sysfs` and `hw_sensors`).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn sampler_interval(&self, name: &str) -> Option<std::time::Duration> {
         self.samplers
@@ -346,18 +356,34 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// How long a task must have lived before `name` exports its per-task
+    /// series (per-sampler override, falling back to the `defaults` section,
+    /// then one second). Consumed by `cpu_usage`: a younger task's labels
+    /// are held back, so it has no `task_cpu_usage` series. With
+    /// `snapshot_format = "v2"`, `cpu_usage` uses 0 instead, so this is the
+    /// configured value, not necessarily the one in effect.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn task_min_lifetime(&self, name: &str) -> std::time::Duration {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.task_min_lifetime())
+            .or_else(|| self.defaults.task_min_lifetime())
+            .and_then(|s| s.parse::<humantime::Duration>().ok())
+            .map_or(std::time::Duration::from_secs(1), |d| *d)
+    }
+
     /// Whether `name` keeps and exports a CPU total per process
     /// (per-sampler override, falling back to the `defaults` section, then
-    /// off). Consumed by `cpu_usage`: with it off, `process_cpu_usage` is
-    /// absent, the process-metadata events are not sent, and the
-    /// per-process maps are not created.
+    /// to `task_attribution`). Consumed by `cpu_usage`: with it off,
+    /// `process_cpu_usage` is absent, the process-metadata events are not
+    /// sent, and the per-process maps are not created.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn process_attribution(&self, name: &str) -> bool {
         self.samplers
             .get(name)
             .and_then(|v| v.process_attribution())
             .or_else(|| self.defaults.process_attribution())
-            .unwrap_or(false)
+            .unwrap_or_else(|| self.task_attribution(name))
     }
 
     /// Whether `name` publishes every slab cache (`caches = "all"`, the
@@ -573,6 +599,11 @@ mod tests {
                 "{name}: task_attribution"
             );
             assert_eq!(
+                packaged.task_min_lifetime(name),
+                bare.task_min_lifetime(name),
+                "{name}: task_min_lifetime"
+            );
+            assert_eq!(
                 packaged.process_attribution(name),
                 bare.process_attribution(name),
                 "{name}: process_attribution"
@@ -648,18 +679,52 @@ mod tests {
     }
 
     #[test]
-    fn process_attribution_is_off_unless_asked_for() {
+    fn task_min_lifetime_is_one_second_unless_set() {
+        use std::time::Duration;
+        let c = config("");
+        assert_eq!(c.task_min_lifetime("cpu_usage"), Duration::from_secs(1));
+        let c = config("[samplers.cpu_usage]\ntask_min_lifetime = \"0s\"\n");
+        assert_eq!(c.task_min_lifetime("cpu_usage"), Duration::ZERO);
+        let c = config("[defaults]\ntask_min_lifetime = \"5s\"\n");
+        assert_eq!(
+            c.task_min_lifetime("cpu_usage"),
+            Duration::from_secs(5),
+            "defaults fallback"
+        );
+    }
+
+    #[test]
+    fn process_attribution_follows_task_attribution_unless_set() {
         let c = config("[samplers.cpu_usage]\n");
         assert!(!c.process_attribution("cpu_usage"), "off by default");
         let c = config("[samplers.cpu_usage]\nprocess_attribution = true\n");
         assert!(c.process_attribution("cpu_usage"));
-        assert!(!c.task_attribution("cpu_usage"), "independent of task");
+        assert!(!c.task_attribution("cpu_usage"), "does not imply task");
         let c = config("[defaults]\nprocess_attribution = true\n");
         assert!(c.process_attribution("cpu_usage"), "defaults fallback");
         let c = config("[samplers.cpu_usage]\ntask_attribution = true\n");
+        assert!(c.process_attribution("cpu_usage"), "follows task");
+        let c = config("[defaults]\ntask_attribution = true\n");
+        assert!(
+            c.process_attribution("cpu_usage"),
+            "follows task in defaults"
+        );
+        let c =
+            config("[samplers.cpu_usage]\ntask_attribution = true\nprocess_attribution = false\n");
+        assert!(!c.process_attribution("cpu_usage"), "section wins");
+        let c = config(
+            "[defaults]\nprocess_attribution = false\n[samplers.cpu_usage]\ntask_attribution = true\n",
+        );
         assert!(
             !c.process_attribution("cpu_usage"),
-            "task does not imply it"
+            "defaults win over task"
+        );
+        let c = config(
+            "[defaults]\ntask_attribution = true\n[samplers.cpu_usage]\ntask_attribution = false\n",
+        );
+        assert!(
+            !c.process_attribution("cpu_usage"),
+            "follows task as resolved for the sampler"
         );
     }
 
@@ -710,6 +775,19 @@ mod tests {
         assert!(!c.enabled("hw_sensors"));
         let c = config("[defaults]\nenabled = false\n");
         assert!(!c.enabled("hw_sensors"));
+    }
+
+    #[test]
+    fn hw_sensors_reads_corsair_axi_unless_turned_off() {
+        let c = config("");
+        assert!(c.part("hw_sensors", "corsair_axi"));
+        let c = config("[samplers.hw_sensors]\ncorsair_axi = false\n");
+        assert!(c.enabled("hw_sensors"));
+        assert!(!c.part("hw_sensors", "corsair_axi"));
+        assert!(c.unknown_names().is_empty(), "{:?}", c.unknown_names());
+        let c = config("[samplers.cpu_usage]\ncorsair_axi = false\n");
+        let w = c.unknown_names();
+        assert!(w.len() == 1 && w[0].contains("corsair_axi"), "{w:?}");
     }
 
     #[test]

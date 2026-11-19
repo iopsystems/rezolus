@@ -9,6 +9,7 @@ const ensureContainer = () => {
     document.body.appendChild(toastContainer);
 };
 
+// Returns a function that removes the toast early.
 const notify = (level, message, durationMs = 5000) => {
     ensureContainer();
     const el = document.createElement('div');
@@ -35,6 +36,7 @@ const notify = (level, message, durationMs = 5000) => {
         // fallback removal if transition doesn't fire
         setTimeout(() => el.remove(), 400);
     }
+    return remove;
 };
 
 const modalState = {

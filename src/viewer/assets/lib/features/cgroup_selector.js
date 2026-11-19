@@ -1,6 +1,9 @@
 // Attrs:
 //   groups: array of group objects with plots
 //   executeQuery: (query) => Promise<result> — runs a PromQL range query
+//   discover: () => Promise<Set<string>> — the cgroup names to list; in
+//     compare mode those of every capture (default: discoverCgroups over
+//     executeQuery)
 //   applyResultToPlot: (plot, result) => void — applies PromQL result to a plot
 //   substitutePattern: (query, selection) => string — substitutes cgroup placeholder
 //   setActiveCgroupPattern: (selection) => void — sets the global active cgroup
@@ -122,11 +125,11 @@ export const selectedCgroupSelection = (route) => (persistedSelectedCgroups.size
     : null);
 
 // Discover the groups of the section at `route` if the selection names one
-// and they are not yet known. `executeQuery` runs a PromQL range query
-// restricted as that section's charts are.
-export const loadCgroupGroups = async (route, executeQuery) => {
+// and they are not yet known. `discover` resolves to the section's cgroup
+// names, as the selector's `discover` attr does.
+export const loadCgroupGroups = async (route, discover) => {
     if (persistedGroups.has(route) || ![...persistedSelectedCgroups].some(isCgroupGroupKey)) return;
-    persistedGroups.set(route, deriveCgroupGroups(await discoverCgroups(executeQuery)));
+    persistedGroups.set(route, deriveCgroupGroups(await discover()));
 };
 
 // Forget every section's groups, for a recording that replaces this one.
@@ -197,10 +200,12 @@ export const CgroupSelector = {
     },
 
     async fetchAvailableCgroups(vnode) {
-        const { executeQuery } = vnode.attrs;
+        // `discover` searches every capture of a comparison, so the list
+        // holds the cgroups of each; `executeQuery` reads the baseline.
+        const { executeQuery, discover } = vnode.attrs;
 
         try {
-            const cgroups = await discoverCgroups(executeQuery);
+            const cgroups = await (discover ? discover() : discoverCgroups(executeQuery));
 
             if (cgroups.size === 0) {
                 vnode.state.error = 'No cgroup data found';
@@ -287,9 +292,9 @@ export const CgroupSelector = {
         vnode.state.updateGeneration = generation;
 
         // Collect plots whose original query contains the cgroup placeholder.
-        // An individual plot runs a query per selected group as well as one
-        // for the individually selected names (cgroupQueryVariants); a query
-        // left with its placeholder has nothing selected and is not run.
+        // An individual plot runs one query for the selected names and
+        // groups (cgroupQueryVariants); a query left with its placeholder has
+        // nothing selected and is not run.
         const plotsToUpdate = [];
         for (const [gi, group] of (vnode.attrs.groups || []).entries()) {
             for (const [pi, plot] of collectGroupPlots(group).entries()) {
@@ -323,9 +328,9 @@ export const CgroupSelector = {
             const batch = plotsToUpdate.slice(i, i + BATCH_SIZE);
             await Promise.all(batch.map(async ({ plot, query, queries }) => {
                 plot.promql_query = query;
-                // Every query the plot draws, for a pinned or expanded copy
-                // of it; null when its one query is promql_query.
-                plot.cgroup_queries = queries.length > 1 || queries[0]?.label ? queries : null;
+                // The plot's one query is promql_query. `cgroup_queries` is
+                // read from charts saved with a query per cgroup group.
+                plot.cgroup_queries = null;
                 try {
                     if (queries.length === 0) {
                         plot.data = [];

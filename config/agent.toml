@@ -190,8 +190,10 @@ enabled = true
 # Reads the number of currently online cores
 [samplers.cpu_cores]
 
-# Performance Counter based sampler that gathers APERF, MPERF, and TSC which can
-# be used to calculate CPU frequency
+# Performance Counter based sampler that gathers APERF, MPERF, and TSC which
+# can be used to calculate CPU frequency. On Apple silicon the three counters
+# are derived from IOReport's per-core performance-state residency; see
+# docs/metrics.md#cpu_frequency-on-macos.
 [samplers.cpu_frequency]
 
 # Performance counter based sampler that gathers branch instructions and
@@ -212,12 +214,14 @@ enabled = true
 # cgroup_attribution = false
 
 # Reports CPU energy and idle-state residency via perf. Power is derived at
-# query time from the energy counters. Discovers the
-# `power`, `power_core`, `cstate_core`, and `cstate_pkg` PMUs at runtime and
-# creates counters on the CPUs each PMU's cpumask permits, so no CPU vendor or
-# model detection is needed. Only the domains and C-states the hardware
-# actually implements are reported. Needs CAP_PERFMON; typically unavailable in
-# virtualized environments.
+# query time from the energy counters. Discovers the `power`, `power_core`,
+# `cstate_core`, and `cstate_pkg` PMUs at runtime and creates counters on the
+# CPUs each PMU's cpumask permits, so no CPU vendor or model detection is
+# needed. Only the domains and C-states the hardware actually implements are
+# reported. Needs CAP_PERFMON; typically unavailable in virtualized
+# environments. On Apple silicon it reads IOReport's energy counters for the
+# CPU cores, GPU, DRAM and the other SoC blocks, unprivileged; see
+# docs/metrics.md#cpu_power-on-macos.
 [samplers.cpu_power]
 
 # BPF sampler that gathers TLB flush event counts by reason.
@@ -229,8 +233,9 @@ enabled = true
 # (process_cpu_usage) series are off by default; the per-task accounting behind
 # the host and cgroup totals runs either way. See docs/metrics.md#cpu_usage.
 [samplers.cpu_usage]
-# task_attribution = true      # export task_cpu_usage, one series per thread plus one per rename
-# process_attribution = true   # export process_cpu_usage, one series per process
+# task_attribution = true      # export task_cpu_usage, one series per thread still running at a snapshot after task_min_lifetime, plus one per rename after that
+# task_min_lifetime = "1s"     # a thread's series starts at the first snapshot after it is this old (v3 snapshots only)
+# process_attribution = true   # export process_cpu_usage, one series per process; unset, follows task_attribution
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Reports per-drive temperature for NVMe and SATA drives via read-only
@@ -272,6 +277,8 @@ enabled = false
 # Excludes network filesystems, FUSE, autofs and pseudo-filesystems. tmpfs
 # mounts are read into their own filesystem_tmpfs_* series (bytes and inodes
 # used per mount, at most 64 mounts): where tmpfs files sit, by mount.
+# On macOS it lists local volumes with getfsstat and reads each with statfs,
+# unprivileged.
 [samplers.filesystem]
 # interval = "60s"
 
@@ -347,7 +354,17 @@ enabled = false
 # sampling period. Cached values are served between reads.
 # interval = "1s"
 
-# Memory utilization from /proc/meminfo
+# AMD APU clocks, power, temperature, utilization and throttle status from
+# amdgpu's sysfs files, for a host without ROCm. Reports unsupported when
+# gpu_amd_smi is enabled and ROCm SMI finds a GPU, because both would publish
+# the same series. See docs/metrics.md#gpu_amd_sysfs.
+[samplers.gpu_amd_sysfs]
+# Each read makes the driver fetch the firmware's metrics table, so reads run
+# on their own cadence. Cached values are served between reads.
+# interval = "1s"
+
+# Memory utilization from /proc/meminfo. On macOS, from the vm.* sysctls and
+# hw.memsize; see docs/metrics.md#memory_meminfo.
 [samplers.memory_meminfo]
 
 # Per-cgroup v2 memory totals and type breakdown (includes descendants).
@@ -360,7 +377,8 @@ enabled = false
 enabled = false
 # interval = "60s"
 
-# Memory NUMA metrics from /proc/vmstat
+# Memory event counters from /proc/vmstat. On macOS, from host_statistics64,
+# with wired memory; see docs/metrics.md#memory_vmstat.
 [samplers.memory_vmstat]
 
 # Bytes held by every slab cache, labeled by cache name, and object counts for
@@ -388,6 +406,15 @@ enabled = false
 # written back. Filesystem-agnostic. See docs/metrics.md#memory_writeback.
 [samplers.memory_writeback]
 
+# AWS Elastic Fabric Adapter (EFA) port and device counters from
+# /sys/class/infiniband: traffic, RDMA reads and writes, retransmits and
+# errors. Reports unsupported on a host with no EFA device. See
+# docs/metrics.md#network_efa.
+[samplers.network_efa]
+# Reading a port's counters sends admin commands to the device, so reads run
+# on their own cadence. Cached values are served between reads.
+# interval = "1s"
+
 # Reads ENA (Elastic Network Adapter) driver statistics via ethtool ioctls to
 # expose AWS EC2 allowance exceeded counters for bandwidth, PPS, connection
 # tracking, and link-local traffic. Does nothing on non-ENA interfaces.
@@ -396,7 +423,8 @@ enabled = false
 # Produces network interface statistics from /sys/class/net for TX/RX errors
 [samplers.network_interfaces]
 
-# Produces network traffic statistics using BPF
+# Produces network traffic statistics using BPF. On macOS, from each
+# interface's counters; see docs/metrics.md#network_traffic-on-macos.
 [samplers.network_traffic]
 
 # Sample resource utilization for Rezolus itself
@@ -411,16 +439,32 @@ enabled = false
 # migrations = false           # drop the CPU migration counts
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
-# Read-only Linux thermal, hwmon and cooling-device telemetry: temperatures,
-# power, bus voltage/current, fan RPM/PWM and cooling state. Reads run on the
-# blocking pool at `interval` (default 5s) and sysfs capabilities are
-# rediscovered every 60s; no hardware controls are written. Missing permissions
-# or unavailable channels appear as absent values. Drive temperatures come from
-# drivehealth (which needs root), so `nvme` and `drivetemp` hwmon chips are not
-# read here.
+# Hardware sensor telemetry: temperatures, power, voltage/current, fan RPM/PWM
+# and cooling state. On Linux it reads thermal, hwmon and cooling-device sysfs,
+# and Corsair AXi power supplies through the Corsair Link USB dongle
+# (`/dev/ttyUSBn`); on macOS, HID temperature services and the SMC (no PWM or
+# cooling state). Reads run on the blocking pool at most once per `interval`
+# (default 5s); Linux rediscovers sysfs capabilities every 60s, macOS finds
+# its sensors once at startup. No sysfs control or PSU register is written;
+# the Corsair dongle is sent read requests and a setup command whose effect
+# is undocumented. The agent locks the dongle's tty (`flock`) while it uses
+# it and needs read-write access to it; `corsair_axi = false` leaves it alone.
+# On Linux, missing permissions or unavailable channels appear as absent
+# values; on macOS, a sensor not found at startup has no series, and a later
+# failed read is absent. On Linux, drive temperatures
+# come from drivehealth (which needs root), so `nvme` and `drivetemp` hwmon
+# chips are not read here.
 [samplers.hw_sensors]
 # enabled = false
 # interval = "5s"
+# corsair_axi = false
+
+# macOS only: the thermal pressure level the operating system reports to
+# applications (0 nominal to 4 sleeping). Each refresh checks shared memory
+# for a posted change and reads the level only after one, at startup, or
+# after a failed check or read.
+[samplers.thermal_pressure]
+# enabled = false
 
 # BPF sampler that instruments syscall enter and exit to gather syscall counts
 # and syscall latency distributions, one program on each. Replaces
@@ -431,15 +475,17 @@ enabled = false
 # latency = false              # drop the latency histograms and the sys_exit program
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
-# BPF sampler that probes TCP connect (active open) to measure latency when
-# establishing connections.
+# BPF sampler that probes TCP connect (active open) to measure the time to the
+# end of the handshake, by outcome (established, refused, timeout, error,
+# aborted).
 [samplers.tcp_connect_latency]
 
 # TCP counters from the kernel's SNMP MIBs in /proc/net/netstat (TcpExt) and
 # /proc/net/snmp (Tcp): delayed ACKs, RTOs and loss recovery, zero-window
 # advertisements and drops, receive-memory pruning and drops, listen-queue
 # overflows, aborts, resets and established connections. One read of each file
-# per refresh. See docs/metrics.md#tcp_mib.
+# per refresh. See docs/metrics.md#tcp_mib. On macOS, a subset from the
+# net.inet.tcp.stats sysctl, as root; see docs/metrics.md#tcp-on-macos.
 [samplers.tcp_mib]
 
 # BPF sampler that probes TCP receive path to measure latency from a packet
@@ -450,13 +496,16 @@ enabled = false
 # trip time.
 [samplers.tcp_receive]
 
-# BPF sampler that probes TCP retransmit path to measure retransmits.
+# BPF sampler that probes TCP retransmit path to measure retransmits. On macOS,
+# from the net.inet.tcp.stats sysctl, as root; see docs/metrics.md#tcp-on-macos.
 [samplers.tcp_retransmit]
 
 # Samples TCP traffic using a BPF sampler to get metrics for TX/RX bytes and
-# packets
+# packets. On macOS, bytes only, from the net.inet.tcp.stats sysctl, as root,
+# read every 250 ms as well as on each scrape; see
+# docs/metrics.md#tcp-on-macos.
 [samplers.tcp_traffic]
 
-# Samples GPU metrics on Apple Silicon using powermetrics
+# Samples GPU metrics on Apple silicon from IOReport
 [samplers.gpu_apple]
 enabled = true

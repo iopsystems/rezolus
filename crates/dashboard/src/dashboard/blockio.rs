@@ -9,7 +9,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let totals = operations.subgroup("Totals");
     totals.describe("Throughput and operation rate aggregated across all block devices.");
     totals.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "Total Throughput",
             "blockio-throughput-total",
             Unit::Datarate,
@@ -17,7 +17,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         "sum(irate(blockio_bytes[5m]))".to_string(),
     );
     totals.plot_promql(
-        PlotOpts::counter("Total IOPS", "blockio-iops-total", Unit::Count),
+        Plot::counter("Total IOPS", "blockio-iops-total", Unit::Count),
         "sum(irate(blockio_operations[5m]))".to_string(),
     );
 
@@ -25,7 +25,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let op_lower = op.to_lowercase();
         let sg = operations.subgroup(*op);
         sg.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 format!("{op} Throughput"),
                 format!("throughput-{op_lower}"),
                 Unit::Datarate,
@@ -33,7 +33,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             format!("sum(irate(blockio_bytes{{op=\"{op_lower}\"}}[5m]))"),
         );
         sg.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 format!("{op} IOPS"),
                 format!("iops-{op_lower}"),
                 Unit::Count,
@@ -67,7 +67,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Time,
         );
         by_op.plot_promql(
-            PlotOpts::histogram_latency(*op, format!("latency-{op_lower}")),
+            Plot::histogram_latency(*op, format!("latency-{op_lower}")),
             format!("{device}{{op=\"{op_lower}\"}}"),
         );
     }
@@ -103,7 +103,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Time,
             );
             queue.plot_promql(
-                PlotOpts::histogram_latency(*op, format!("queue-latency-{op_lower}")),
+                Plot::histogram_latency(*op, format!("queue-latency-{op_lower}")),
                 format!("blockio_queue_latency{{op=\"{op_lower}\"}}"),
             );
         }
@@ -128,7 +128,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Time,
             );
             total.plot_promql(
-                PlotOpts::histogram_latency(*op, format!("total-latency-{op_lower}")),
+                Plot::histogram_latency(*op, format!("total-latency-{op_lower}")),
                 format!("blockio_total_latency{{op=\"{op_lower}\"}}"),
             );
         }
@@ -152,8 +152,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Bytes,
         );
         by_op.plot_promql(
-            PlotOpts::histogram(*op, format!("size-{op_lower}"), Unit::Bytes, "percentiles")
-                .with_log_scale(true),
+            Plot::histogram(
+                *op,
+                format!("size-{op_lower}"),
+                Unit::Bytes,
+                HistogramView::Percentiles,
+            )
+            .with_log_scale(true),
             format!("blockio_size{{op=\"{op_lower}\"}}"),
         );
     }

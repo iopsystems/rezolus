@@ -1,9 +1,23 @@
 ## [Unreleased]
 
+Upgrading from 5.x: see `site/docs/upgrade.html`
+(https://rezolus.com/docs/upgrade.html).
+
 ### Security
 
-- zstd 0.14.3, zstd-safe 8.2.0 and zstd-sys 2.1.2, for RUSTSEC-2026-0391,
-  0398, 0403 and 0410; one zstd in the tree instead of two. (#1537)
+- The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx
+  (CVE-2026-45249), an XSS in the Lines series tooltip. The viewer draws no
+  Lines series, so it was not exposed. The charts set the drag-to-zoom
+  selection colour and leave out the time axis's right-edge label, which
+  ECharts 6's defaults changed. What still differs: the "OOB" tick on
+  percentile charts takes the other tick labels' font, and a heatmap's first
+  or last column can end a pixel earlier.
+- rusqlite 0.41 (libsqlite3-sys 0.39, SQLite 3.54), with dendro 0.7 and
+  metriken-storage 0.9, for RUSTSEC-2026-0459 (CVE-2026-119375): SQLite before
+  3.54.0 can return uninitialized page-cache memory when a database is opened
+  with a `-wal` file whose page size differs. The WASM viewer's SQLite stays
+  at 3.53.0, from sqlite-wasm-rs 0.5; it opens recordings from bytes in
+  memory, with no `-wal` file.
 - rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
   and RUSTSEC-2026-0383. (#1510)
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
@@ -11,8 +25,343 @@
   (GHSA-rhfx-m35p-ff5j), through metriken-query 0.37, metriken-storage 0.3
   and ratatui 0.30.
 
+### Added
+
+- **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
+  cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
+  `memory.stat` fields for up to 4096 cgroups, off the scrape path at a
+  configurable interval (60s default), and the cgroups dashboard plots every
+  kind for the selected cgroups. A host without cgroup v2 or without the
+  memory controller reports the sampler as unsupported, not failed.
+  `/metrics/binary` reuses the `memory_cgroup` group's encoded bytes across
+  scrapes until its next sweep, so between sweeps its series cost a copy
+  rather than a re-encode per scrape. (#1537)
+
+- **A time window and per-series statistics on `query`.** The MCP `query`
+  tool takes `start`, `end` (RFC 3339 or Unix seconds) and `step`
+  (humantime or seconds); without them it evaluates every second of the
+  recording, as before, except on a recording of more than a million
+  seconds, where the default step is the whole number of seconds that
+  keeps it to a million points. `summarize: true` returns, per series, the
+  number of points, the number of active points, and their min, max, mean,
+  p50, p90 and p99 instead of every point; `above` makes the active points those strictly
+  above a threshold, so a benchmark's busy seconds can be summarized
+  without startup and teardown. `rezolus mcp query` takes `--start`,
+  `--end`, `--step` and `--above`, and prints p50, p90 and p99 beside min,
+  max and mean. Its statistics now leave out NaN points, so a series with
+  one no longer prints a NaN mean, and a series whose points are all NaN
+  prints none.
+
+- **Corsair AXi power supplies.** On Linux, `hw_sensors` reads a Corsair AXi
+  PSU through its Corsair Link USB dongle (USB ID `1b1c:1c02`, the `cp210x`
+  driver's `/dev/ttyUSBn`; tested on an AX1500i): input power, voltage and
+  current as `sensor_power`, `sensor_voltage` and `sensor_current`, two
+  `sensor_temperature` channels and `sensor_fan_speed`, with
+  `source=corsair_axi` and `chip` the PSU's model. Input power is the machine's
+  draw at the wall. On a host with that dongle the
+  agent now locks its tty and sends it read requests;
+  `[samplers.hw_sensors] corsair_axi = false` leaves it alone. On an AX1500i
+  the readings add about 35 ms to each sweep, on the blocking worker. A
+  process that already has the port open, such as CyberPower's `pwrstatd`,
+  takes the replies, and discovery reports an error.
+
+- **AWS EFA counters.** `network_efa` publishes each Elastic Fabric Adapter
+  port's traffic, RDMA, retransmit and error counters
+  (`ports/<n>/hw_counters`) and each device's admin command and verbs setup
+  error counters, as `network_efa_<counter>` with `device` and `port` labels.
+  Reading a port's counters sends admin commands to the device (1.8 ms at p50
+  on an im4gn.16xlarge under load), so the sampler reads on its own interval,
+  default 1s. The Network section gains an EFA group with a line per port, or
+  per device for the device counters.
+
+- **An AMD APU sampler that needs no ROCm.** `gpu_amd_sysfs` publishes
+  `gpu_clock`, including the SoC and data fabric clocks, `gpu_power_usage`,
+  `gpu_rail_power`, `gpu_temperature`, `gpu_utilization` and
+  `gpu_throttle_status` from amdgpu's `gpu_metrics` (format v2.1) and
+  `pp_dpm_fclk`, once a second by default. It reports unsupported when
+  `gpu_amd_smi` is enabled and ROCm SMI finds a GPU, because both would
+  publish the same series. The GPU dashboard plots the SoC and fabric clocks,
+  and a section shown only when `gpu_rail_power` is recorded plots rail power
+  and throttle status.
+
+- **The cgroups section in an A/B comparison.** The section was hidden in
+  compare mode; it is now listed, and its selector lists the cgroups of every
+  capture. Each capture is searched on its own, so one recorded without
+  `cgroup_cpu_usage` contributes the cgroups its other per-cgroup series name
+  (`cgroup_cpu_cycles`, `cgroup_syscall`, ...). Each aggregate chart overlays
+  the captures, and each individual chart becomes one overlay per selected
+  cgroup or group. A cgroup only one capture recorded draws that capture's
+  line alone. An expanded chart still draws the baseline only, as in every
+  other section.
+
+- **hw_sensors on macOS.** The sampler publishes `sensor_temperature` from the
+  IOHIDEventSystem temperature services (the power manager's die and device
+  sensors, the battery gas gauge and the NAND), and `sensor_fan_speed`,
+  `sensor_voltage`, `sensor_current` and `sensor_power` from the SMC: each fan,
+  each power-manager rail the HID services name, the charger input, system
+  power (`PSTR`, named `system`) and battery discharge power (`PPBR`, named
+  `battery`). Neither source needs root. On an M4 Max a sweep of its 78
+  sensors takes about 33 ms, at most once every 5 seconds by default.
+
+- **Thermal pressure on macOS.** The `thermal_pressure` sampler publishes the
+  thermal pressure level macOS reports to applications, 0 (nominal) to 4
+  (sleeping), and the Hardware Sensors section draws it. It needs no root.
+  The level is not a measure of throttling: on an M4 Max under load, the
+  performance cores slowed at level 0 before the level first rose, slowed
+  again a minute after it reached 2, and stayed slow after it returned to 0.
+
+- **The Memory section draws page faults on Linux.** The Reclaim group has a
+  Page Faults chart, the rate of `memory_page_faults` (pgfault, every fault),
+  beside Major Faults.
+
+- **An expanded chart shows its scope.** In a combined view, the
+  single-chart view lists the uuids of the sources the chart reads under
+  Scope, below its query. Editing the list reads other sources, Remove
+  reads every recording, and Reset returns to the chart's own scope; a
+  scope whose query fails is not kept. The chart's spectra and heatmap read
+  the scope of the data drawn, and its Total is offered only for its own
+  query and scope. A query that returns no series now shows a message
+  saying so.
+- **A query can read only some of a combined archive's recordings.**
+  `/api/v1/query_range` (also with `format=display`) takes `scope`, the
+  uuids of the sources to read, separated by commas; the static site's
+  WASM viewer takes the same. Without it a query reads every recording; a
+  `scope` naming no source is refused (`bad_data`) rather than read as
+  every recording, and `/api/v1/query` refuses a `scope`, since an instant
+  query reads every source. The viewer sends one with each chart of a
+  combined view.
+- **CPU frequency and energy on macOS.** `cpu_frequency` and `cpu_power`
+  now run on Apple silicon, unprivileged, from IOReport, the framework
+  `powermetrics` reads. `cpu_frequency` derives `cpu_tsc`, `cpu_mperf` and
+  `cpu_aperf` per core from performance-state residency and the device
+  tree's frequency tables, so the CPU dashboard's frequency charts draw on
+  a Mac. `cpu_power` sets `cpu_cores_energy`, `cpu_core_energy`,
+  `cpu_igpu_energy` and `cpu_dram_energy`, and the new macOS-only
+  `cpu_soc_energy{block}` for the other SoC blocks, such as the Neural
+  Engine and the display pipelines, which the CPU dashboard draws in a new
+  SoC Power group. IOReport is loaded at runtime, not linked, so a macOS
+  release without it leaves these two samplers unsupported and the rest of
+  rezolus runs.
+- **Paging charts on macOS.** The Memory section draws page faults,
+  page-ins and page-outs per second, in a Paging group shown when
+  `memory_pageins` is recorded.
+- **Filesystem space on macOS.** `filesystem` now runs on macOS,
+  unprivileged, and sets `filesystem_total`, `filesystem_free`,
+  `filesystem_available`, `filesystem_inodes_total`,
+  `filesystem_inodes_free` and `filesystem_readonly` for every local volume
+  with `statfs`, so the filesystem dashboard draws on a Mac. An APFS volume
+  without a quota or reserve reports its container's size and free space.
+  The macOS-only `filesystem_volume_used` is each volume's own use from
+  `getattrlist(ATTR_VOL_SPACEUSED)`, the number `df` shows as used, and the
+  dashboard draws it as Volume Used and as Volume Used %, computed as
+  macOS `df` computes Capacity.
+- **TCP bandwidth charts in the network dashboard.** The TCP group draws
+  `tcp_bytes` as transmit and receive bits per second when the recording
+  has it, from the `tcp_traffic` sampler on Linux and on macOS.
+  `tcp_packets`, which on Linux counts send and receive calls rather than
+  packets, and `tcp_size` are not charted.
+- **Ubuntu 26.04 (resolute) packages.** amd64 and arm64 packages are built
+  for resolute and published to the `ubuntu-resolute` apt repository;
+  `install.sh` installs from it. 5.x ships them from 5.29.0 (#1573). (#1577)
+- **Network traffic on macOS.** `network_traffic` now runs on macOS,
+  unprivileged, and sets `network_bytes` and `network_packets` (every
+  interface) and `network_host_bytes` and `network_host_packets` (the
+  interfaces backed by hardware, such as wifi, Ethernet and Thunderbolt
+  networking, plus `awdl0`, `llw0` and `ap1` on the wifi radio; not
+  loopback, bridges, tunnels or VM interfaces), so the network dashboard's
+  traffic charts and the overview's network chart draw on a Mac.
+- **Interface errors and drops on macOS.** `network_traffic` sets
+  `network_interface_errors` (`ifi_ierrors`, `ifi_oerrors`) and
+  `network_interface_drops` (`ifi_iqdrops`, `ifmd_snd_drops`), by direction,
+  summed over every interface, loopback included, except those under
+  `IOResources` (VM `vmenet` interfaces), whose `ifi_iqdrops` on macOS 26.6
+  grows in steps of about 0xAAAAAAAA that are not drops. The network
+  dashboard's Errors group plots them.
+- **TCP counters on macOS.** `tcp_mib`, `tcp_retransmit` and `tcp_traffic`
+  now run on macOS, from the `net.inet.tcp.stats` sysctl, and set
+  `tcp_retransmit`, `tcp_segments_retransmitted`, `tcp_delayed_acks`,
+  `tcp_rto_expirations`, `tcp_checksum_errors`, `tcp_input_errors` and
+  `tcp_bytes`. Received bytes leave out segments that arrive at the next
+  expected byte while later data is queued for reassembly, and count
+  out-of-order overlaps twice. The kernel's counters are 32 bits; while
+  `tcp_traffic` runs the agent reads them every 250 ms, which keeps its
+  64-bit totals exact below 128 Gbit/s. While
+  `net.inet.tcp.disable_access_to_stats` is set (the default), the kernel
+  returns zeros to a process not running as root, so the agent needs root;
+  without it the samplers report themselves unsupported.
+- **Uninterruptible sleep (D state) from the `scheduler` sampler.**
+  `scheduler_uninterruptible` is the distribution of off-CPU intervals spent
+  in uninterruptible sleep (disk IO, some locks, page faults on slow
+  storage), a subset of `scheduler_offcpu`.
+  `scheduler_uninterruptible_wait` (per CPU) and
+  `cgroup_scheduler_uninterruptible_wait` (per cgroup) count the
+  nanoseconds. Each interval is added in full when the task next runs, so
+  over windows much longer than the sleeps their rate is the mean number of tasks
+  in D state, and a long sleep shows as a spike when it ends. Idle kernel
+  threads (`TASK_IDLE`) are left out, as the load average leaves them out.
+  The scheduler and cgroups dashboards plot them. (#1589)
+
 ### Fixed
 
+- **A `rate` or `irate` at the end of a range has the value it has in a
+  longer range, when a row of the series follows the end.** With
+  metriken-query 0.50.2, each series' first row after the end is read,
+  however far after it is, so a chart's or a query's last points are no
+  longer held from the row before. In MCP `query` this now holds for a
+  sampler whose rows are more than 120 s apart too.
+
+- **A strided histogram function's points at the end of a range have the
+  values they have in a longer range.** With metriken-query 0.50.3,
+  `histogram_quantiles([q], h, STEP)` and `histogram_mean/count/sum/heatmap`
+  with a `STEP` read each series' rows after the end until the windows at
+  the end are closed, except in the cases metriken-query's docs list. MCP
+  `query` no longer reads 120 s past a window's end, and its help no longer
+  warns that a strided histogram's points near the end can be missing over
+  a sampler whose rows are further apart. Without `--end`, a `rate` or
+  `irate` over a sampler slower than the recording's fastest now has points
+  after that sampler's last row, held at the rate ending there, as the
+  viewer shows them. A strided `histogram_heatmap` with no point in the
+  window can return an empty matrix rather than an empty heatmap, and
+  `summarize` then gives an empty summary rather than refusing it.
+
+- **`rezolus view` uses less memory.** With metriken-storage 0.13.1,
+  `--cache-size-mb` bounds a `.dendro`'s opened segments and the blocks
+  decoded from them together. Before, each table kept its opened segments in
+  its own cache of up to that size, not counted by the budget, and histogram
+  blocks were charged less than they allocate (a snapshot with one non-zero
+  bucket, 12 of its 96 bytes). This lowers memory when a browse opens and
+  decodes more than the budget holds; a budget that already holds all of it
+  changes nothing. A segment that does not fit in the budget beside the
+  blocks one series decodes from it is opened again for each series. The
+  browser viewer's 64 MB budget now covers segments too.
+  With metriken-query 0.50.1, `rate` and `irate` over a recording with an
+  agent restart are read on the batched path instead of per series at full
+  resolution, and the batched path passes on each series' points as soon as
+  every epoch has been read far enough to answer them, instead of after each
+  chunk of up to eight segments.
+  Replaying the dashboard's 426 queries against a 12 h `.dendro` with 655
+  cgroups and one agent restart, on macOS, with all of these changes, the
+  viewer's peak RSS fell from 9.9–13.3 GiB to 1.9–2.0 GiB with
+  `--cache-size-mb 512` (two runs a side), and from 13.0 GiB to 4.0 GiB at
+  the default cache size (8 GiB on that 128 GiB host; one run a side). In
+  metriken's before-and-after runs of the same 426 queries, the query
+  changes gave every answer the same to 9 significant digits, and the
+  segment change answered and failed the same queries.
+
+- **An RPM upgrade keeps the units enabled and running.** Every `rpm -U`
+  left `rezolus` and `rezolus-exporter` stopped and disabled at boot: the
+  outgoing package's `%preun` stopped and disabled them after the incoming
+  package's `%post` had enabled them. The package now records each unit's
+  state in `%pre` on an upgrade and restores it in `%posttrans`, which runs
+  after the outgoing package's scriptlets, so upgrading from a 5.x package
+  keeps the units too: an enabled unit stays enabled, a running one is
+  restarted on the new binary, and a unit the operator disabled stays
+  disabled. `%post` enables and starts the agent and the exporter on a first
+  install only, `%preun` stops and disables the units on removal only, and
+  `%postun` reloads systemd. A `systemctl` call no longer fails the
+  scriptlet where systemd is not running, such as a container image build.
+  (#1464)
+
+- **hindsight says why it refuses an agent at startup, and leaves nothing
+  behind.** An agent older than 5.21.0, or one whose stream it cannot
+  subscribe to, ended hindsight with exit code 1 and often no message: the
+  log is written by a background thread, and the exit came before it was
+  flushed. hindsight also created an empty output file and a buffer
+  directory before it asked the agent for its stream. It now flushes the log
+  before it exits with status 1, and asks the agent first, so a refused agent
+  leaves the output path and `buffer_dir` as they were. An output file that
+  cannot be created is therefore reported after the agent is reached.
+
+- **A developer-mode viewer reloads the page when an asset changes.** The
+  file watcher was dropped as soon as it was set up, so no change reloaded the
+  page. It now watches `src/viewer/assets/` and the metriken-charts assets
+  until the server stops. A developer-mode build reads those assets and
+  `crates/dashboard/templates/` by absolute paths fixed at compile time, so
+  `rezolus view` no longer has to run from the project folder, and the tests
+  in `tests/two_file_comparison.rs` pass under `cargo test --all-features`.
+  `REZOLUS_TEMPLATES` and `--templates` still choose another templates
+  directory.
+
+- **`cpu_frequency` on macOS reads each CPU cluster's own frequency table.**
+  The power manager's `perf-domains` property names the `voltage-states`
+  table of each cluster; the sampler used `voltage-states5-sram` for every
+  P cluster. On an M4 Max the second P cluster's table,
+  `voltage-states13-sram`, holds the same frequencies, so its readings do not
+  change. A machine without `perf-domains` reads the old tables, and one
+  missing a table now publishes the clusters that have one instead of
+  nothing.
+
+- **The `cpu_usage` and macOS paging docs state what is recorded.**
+  `docs/metrics.md` listed eight `cpu_usage` states; Linux and macOS record
+  `user` and `system`. `docs/metrics.md` now also describes the macOS
+  source, and `docs/patterns.md` no longer queries the `softirq` and `steal`
+  states, which are not recorded. The `memory_pageins` and `memory_pageouts`
+  descriptions now say that page-ins include read-ahead but not pages a
+  `read()` call fetches directly, and that page-outs are the pageout
+  daemon's writeback, not `write()`, `fsync` or `msync`.
+- **`tcp_connect_latency` is labeled by outcome, and failed connects are
+  counted.** The histogram now carries `outcome`: `established`, `refused`,
+  `timeout`, `error` or `aborted`, read where the socket leaves `SYN_SENT`
+  (the `inet_sock_set_state` tracepoint) from its new state and `sk_err`.
+  Before, the sampler stopped the clock at the first segment received in
+  `SYN_SENT`, so a refused connect was recorded as connect latency, the same
+  as an established one, and a connect that timed out, failed on an ICMP
+  error or was closed before an answer was not counted. A query without an
+  `outcome` matcher merges every outcome, now including timeouts. The
+  exporter's percentiles are per outcome, with no merged series. The network
+  dashboard's new Connect Latency subgroup charts connects per second by
+  outcome and the established, refused and failed distributions. (#1614)
+- **A `connect()` retried after a failure before `SYN_SENT` is timed from the
+  retry.** `tcp_connect_latency` kept the start time of a connect that failed
+  before `SYN_SENT`, such as one with no route, and timed the next
+  `connect()` on the same socket from it. (#1645)
+- **A histogram no sampler has read is no longer published.** The agent
+  leaves a histogram out of its snapshots and stream until its acquisition
+  group is first stamped. A macOS agent published the Linux BPF histograms
+  (`tcp_packet_latency`, `scheduler_runqueue_latency`, `syscall_latency`,
+  the ext4 and xfs latencies, and others), the `blockio` latency and size
+  histograms and `tcp_size` with no values, so every macOS recording carried
+  them and the dashboards' presence checks drew their charts empty. On Linux
+  a histogram now appears from its sampler's first refresh, and a disabled
+  sampler's histograms are absent.
+- **`memory_pagecache` loads on 6.18 and later kernels.** From 6.18
+  `folio->flags` is a `memdesc_flags_t` struct, so the CO-RE relocation for
+  the integer read of it failed, the verifier rejected the fill and eviction
+  programs, and the sampler failed with `Invalid argument (os error 22)`. The
+  flags word is now read from `flags.f` where the kernel wraps it. (#1590)
+- **`scheduler` reads the outgoing task's state from `sched_switch`'s
+  `prev_state` argument where the kernel has one** (5.18 and later, with
+  BTF). Read from the task, the state could already be `TASK_WAKING` from a
+  concurrent wakeup, and an uninterruptible sleep in that state lost its
+  D-state flag. Where the kernel's BTF shows no such argument (mainline
+  before 5.18, or no BTF) the state is still read from the task, so there
+  `scheduler_uninterruptible` and the `*_uninterruptible_wait` counters can
+  undercount by an amount that depends on the workload: the more sleeps end
+  with a wakeup during the switch that started them, the larger it is.
+  (#1596)
+- **`scheduler` counts a preempted task as an involuntary switch whatever
+  its state.** A task preempted between setting its sleep state and calling
+  `schedule()` stays on the runqueue, and the kernel counts the switch as
+  involuntary. The sampler counted it as voluntary and did not stamp the
+  task's enqueue. Its wait before it next ran was then missing from
+  `scheduler_runqueue_latency`, or measured from the last wakeup to reach it,
+  including one that reached it while it was still running. When a wakeup
+  reached it while queued, the time from the preemption to the wakeup was
+  counted in `scheduler_offcpu` and, for an uninterruptible state, in
+  `scheduler_uninterruptible` and the `*_uninterruptible_wait` counters. The
+  time it ran before the preemption was missing from `scheduler_running`. The
+  switch is now classed from `sched_switch`'s `preempt` argument as well as
+  the task's state, and the wait is measured from the preemption. (#1601)
+- **`memory_writeback` loads on kernels whose `enum wb_reason` has no
+  `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
+  for it failed, the verifier rejected `writeback_start`, and the sampler
+  failed with `Invalid argument (os error 22)`. Each reason is now compared
+  only when the running kernel's enum has it; `writeback_runs` with
+  `reason=laptop_timer` stays at zero on kernels without it. (#1572)
+- **The macOS agent no longer leaks memory on every CPU sample.** The
+  `cpu_usage` sampler never freed the array `host_processor_info` returns,
+  so each refresh leaked one page (16 KiB on Apple Silicon), about 1.4 GB a
+  day at one scrape a second.
 - **A single selected cgroup keeps its colour after a zoom or refresh.** With
   one cgroup selected, a zoom drew its individual charts as "Series 1" in a
   colour other than the picker's swatch, and a live refresh drew them as a
@@ -144,7 +493,7 @@
   row labels, capture labels and template format labels. Markup in any of
   them was parsed by the browser, and could run script, in both the server
   and the static viewer. They now go through one HTML-escape helper
-  (`src/viewer/assets/lib/html.js`), which the Markdown renderer and, as a
+  (`src/viewer/assets/lib/charts/util/html.js`), which the Markdown renderer and, as a
   precaution, the band-swatch row (whose labels are constants) also use.
 - **An unknown `unit_system` is refused.** The viewer printed an unknown
   unit system's name as the unit, so a section template with one fails to parse,
@@ -172,18 +521,6 @@
   the same labels; reading an existing recording does not change. Pinned by
   `a_prometheus_label_value_is_stored_as_the_exposition_spells_it`. A line
   the exposition parser cannot read is skipped and logged once per endpoint.
-
-### Added
-
-- **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
-  cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
-  `memory.stat` fields for up to 4096 cgroups, off the scrape path at a
-  configurable interval (60s default), and the cgroups dashboard plots every
-  kind for the selected cgroups. A host without cgroup v2 or without the
-  memory controller reports the sampler as unsupported, not failed.
-  `/metrics/binary` reuses a sampler-stamped acquisition group's encoded bytes
-  across scrapes until its sampler writes again, so idle cgroup series cost a
-  copy rather than a re-encode per scrape. (#1537)
 
 ### Removed
 
@@ -256,7 +593,15 @@
   - `convert` turns a raw msgpack recording into a `.dendro`.
   - The MCP server's `add_event`, `remove_events` and `run_checks`
     (`annotate=true`) take an `output` path, to write the edited copy there
-    as `-o` does. `export_query` is unchanged.
+    as `-o` does.
+- **The MCP `export_query` tool is removed, with its `--export-dir` flag on
+  `rezolus mcp` and `rezolus mcp install`.** It wrote a range query as a CSV
+  or parquet file, and 6.x writes `.dendro` files only. Neither was in a 5.x
+  release. The `query` tool returns a range query over the whole recording,
+  at a fixed 1-second step, as Prometheus-format JSON, with the uncertainty
+  band on `rate()` and `irate()` values. `--export-dir` is now refused as an
+  unknown argument, so a client config that still passes it stops the server
+  at startup; run `rezolus mcp install` again to rewrite it.
 - **Save as Report writes a `.dendro`**, in the server viewer and the static
   site. A two-file comparison is saved with `arm=baseline`/`arm=experiment`,
   so it reopens as the comparison.
@@ -264,7 +609,7 @@
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
   foreign content type is refused at startup (exit 1, nothing written) or,
   if it comes up later or fails on a reconnect, left out of the recording
-  while the rest is recorded (exit 1). The refusal points at a 5.x recorder,
+  while the rest is recorded. The refusal points at a 5.x recorder,
   which scrapes such an agent. A 5xx or a handshake timeout is still retried
   each tick. Before, this applied to `.dendro` output only, and `.rez` and
   parquet output scraped the agent.
@@ -295,6 +640,10 @@
   an agent from 5.21.0 with `snapshot_format = "v3"` (the default). An older
   agent, a v2 agent, a `rezolus exporter`, or a proxy that does not route
   `/metrics/stream` is refused at startup.
+- **Hindsight's `GET /status` drops `failed_scrapes` and
+  `scrapes_failing_since`.** Hindsight subscribes to the agent's stream and
+  no longer scrapes, so there is no failed scrape to count; a dropped stream
+  is reconnected after one interval.
 - **Ubuntu 20.04 (focal) packages are no longer built.** Focal ships clang 10,
   and the `memory_writeback` sampler's CO-RE enum relocations
   (`bpf_core_enum_value`) need clang 12, so the focal package no longer
@@ -304,6 +653,482 @@
 
 ### Changed
 
+- `drivehealth` schedules each read one interval after the previous sweep
+  finished, on Linux and macOS, where before it was one interval after the
+  previous dispatch, so a sweep that overruns its interval is followed by a
+  full interval with no device commands. `drivehealth`, `memory_cgroup` and
+  the Linux `hw_sensors` sampler share one worker
+  (`src/agent/samplers/blocking.rs`) for admission, cadence and cancellation.
+  (#1542)
+
+- **A Prometheus series is stored as the exporter serves it, with its
+  unit** (metriken-recorder 0.15, metriken-storage 0.13, metriken-query
+  0.50, metriken-charts 0.1.5). `rezolus record` stores each series under
+  the exporter's name, with the exporter's values, and writes the unit
+  its metric's `# UNIT` line or its name's unit token names (`_seconds` is
+  `seconds`, `_ms` is `milliseconds`, `_kib` is `kibibytes`; none on a
+  `_count` or `_bucket`) as the series' `unit` key. A histogram's bounds are
+  stored as integers times a `scale` key (1e9 for `seconds`, 1e6 for
+  `milliseconds`, 1e3 for `microseconds`, otherwise the smallest power of
+  10 up to 1e9 that makes every bound an integer, or 1e9 with the bounds
+  rounded when none does), and the histogram
+  functions divide by it, so `histogram_quantile(0.99, rpc_seconds)` reads
+  seconds. A histogram query that pools series stored at different scales
+  is an error that names both. The viewers' metric catalogs list each
+  series' `unit`; the metric browser charts a series by it, and a gauge or
+  histogram KPI whose query is a bare selector is charted in its stored
+  unit, so the shipped templates' 46 `_seconds` histograms
+  (`unit_system: time`) draw times from 5.x recordings (nanoseconds) and
+  6.0 ones (seconds). A comparison or combined archive holding a 5.x and a
+  6.0 recording of one `_seconds` histogram reads one in nanoseconds and
+  the other in seconds, so its charts and ratios are off by 1e9; compare
+  recordings made by the same major version. A KPI check's threshold is
+  in the stored unit: seconds for a `_seconds` histogram recorded by 6.0,
+  nanoseconds for one recorded by 5.x. The metric browser also charts a
+  Rezolus agent's metrics by their unit: a `nanoseconds` counter as a
+  percentage of a core, a `nanoseconds` histogram as times, a `bytes`
+  counter as a data rate. A KPI query that fails with an evaluation or
+  unsupported error is logged at warn when a viewer marks the KPI
+  unavailable (once per process in the server viewer), and any other
+  failure at debug. Save as Report logs a query whose columns it cannot
+  resolve with metriken-query's message, and calls only a syntax error
+  malformed. In a comparison, a percentile chart's series are paired by
+  their visible labels only.
+
+- **An endpoint lost mid-run does not fail `record`** (metriken-recorder
+  0.15). An endpoint refused mid-run, or whose rows cannot be recorded,
+  stops recording alone; `record` names it at the end of the run and the
+  exit status does not change, since the archive was saved with every
+  other endpoint's rows. `record` exits 1 when the recording cannot start,
+  when the archive cannot be written or saved, or when nothing was
+  recorded.
+
+- **A selector compares a label a series lacks as the empty string, as
+  Prometheus does** (metriken-storage 0.12, metriken-query 0.49).
+  `x{l=""}` selects the series of `x` without `l`, `x{l=~"a|"}` those with
+  `l="a"` and those without, `x{l!=""}` only those that carry it, and
+  `x{l!~".*"}` none. Before, `x{l=""}` selected only a series carrying `l`
+  with an empty value, and `x{l!~".*"}` selected the series without `l`.
+  This applies to KPI templates, `recording check`, `mcp query` and the
+  viewers' queries. A `__run__`
+  matcher on a histogram whose configuration changed mid-recording is
+  decided against each run's number (`"0"` for one run); one that selects
+  several runs reads none.
+
+- **`rezolus record` keeps recording when one endpoint's rows cannot be
+  recorded** (metriken-recorder 0.13, 0.14). An endpoint whose rows cannot
+  be written into a segment, staged, or read or decoded from its stream
+  stops recording alone: `record` prints the reason at once and names it
+  again at the end of the run, as for an endpoint refused mid-run. The
+  archive keeps its rows up to the failure, except a failed table's rows
+  after its last sealed segment. hindsight and the live viewer record one
+  source, so such a failure still ends them.
+
+- **An exporter label named after a storage key is kept as
+  `exported_<key>`** (metriken-recorder 0.13). An exporter's label named
+  `unit`, `metric_type`, `scale` or another key the archive stores as
+  column metadata is stored as `exported_unit` and so on. Before, such a
+  label was stored under its own name, which every reader drops, so two
+  series that differed only by it read as one, and a label named `metric`
+  replaced the series' name.
+
+- **A recording with two series that read as one is refused, not read
+  interleaved** (metriken-query 0.48.1, 0.49). A query over a series that
+  two columns of an archive hold at the same times (an archive recorded
+  before the change above, from an exporter with such a label), or a series
+  whose samples step back in time, is an error naming the metric and its
+  labels.
+
+- **A Prometheus histogram's observations above its highest finite bucket
+  count in its quantiles** (metriken-recorder 0.11, metriken-storage 0.10,
+  metriken-query 0.47, metriken-charts 0.1.3). `rezolus record` dropped a
+  histogram's `+Inf` bucket, so a high quantile of a histogram with
+  observations past its top bucket read low. It now records them as the counter
+  `<histogram>_overflow`, listed in `mcp describe-metrics` and both
+  viewers' catalogs beside the histogram's `_sum` and `_count`, and
+  `histogram_quantile` counts them: a quantile that falls among them is
+  `+Inf`, with the band from the highest finite bound to `+Inf`, and lower
+  quantiles can move. A query result's JSON (the viewers' API, the MCP
+  `query` tool) writes a non-finite value as the string `"+Inf"`, `"-Inf"`
+  or `"NaN"`, as the Prometheus HTTP API does, where it wrote `null`;
+  `mcp query` prints `+Inf` and counts the `+Inf` points, and
+  `mcp detect-anomalies` leaves non-finite points out of its analysis and
+  says how many. A check (`recording check`, `run_checks`) reads a `+Inf`
+  quantile as above the highest finite bound: an `above:` threshold at or
+  below that bound is violated and a `below:` one passes; a threshold above
+  it is indeterminate. A percentile chart draws a
+  `+Inf` quantile as a red dot in the band above its y-axis (the "OOB" band
+  a chart with a configured maximum already has), with `+Inf` in the
+  tooltip, and leaves out its band; zooming or pinning a percentile keeps
+  the y-axis on the finite values; a line chart, a compare overlay and the
+  terminal viewer draw a gap. A chart pinned to the Notebook keeps its own
+  y-axis range, not the one drawn for a `+Inf`. Histograms recorded before
+  this release read as before. A 6.0 build before this one reading a
+  recording made by it returns the old quantile, lists one more counter
+  per histogram, and shows the histogram's `overflow` and `overflow_bound`
+  keys as labels. An exporter label named `overflow` or `overflow_bound`
+  is no longer a label, in any recording.
+
+- **A Prometheus endpoint's values keep their fractions**
+  (metriken-recorder 0.10, metriken-storage 0.9, metriken-query 0.46).
+  `rezolus record` stored a scraped counter or gauge as an integer, so a
+  gauge of 0.25 read 0 and a counter in seconds moved in whole seconds. It
+  now stores them as floating-point counters and gauges: `mcp`, both
+  viewers and their metric catalogs list them as `counter` and `gauge`, a
+  counter is read through `rate()` and `irate()` as before, and a gauge
+  reads as served. This covers typed counters and gauges, untyped samples
+  (a name ending in `_total`, `_sum` or `_count` is a counter, any other a
+  gauge), summary quantiles, and a histogram's `_sum` and `_count`; a
+  histogram's buckets are recorded as before. A recording of a Prometheus
+  endpoint made by this release holds segment format 3. 6.0 builds before
+  this one refuse an archive that holds one, including its other
+  recordings ("segment format 3 is newer than this reader"); open it with
+  this release or later. Archives holding only Rezolus agent recordings
+  are unchanged, and recordings made before this release read as they
+  did.
+
+- **An individual cgroup chart draws its selected names and groups from
+  one query, and a group is matched by its unit's path.** Each
+  `sum by (name) (...)` in the chart's query gets a `label_replace` per
+  selected group that sets `name` to the group's key for every cgroup the
+  group matches, so the sum draws one line per group, and a group's IPC is
+  still its summed instructions over its summed cycles. A group matches its
+  unit's cgroup and every cgroup below it (`<unit>(?:/.*)?`), by its key
+  and by each shortened `.../` key merged into it; the aggregate charts
+  exclude the same. In the other arm of a comparison, and in a live view
+  after the section opened, a group therefore sums every cgroup at or below
+  one of its keys, not only the members listed when it was selected; a
+  shortened key there also matches a unit of the same name elsewhere in
+  the tree. Before, the chart ran one query for the individually selected
+  names and one per group, each listing the group's members, and a group
+  of a few hundred cgroups made a request URL longer than the server
+  viewer accepts (64 KiB); a group's query now has the same length
+  whatever the number of cgroups under its unit. A chart in A/B mode runs
+  one query, so it drew only the first of those queries; it now draws
+  every selected name and group. A pinned chart that draws a group is
+  compared in A/B mode. A chart saved with a query per group still runs
+  those queries and is still not compared.
+
+- **`recording annotate --queries` (now also `--template`) and
+  `--systeminfo` write a user-layer entry on a recording with identity
+  layers.** The template is used over the one the producer sent, which
+  stays in the producer layer. `--undo` removes the templates annotate
+  set, so `record`'s `template_override=true` template, else the
+  producer's, else a `record --endpoint ...,template=` default, is used
+  again. Before, `--undo` removed every template the recording carried. A
+  producer's template now cannot be removed (annotate one whose `kpis` is
+  `[]` in its place). A recording without layers is annotated
+  as before.
+
+- **`template=FILE` is a default, beneath the template a producer sends;
+  `template_override=true` uses the file.** On `--endpoint` (and as
+  `template_override = true` in a `--config` file's `[[endpoints]]`),
+  `template_override=true` writes the file in the recording's user layer,
+  so it is used over a producer's own template, as `template=` alone was.
+  Without the switch, `template=` is written in the recording's recorder
+  layer, so a streamed producer that sends its own KPI template has that
+  template used, and `record` warns at startup and names the switch. An
+  endpoint that sends none, such as a scraped one, is unaffected. The switch
+  is refused without `template=`, and a value other than `true` or `false`
+  is refused (exit 2). rezolus takes metriken-recorder 0.8.1.
+
+- **`=~` and `!~` in a query are anchored regular expressions, as in
+  Prometheus** (metriken-query 0.44, metriken-storage 0.7). Each was a list
+  of literal alternatives separated by `|`, so `{name=~"/system.slice/.*"}`
+  matched nothing; it now selects every cgroup under `/system.slice`, and a
+  `.` in a pattern matches any character. A saved query or template whose
+  `=~` alternatives hold a regex metacharacter meant literally (`.`, `+`,
+  `(`, `[`, `\`) needs it escaped. The viewer's cgroup selection and the
+  combined view's per-recording scopes escape the names they put in a
+  pattern, so a systemd name holding `\x2d` is still selected. A metric
+  name two samplers publish (`gpu_utilization` from `gpu_nvidia` and
+  `gpu_amd_smi`) is read whole when the samplers' series differ, as they do
+  by their `sampler` label, where the query was refused. rezolus now takes
+  metriken-recorder 0.8.
+
+- **`--endpoint` takes `alias=`, `tier=` and `service_kind=`, and
+  `source=` is read as `alias=`.** `alias=` names an endpoint's recording;
+  `tier=` labels its role in a benchmark (`client`, `server`); and
+  `service_kind=` labels the role its producer runs in (`prefill`), which
+  refines the KPI template it takes. The same keys are accepted in a
+  `--config` file's `[[endpoints]]`. `source=` on an endpoint, `--metadata
+  source=` with `--url` and `--label source=` are read as `alias=`, with a
+  note that `source=` is deprecated; a `source=` and an `alias=` that
+  disagree are refused. A recording's `source` label is now only the one its
+  producer declares, so an older cachecannon's or llm-perf's KPI template,
+  which selects that `source`, shows its KPIs for an endpoint the user
+  named: the gap the move to metriken-recorder 0.7 opened is closed. A
+  selector `source=X` (`--recording`, `--baseline`, `--experiment`, MCP's
+  `recording`) also matches a recording whose `alias` or `__producer__` is
+  `X`, with a note on the command line (MCP's `recording` argument prints
+  none). The end-of-run messages and `record`'s warning name an endpoint by
+  its alias. `scripts/rezolus-capture` and `docker/rezolus-capture` name
+  their endpoints with `alias=`. A `template=` file, or saved PromQL, that
+  selects `source="NAME"` for a name given with `source=` now selects
+  nothing; select `alias="NAME"`. `--metadata source=` with `--endpoint` or
+  `--config` stays plain metadata on every recording of the run. An empty
+  or padded `source`, `alias`, `tier` or `service_kind`, from `--endpoint`,
+  `--config` or `--metadata source=` with `--url`, is refused (exit 2), as
+  are two `--label source=` or two `--metadata source=` with `--url` that
+  disagree. An endpoint's `source=` now outranks a run-wide `--label
+  source=`, as every per-endpoint label outranks `--label`.
+
+- **`record`, hindsight and the live viewer record with metriken-recorder
+  0.7.** Each recording carries its identity layers (metriken-storage
+  `layers`), and its labels are their merged result:
+  - the URL it was recorded from is the label `endpoint`;
+  - the recorder infers no `source` from the URL: a recording has a
+    `source` label only when its producer declares one (an endpoint's
+    `source=` is its `alias`, above), and a `source` metadata key only when
+    its producer's handshake metadata carries one, or `--metadata source=`
+    gave one with `--endpoint` or `--config`;
+  - a Rezolus agent's recording carries `__producer__=rezolus`, from the
+    producer identity its stream handshake now declares
+    (`metriken.producer.*`: name, version and hostname) and from the probe
+    hook, which reports `producer_name=rezolus` and
+    `producer_component=agent` in place of a `source=rezolus` label;
+  - the producer epochs are the recorder layer's entries, in place of the
+    flat `producer_epoch` and `producer_epochs` keys.
+
+  `record` warns about an endpoint whose recording has neither an alias nor
+  a producer-declared `source`. The viewer's section header, a saved selection and
+  MCP `describe-recording` show a recording without a `source` key by its
+  `alias`, `source` label or producer. `record --help`, `docs/usage.md` and
+  `docs/parquet_metadata.md` describe the new precedence.
+
+- **The viewer serves its chart modules from metriken-charts.** `/lib/charts/`
+  and `/lib/charts.css` are the metriken-charts crate's `assets/charts/` and
+  `assets/charts.css`, at the version `Cargo.lock` names, and rezolus no
+  longer carries its own copy. `crates/viewer/build.sh` copies them into
+  `site/viewer/lib/` for the static viewer and the release bundle. The JS
+  tests run with `node --import ./tests/support/charts.mjs --test
+  tests/*.mjs`, which resolves imports of `charts/` to the crate; the 26
+  test files that tested only the chart modules are in metriken-charts.
+- **A recording with identity layers is read by its producer.** The
+  dashboard's new `identity` module reads, from a recording's metadata,
+  the producer its layers name (`__producer__`), its `service_kind` and
+  `alias` labels, and a `source` it carries. A recording without layers
+  (every recording rezolus writes today, and every 5.x one) is read by its
+  `source` as before. For a recording with layers:
+  - the viewers show the built-in sections, and analysis infers samplers
+    from metric names, when the producer is `rezolus`; not from a `source`
+    of `rezolus` alone, nor from the agent's self-metric names;
+  - a recording without a `source` finds its registry template by its
+    producer and `service_kind` (`vllm` with `prefill` finds
+    `vllm-prefill`, else `vllm`), and by a `source` or `alias` that names a
+    template;
+  - a template the recording carries without a producer takes the
+    recording's.
+
+  A recording's `alias` label, with or without layers, is now the first
+  choice for its name beside a comparison, for instance names in the
+  combined view, and for a capture's alias, ahead of `host` and `source`.
+
+- **The dashboard's plot specs are built with metriken-charts.** The
+  `dashboard` crate's `Plot`, `Unit` and plot options come from
+  `metriken_charts::plot` 0.1.0, and the section JSON the viewer receives
+  is unchanged apart from key order, except that a histogram KPI whose
+  `subtype` is not `percentiles`, `buckets` or `quantile_heatmap` now
+  carries `percentiles`. A section template's `style` is one of
+  `line`, `multi`, `heatmap`, `scatter`, `histogram_heatmap` and
+  `quantile_heatmap`, and another value is a parse error; before, the
+  template loaded and the chart failed to draw. `style` no longer takes
+  `${name}` substitution.
+- **A KPI template names its producer and `service_kind`.** A template
+  can declare `producer` (the program whose recordings it reads;
+  `service_name` when absent) and `service_kind` (the role it is for).
+  The built-in `vllm-prefill`, `vllm-decode`, `sglang-prefill` and
+  `sglang-decode` templates declare `vllm` or `sglang` and their role. A
+  recording's own template that declares no producer takes the producer of
+  the registry template its `source` names. A category's `members` can name
+  producers as well as registry templates and aliases, so `view --category
+  inference-library` now accepts a `vllm-prefill` or `sglang-decode`
+  capture as the `vllm` or `sglang` member, which it refused before; a
+  capture matches a member naming its source or template before one naming
+  its producer, and `member_titles` is keyed by the member matched.
+  `--category` now also refuses at startup, and the viewer does not
+  activate the category after an attach or detach, when a capture has
+  other than one service template; before, it activated and then showed one
+  section per template, or paired two templates of one capture.
+- **A KPI template a recording carries is read without its `source="..."`
+  matchers** when the recording has no identity layers: every 5.x
+  recording, and every recording rezolus writes today (it records with
+  metriken-recorder 0.5.1, which writes none). Each reader evaluates such
+  a template against its own recording, so the matchers narrowed nothing;
+  they did empty the KPIs of a recording whose endpoint was given another
+  name, such as a cachecannon (through v0.0.34) or llm-perf (through
+  v0.1.21) recording made with `--endpoint URL,source=cc-a`. A selector
+  with no metric name keeps its `source` matcher unless another matcher is
+  `=` with a non-empty value, which is stricter than PromQL's own rule; a
+  branch holding a quoted name (`{"x.y", ...}`) also keeps it. The viewer,
+  and MCP's `run_checks`, log what was removed or kept as a notice.
+- **`cpu_power` on macOS subscribes only to the channels it publishes.**
+  It reads 33 of `Energy Model`'s 328 IOReport channels on an M4 Max, and a
+  sample's CPU cost drops from about 3.6 ms to 3.2 ms. A subscription that
+  includes any channel other than `GPU Energy` and the PCIe ones costs about
+  2.7 ms per sample, so removing channels saves little.
+- **The Apple GPU sampler no longer needs root.** `gpu_apple` reads the GPU's
+  performance-state residency and energy from IOReport, as `cpu_frequency`
+  and `cpu_power` do, rather than running `powermetrics`, which needs root.
+  The metric names and labels are unchanged. `gpu_utilization`, `gpu_clock`
+  and `gpu_power_usage` are averages since the last refresh that published
+  them, over at least 200 ms, rather than over the time since `powermetrics`'
+  previous sample, which each refresh cut short. `gpu_energy_consumption`,
+  which the sampler declared but never set, now counts the GPU's energy in
+  millijoules. On an M4 Max, phase means over a stepped Metal load agreed
+  with `powermetrics` within 0.35 percentage points of utilization, 3.1% of
+  power and 2.1% of clock. An Intel Mac, or one whose GPU performance states
+  do not match the device tree's `voltage-states9` table, gets no metrics
+  from `gpu_apple`.
+- **The KPI templates rezolus ships no longer match on `source`.** The 215
+  `source="<name>"` matchers are gone from the cachecannon, llm-perf,
+  SGLang, vLLM and Valkey templates in `crates/dashboard/templates/`. The
+  viewer (browser and `--tui`), `recording check` and MCP's `run_checks`
+  evaluate a recording's templates against that recording's series only.
+  One of these files given to an endpoint with another `source` name
+  (`--endpoint URL,source=vllm-a,template=vllm.json`) now shows its KPIs,
+  where its queries matched no series before. `recording annotate --queries`
+  writes the template into every recording of the archive, and each
+  recording's copy is evaluated against that recording's series.
+- **`view --tui` reads each section of a combined archive through its
+  recording's scope**, as the browser viewer does. It read every
+  recording's series: a vLLM section of an archive with two vLLM
+  recordings drew both recordings' series, and a CPU busy chart of an
+  archive with two hosts drew none.
+- **`recording upgrade` splits a 5.x combined parquet into its inputs.** A
+  combined file (written by 5.x `recording combine`, or by the 5.x recorder
+  given several endpoints: its `source` a JSON array and each column
+  labelled with its input's `source`) becomes one recording per input file,
+  labelled with its `source` and its `node` (rezolus) or `instance`, with
+  its `per_source_metadata` entries as its metadata, and opens in the viewer
+  as a combined view. A column carrying an exporter's own `source` forms a
+  recording of that name (`docs/parquet_metadata.md` lists the cases). It
+  was one recording, so a KPI template that selects by metric name alone
+  read every input's series of that name.
+- **The CPU dashboard draws a chart only when the recording has every
+  counter it reads.** The IPC, IPNS, L3 hit rate, branch prediction and
+  DTLB charts read PMU counters, which a VM without a virtual PMU does not
+  record. macOS records the frequency counters but none of the PMU
+  counters, nor the eBPF counters the migrations and TLB flush charts
+  read, so on a Mac the section was mostly empty charts. A group left with
+  no charts is not shown.
+- **A combined view's charts read their recording through a scope rather
+  than through matchers added to their queries.** Each chart of a
+  recording's sections carries `scope`, the uuids of that recording's
+  sources, and the page sends it with every range query of the chart, so
+  the query shown is the template's as written (`sum(irate(cpu_usage[5m]))`
+  rather than `sum(irate(cpu_usage{host="h2"}[5m]))`).
+  - An Overview whose throughput is a service's reads that service's
+    sources as well as the agent's, in each chart whose query includes the
+    throughput query.
+  - A section's `metadata.scope` is the list of uuids, not label matchers;
+    the cgroup discovery reads within it.
+  - A chart added to a selection keeps its scope, and so does a report
+    saved from it. An entry saved before this carries the matchers in its
+    query text and reads as written.
+  - A recording any of whose sources lacks a uuid (an archive written
+    before dendro stored them) has no scope: its queries carry its matchers
+    as before, and its cgroup discovery reads every recording. Its Overview
+    shows the throughput of a service of its own recording, but not one of
+    another recording.
+  - A recording shown beside a comparison still names its capture with
+    `__capture__`.
+  - Where the viewer still adds matchers to a query, a matcher the selector
+    already has is not repeated, and a different one of its own on the same
+    label (`source="vllm"` where the scope's is `source="svc"`) no longer
+    replaces the scope's. Both are kept, and the archive reader refuses the
+    query.
+- **metriken-query 0.43, metriken-storage 0.6, dendro 0.6.1.**
+  metriken-recorder stays at 0.5.1, over metriken-storage 0.5.4, so `record`,
+  the hindsight buffer and the live viewer write what they wrote before.
+  - Segments written by metriken-storage 0.6 carry a new names index.
+    A hindsight dump, the `recording` copies (`combine`, `filter`,
+    `snapshot`) and the copy an edit command writes with `-o` (`annotate`,
+    `events`, `check`) seal their live tail with it, and `recording
+    convert` and the `.rez` conversion write every segment with it.
+    Rezolus builds on metriken-storage 0.5 read such a segment as holding
+    the names of its table's first segment, so a metric that first appears
+    in a later segment is not listed or returned there.
+  - A recording and its copies, or two recorders of one agent, combine
+    their histograms per source: each span reads the finest source that
+    covers it, where it read one source for the whole range. Where a finer
+    source's run sits inside a coarser one's, the group can count less
+    than the coarser source alone.
+  - Where two such sources sample at the same spacing, the one whose
+    first row is earlier answers; it was the one with the lowest uuid.
+  - A query whose sources hold different values for one series at one
+    time returns a `conflict` notice. The MCP `query` tool returns it in
+    `notices`, `rezolus mcp query` prints it after the table,
+    and a chart's binary display response carries it in its header, which
+    the viewer does not show yet.
+  - Two recordings whose labels differ only in an internal label other
+    than `__recording__` carry `__recording__`, so `without` and binary
+    operators keep them apart, where `without` merged them.
+  - Where every segment of a table carries the new names index, building
+    the combined view lists its labels without opening the table. Archives
+    `record` writes do not have it yet.
+- **The viewer's chart modules import nothing from outside `charts/` and do
+  not use Mithril.**
+  - `labels.js` and `html.js` moved to `charts/util/`, and A/B compare
+    (`compare.js`, `compare_math.js`) moved from `charts/` to `compare/`.
+  - Display mode's binary decoders, tile cache, bucket-width arithmetic and
+    decoded-to-plot conversion moved from `data.js` to `charts/display.js`.
+    `data.js` still exports them, and still does the fetching.
+  - What a chart needs from the page comes from `charts/host.js`. `data.js`
+    registers the data functions (the line chart's total query and
+    `applyResultToPlot`, the scatter chart's quantile spectrum, the step
+    override used to find gaps). The new `ui/chart_view.js` registers the
+    theme version, Mithril redraw and event annotations.
+  - Without a host, the line chart has no total toggle and the scatter chart
+    no spectrum checkboxes, a chart shows no events and offers no
+    "+ Add Event", and a chart takes up a theme change only when it next
+    reconfigures or the page rebuilds it.
+  - `charts/chart.js`'s `Chart` is a plain class: the page creates its
+    element and calls `mount(element)`, `update({ spec, interval })` and
+    `destroy()`. The viewer renders it with `m(ChartView, ...)` from
+    `ui/chart_view.js`. `<rezolus-chart>` drives `Chart` directly and no
+    longer needs Mithril on the page.
+  - `tests/charts_boundary.test.mjs` fails when a chart module names a `.js`,
+    `.mjs`, `.css` or `.json` path outside `charts/` or uses the Mithril
+    global.
+- **`task_cpu_usage` leaves out threads younger than one second.** A thread
+  gets its series at the first snapshot after it has lived
+  `task_min_lifetime` (`[samplers.cpu_usage]` or `[defaults]`, a humantime
+  string, default `"1s"`; `"0s"` restores the previous behaviour), if it is
+  still running then. A thread that exits before that has no series; its
+  CPU is still in `cpu_usage`. Renames before the series first appears add
+  no series. With `snapshot_format = "v2"` the minimum is 0. (#1490)
+- **`process_attribution` follows `task_attribution` unless it is set.**
+  Turning on `task_attribution` in `[samplers.cpu_usage]` or `[defaults]`
+  now also turns on `process_cpu_usage`, because the rates of a process's
+  `task_cpu_usage` series sum to at most its CPU, and usually less. That
+  adds two per-pid arrays (64 MiB of kernel memory), a 256 KiB ring, a
+  counter add per accounting event that adds CPU, a metadata event per new
+  process, and one series per process; a process whose threads run on many
+  CPUs contends on its counter. Set `process_attribution = false` in
+  `[samplers.cpu_usage]` to keep the previous behaviour.
+- **The memory dashboard draws the Buffers, Swap Cached, Committed and Commit
+  Limit charts and the NUMA group only when the recording has them.** A
+  macOS recording has none of them, and a Linux kernel without `CONFIG_NUMA`
+  has no NUMA counters.
+- **The overview and exceptions dashboards draw each chart only when the
+  recording has its metric, and leave out a group with no chart.** On a
+  macOS recording the overview shows CPU, network traffic and block IO,
+  without the scheduler, syscall, softirq and TCP latency charts, and the
+  exceptions section shows TCP Retransmits when the agent could read the
+  TCP statistics and nothing otherwise. On Linux the AWS ENA group is left
+  out on a host without ENA counters, and the CPU throttling and block IO
+  error groups when their samplers did not run.
+- **The network dashboard draws the Packet Drops, TCP Retransmits and TCP
+  Packet Latency charts only when the recording has them.** A macOS
+  recording has no `network_drop` or `tcp_packet_latency`, and has
+  `tcp_retransmit` only when the agent could read the kernel's TCP
+  statistics (as root, by default). The Errors and TCP
+  groups are left out when none of their charts are drawn.
+- **`cpu_usage` on macOS is per CPU.** It was three host-wide counters; it
+  is now one series per CPU in each of `user` and `system`, labelled `id`,
+  so the per-CPU charts draw on a Mac. Niced time is counted
+  as `user`, as on Linux, and the `nice` state is gone.
 - **`hw_sensors` is on by default.** It follows `[defaults]` like other
   samplers. On five lab hosts at the 5 second default it cost at most 0.08% of
   a core. Sweeps took 22 to 27 ms median on two x86 hosts, 323 ms on a board
@@ -346,9 +1171,10 @@
   0.4). Every `.dendro` this release creates (`record`, hindsight buffers
   and dumps, the live viewer's save, `recording` combine, filter, snapshot
   and `upgrade --to dendro`, and the viewers' Save-as-Report) has dendro's
-  `documents` and `segment_indexes` tables. Rezolus 5.28.0 and earlier, and
-  6.0 builds before this change, refuse such a file with `unsupported
-  archive schema version 5`. Schema 4 archives still open and read the same;
+  `documents` and `segment_indexes` tables. Every 5.x release from 5.23.0,
+  and 6.0 builds before this change, refuse such a file with `unsupported
+  archive schema version 5`; releases before 5.23.0 do not open `.dendro`
+  files. Schema 4 archives still open and read the same;
   `recording annotate` edits one in place and leaves it at schema 4.
 - **An endpoint's `role=` outranks `--metadata role=`.** `record
   --endpoint url,role=service --metadata role=x` now records `role=service`,
@@ -430,8 +1256,8 @@
   `rezolus recording upgrade run.parquet` labels the recording with the
   file's `source`, so a KPI template carried in the parquet (llm-perf's)
   whose queries select `{source="llm-perf"}` matches its series. A combined
-  parquet, whose columns carry their own `source`, and a parquet any of
-  whose series already carry a `source` label are converted unlabelled.
+  parquet becomes one labelled recording per input (above); a parquet any
+  of whose series already carry a `source` label is converted unlabelled.
 - **`rezolus mcp` reads an archive of one run combined.** Without
   `--recording` (or the stdio server's `recording` object), `query`,
   `describe-metrics`, `detect-anomalies` and `analyze-correlation` read every
@@ -707,17 +1533,12 @@
   and `source=<NAME>` for each service. The command-line options are
   unchanged; `--source rezolus` is refused, since it names the agent's
   recording.
-- **`rezolus-capture` with `--endpoint` loses the merged dashboard.** The
-  viewer opens a capture made with `--endpoint` as an A/B comparison of the
-  agent's recording against the first service's, with further services as
-  extra overlays; no dashboard queries the service metrics. Service KPI
-  dashboards (vllm, valkey, sglang and the other templates) are not shown,
-  because the template queries select a `source` label that `.dendro`
-  series do not carry. `capture.parquet` and the per-endpoint
-  `agent-<port>.parquet` / `<source>-<port>.parquet` copies are no longer
-  written. For the merged dashboard with service KPIs, use the 5.x
-  `rezolus-capture` (the v5.27.0 script or Docker image), which writes a
-  merged `capture.parquet`.
+- **`rezolus-capture` with `--endpoint` writes no parquet.** The viewer
+  opens the capture as one combined view: the agent's sections, and a KPI
+  section for each service whose alias names a built-in template by its
+  `service_name` or one of its `aliases`. `capture.parquet` and the
+  per-endpoint `agent-<port>.parquet` / `<source>-<port>.parquet` copies are
+  no longer written.
 - **`record --endpoint url,role=...` is kept in the recording.** The role is
   the `role` key of that endpoint's recording metadata; `--metadata role=...`
   overrides it. Before, only parquet output carried it.
@@ -744,11 +1565,11 @@
   - `record`, `hindsight` and the live viewer accept both sets of names, so
     agents from 5.21.0 through 6.0.0-alpha.44 are still streamed.
   - **Older consumers of the stream refuse this agent's stream**, naming the
-    content type they got: `record --stream` from 5.21.0 through 5.26.x, and
+    content type they got: every 5.x `record --stream`, and
     `record` to `.dendro`, `hindsight` and the live viewer from 6.0.0-alpha
-    builds through alpha.44. Drop `--stream` (5.x), upgrade, or record to
-    `.rez` or parquet with 5.x, which scrapes `/metrics/binary`; that path
-    is unchanged.
+    builds through alpha.44. Drop `--stream` (5.x), upgrade, or record with
+    5.x without `--stream`, which scrapes `/metrics/binary` to `.rez`,
+    parquet or `.dendro`; that path is unchanged.
   - A subscriber reads the time it woke before waiting for the pass lock,
     so subscribers at one boundary share one sampling pass. Before, one
     queued behind a pass longer than the TTL found it stale and sampled
@@ -1061,14 +1882,16 @@
   at startup the run is refused before the archive is created, and an agent
   that comes up later, or that answers a reconnect with such a refusal, is
   left out from then on (a reconnecting agent's recording keeps the rows it
-  had and is finalized) while the other endpoints keep recording, the
-  archive is finalized, and the run exits 1. Record such an agent with a
+  had and is finalized) while the other endpoints keep recording, and the
+  archive is finalized. Record such an agent with a
   5.x recorder, which scrapes. An agent that answers but whose stream
   fails with an error that can change (a 5xx, a handshake timeout) is retried
   each tick. A wrapped command that exits on its own waits for each agent's
   frame covering the exit, at most one interval plus the scrape timeout
-  (twice the interval, between 2 s and 10 s). A run whose every endpoint has
-  been refused ends there, and each refused endpoint is named at the end.
+  (twice the interval, between 2 s and 10 s). When no endpoint is left
+  recording (each refused or failed), a run with neither `--duration` nor a
+  wrapped command ends there; a `--duration` run or a wrapped command runs
+  to its own end. Each refused endpoint is named at the end.
   `record --stream` is removed: `record` writes `.dendro`, which records
   agents by stream, and passing `--stream` is an unknown-argument error
   (exit 2). The identity index that a 5.x `.rez --stream` stored beside its
@@ -1121,6 +1944,20 @@
 
 ### Added
 
+- **Memory metrics on macOS.** `memory_meminfo` and `memory_vmstat` now run
+  on macOS, unprivileged. They set `memory_total`, `memory_free`,
+  `memory_available`, `memory_cached`, `memory_anon`, swap total and free,
+  `memory_page_faults` and swap in and out, so the memory dashboard's
+  capacity, used and swap charts draw on a Mac. `memory_available` has the
+  Linux meaning: free, file-backed and purgeable pages. macOS-only metrics
+  cover wired memory, purgeable and speculative pages, the compressor
+  (`memory_compressed`, `memory_compressed_stored`, compressions and
+  decompressions) and file page-ins and page-outs. The gauges come from
+  sysctls; the counters and wired memory come from `host_statistics64`, which
+  macOS rate-limits for third-party processes, and a read that is not newer
+  than the last one published is dropped. The memory dashboard draws the
+  Anonymous chart whenever `memory_anon` is recorded and adds a Wired and
+  Purgeable subgroup and a Compressor subgroup.
 - **A systemd unit's cgroups can be selected as one entry.** The cgroup
   selector lists each `*.scope` or `*.service` unit with two or more recorded
   cgroups that name it (a libvirt guest's `vcpuN` and `emulator` threads, a
@@ -1152,14 +1989,17 @@
   their own, so a process's total no longer depends on how many threads it
   created. Its series ends within one snapshot interval of the process's
   last thread exiting. It costs 64 MiB of kernel memory (two per-pid
-  arrays) and a 256 KiB ring, a metadata event per new process and per
-  leader rename, an exit event per process when `task_attribution` is off,
-  the `task_rename` program (one run per thread rename), and two marker
-  reads and a counter add per accounting event that adds CPU. A process whose threads
-  run on many CPUs contends on its counter: with 48 threads of one process
-  on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF programs
-  took about 310 ns, against about 200 ns with 48 one-thread processes and
-  170 ns without the counter. (#1490)
+  arrays), a 256 KiB ring, a 256 KiB table of busy processes, a metadata
+  event per new process and per leader rename, an exit event per process
+  when `task_attribution` is off, the `task_rename` program (one run per
+  thread rename), and per accounting event that adds CPU a marker read, a
+  table lookup and a counter add, plus a second marker read when the process
+  holds no table entry. A labelled process using at least half a CPU is
+  counted in a table with 16 copies assigned from the L3 topology, so the
+  CPUs running its threads do not all write one counter: with 48 threads of
+  one process on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF
+  programs took about 210 ns, against about 320 ns with one counter and
+  about 190 ns without `process_cpu_usage`. (#1490)
 
 - **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
   `drivehealth` decodes them from the SMART/Health log it already reads
@@ -1200,8 +2040,10 @@
   config file's directory. The file is read and checked before recording:
   an unreadable file, one over 1 MiB, JSON that is not a `ServiceExtension`,
   or an unknown `unit_system` refuses the run (exit 2) and writes nothing.
-  `recording annotate --queries` refuses a file over 1 MiB too. On a streamed producer, `template=` replaces the
-  template its handshake sends, and the recorder logs that at startup.
+  `recording annotate --queries` refuses a file over 1 MiB too. On a streamed
+  producer whose handshake sends a template, the producer's is used and the
+  recorder warns at startup; `template_override=true` uses the file (see
+  Changed).
   cachecannon and llm-perf send their own from their next releases; the files in
   `crates/dashboard/templates/` stay as the fallback for recordings that
   carry none (docs/usage.md, "KPI templates").
@@ -1599,7 +2441,7 @@
 
 - The valkey template's five KPIs never drew: PromQL read
   `redis/total_commands_processed` as a division. They name their metrics
-  as `{__name__="redis/total_commands_processed", source="valkey"}`, which
+  as `{__name__="redis/total_commands_processed"}`, which
   metriken-query reads from 0.37.1, and the viewer's instance picker adds
   its matcher to that form.
 

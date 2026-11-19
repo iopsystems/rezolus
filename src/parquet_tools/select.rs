@@ -13,12 +13,16 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+const SOURCE: &str = "source";
+
 /// Labels a recording must carry to be selected.
 ///
 /// Subset semantics: every `k=v` here must appear in the recording's labels,
-/// but the recording may carry more. Recordings auto-carry `source` and
-/// `host` plus any `record --label`, so requiring the full set would make
-/// selectors long and brittle.
+/// but the recording may carry more. Recordings carry `endpoint` and `host`
+/// plus any `record --label`, so requiring the full set would make
+/// selectors long and brittle. `source=X` is the deprecated spelling of
+/// `alias=X`: it matches a recording whose `source`, `alias` or
+/// `__producer__` label is `X` ([`RecordingSelector::matches`]).
 // `Hash` so a selector can be half of a cache key as a TYPED pair. The stdio
 // server caches one reader per (path, selector); formatting the selector into
 // a string key instead would let two different selectors collide, since label
@@ -79,6 +83,12 @@ impl RecordingSelector {
                     "{flag} {k}= specified more than once ({prev:?} and {v:?})"
                 ));
             }
+            if k == SOURCE {
+                eprintln!(
+                    "note: {flag} source={v} also matches a recording whose alias or producer is \
+                     {v}; source= is deprecated in a selector, use alias="
+                );
+            }
         }
         Ok(Self { labels })
     }
@@ -119,11 +129,19 @@ impl RecordingSelector {
         )
     }
 
-    /// Whether `labels` carries every pair in this selector.
+    /// Whether `labels` carries every pair in this selector. A `source=X`
+    /// pair is met by a `source`, `alias` or `__producer__` label of `X`: a
+    /// recording made since `record` reads `source=` as `alias=` carries the
+    /// user's name as `alias`, and its producer's name as `__producer__`.
     pub(crate) fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
-        self.labels
-            .iter()
-            .all(|(k, v)| labels.get(k).is_some_and(|got| got == v))
+        self.labels.iter().all(|(k, v)| {
+            let has = |key: &str| labels.get(key).is_some_and(|got| got == v);
+            if k == SOURCE {
+                has(SOURCE) || has("alias") || has("__producer__")
+            } else {
+                has(k)
+            }
+        })
     }
 
     /// The index of the single recording this selector names.
@@ -447,6 +465,21 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    /// `source=X` selects a recording whose `source`, `alias` or
+    /// `__producer__` is `X`; any other key matches only itself.
+    #[test]
+    fn source_selects_by_source_alias_or_producer() {
+        let sel = RecordingSelector::parse("--recording", ["source=web".to_string()]).unwrap();
+        assert!(sel.matches(&labels(&[("source", "web")])));
+        assert!(sel.matches(&labels(&[("alias", "web")])));
+        assert!(sel.matches(&labels(&[("__producer__", "web")])));
+        assert!(!sel.matches(&labels(&[("host", "web")])));
+        let candidates = [labels(&[("alias", "web")]), labels(&[("alias", "db")])];
+        assert_eq!(sel.resolve(&candidates), Ok(0));
+        let host = RecordingSelector::parse("--recording", ["host=web".to_string()]).unwrap();
+        assert!(!host.matches(&labels(&[("alias", "web")])));
     }
 
     #[test]

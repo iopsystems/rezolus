@@ -70,6 +70,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "filesystem",
     "gpu_amd_pmu",
     "gpu_amd_smi",
+    "gpu_amd_sysfs",
     "gpu_apple",
     "gpu_intel_pmu",
     "gpu_nvidia",
@@ -80,6 +81,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "memory_slabinfo",
     "memory_vmstat",
     "memory_writeback",
+    "network_efa",
     "network_ethtool",
     "network_interfaces",
     "network_traffic",
@@ -92,6 +94,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+    "thermal_pressure",
     "xfs_log",
     "xfs_stats",
 ];
@@ -168,6 +171,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_scheduler_context_switch", "scheduler"),
     ("cgroup_scheduler_offcpu", "scheduler"),
     ("cgroup_scheduler_runqueue_wait", "scheduler"),
+    ("cgroup_scheduler_uninterruptible_wait", "scheduler"),
     ("cgroup_syscall", "syscall"),
     ("cgroup_xfs_log_wait_time", "xfs_log"),
     ("cgroup_xfs_log_waits", "xfs_log"),
@@ -193,6 +197,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cpu_mperf", "cpu_frequency"),
     ("cpu_package_energy", "cpu_power"),
     ("cpu_platform_energy", "cpu_power"),
+    ("cpu_soc_energy", "cpu_power"),
     ("cpu_tsc", "cpu_frequency"),
     ("drive_performance_exceeded_time", "drivehealth"),
     ("drive_queue_length", "drivehealth"),
@@ -249,9 +254,11 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("gpu_engine_busy_time", "gpu_intel_pmu"),
     ("gpu_frequency_sample", "gpu_intel_pmu"),
     ("gpu_pcie_bandwidth", "gpu_nvidia"),
+    ("gpu_rail_power", "gpu_amd_sysfs"),
     ("gpu_sm_occupancy", "gpu_nvidia"),
     ("gpu_sm_utilization", "gpu_nvidia"),
     ("gpu_tensor_utilization", "gpu_nvidia"),
+    ("gpu_throttle_status", "gpu_amd_sysfs"),
     ("memory_active", "memory_meminfo"),
     ("memory_anon", "memory_meminfo"),
     ("memory_available", "memory_meminfo"),
@@ -259,6 +266,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("memory_cached", "memory_meminfo"),
     ("memory_commit_limit", "memory_meminfo"),
     ("memory_committed", "memory_meminfo"),
+    ("memory_compressed", "memory_meminfo"),
+    ("memory_compressed_stored", "memory_meminfo"),
     ("memory_dirty", "memory_meminfo"),
     ("memory_free", "memory_meminfo"),
     ("memory_hardware_corrupted", "memory_meminfo"),
@@ -286,6 +295,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("memory_allocation_stalls", "memory_vmstat"),
     ("memory_compaction_stalls", "memory_vmstat"),
     ("memory_compactions", "memory_vmstat"),
+    ("memory_compressions", "memory_vmstat"),
+    ("memory_decompressions", "memory_vmstat"),
     ("memory_dirty_threshold", "memory_vmstat"),
     ("memory_major_page_faults", "memory_vmstat"),
     ("memory_numa_balancing_hint_faults", "memory_vmstat"),
@@ -293,6 +304,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("memory_numa_balancing_pte_updates", "memory_vmstat"),
     ("memory_oom_kills", "memory_vmstat"),
     ("memory_page_faults", "memory_vmstat"),
+    ("memory_pageins", "memory_vmstat"),
+    ("memory_pageouts", "memory_vmstat"),
     ("memory_reclaim_reclaimed", "memory_vmstat"),
     ("memory_reclaim_scanned", "memory_vmstat"),
     ("memory_swap_in", "memory_vmstat"),
@@ -304,15 +317,18 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("memory_workingset_refaults", "memory_vmstat"),
     ("memory_workingset_restores", "memory_vmstat"),
     ("memory_percpu", "memory_meminfo"),
+    ("memory_purgeable", "memory_meminfo"),
     ("memory_shmem", "memory_meminfo"),
     ("memory_slab_cache_bytes", "memory_slabinfo"),
     ("memory_slab_cache_objects", "memory_slabinfo"),
     ("memory_slab", "memory_meminfo"),
+    ("memory_speculative", "memory_meminfo"),
     ("memory_swap_cached", "memory_meminfo"),
     ("memory_swap_free", "memory_meminfo"),
     ("memory_swap_total", "memory_meminfo"),
     ("memory_total", "memory_meminfo"),
     ("memory_unevictable", "memory_meminfo"),
+    ("memory_wired", "memory_vmstat"),
     ("memory_writeback", "memory_meminfo"),
     ("network_bytes", "network_traffic"),
     ("network_drop", "network_interfaces"),
@@ -330,9 +346,12 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ),
     ("network_ena_pps_allowance_exceeded", "network_ethtool"),
     // Not prefix-recoverable: the sampler is `network_traffic`, and neither
-    // host-boundary name starts with it.
+    // host-boundary name starts with it, nor do the macOS interface errors
+    // and drops.
     ("network_host_bytes", "network_traffic"),
     ("network_host_packets", "network_traffic"),
+    ("network_interface_drops", "network_traffic"),
+    ("network_interface_errors", "network_traffic"),
     ("network_packets", "network_traffic"),
     ("network_transmit_busy", "network_interfaces"),
     ("network_transmit_complete", "network_interfaces"),
@@ -511,25 +530,29 @@ const BPF_SAMPLERS: &[&str] = &[
 ///   reporting into its usage sampler rather than having a standalone
 ///   `cpu_cores` one) — same name, different true sampler depending on
 ///   platform.
-/// - `gpu_clock`, `gpu_energy_consumption`, `gpu_power_usage`,
-///   `gpu_utilization`: shared vocabulary across `gpu_amd_smi`,
-///   `gpu_apple`, and `gpu_nvidia`.
+/// - `gpu_clock`, `gpu_power_usage`, `gpu_utilization`: shared vocabulary
+///   across `gpu_amd_smi`, `gpu_amd_sysfs`, `gpu_apple`, and `gpu_nvidia`.
+/// - `gpu_energy_consumption`: the same, without `gpu_amd_sysfs`.
 /// - `gpu_memory`: shared between `gpu_amd_smi`, `gpu_intel_pmu` and
 ///   `gpu_nvidia`. The Intel sampler publishes VRAM under the same
 ///   vendor-neutral name and labels, so cross-vendor dashboards work
 ///   unchanged; it is discrete-only, since an integrated GPU has no
 ///   device-local memory region.
 /// - `gpu_memory_utilization`, `gpu_pcie_throughput`, `gpu_temperature`:
-///   shared between `gpu_amd_smi` and `gpu_nvidia` only (no macOS/`gpu_apple`
-///   equivalent — `gpu/macos/stats.rs` declares no metric under these names;
-///   and the i915 PMU exposes no memory-controller or PCIe counter).
+///   shared between `gpu_amd_smi` and `gpu_nvidia`, and for `gpu_temperature`
+///   `gpu_amd_sysfs` (no macOS/`gpu_apple` equivalent —
+///   `gpu/macos/apple/stats.rs` declares no metric under these names; and the
+///   i915 PMU exposes no memory-controller or PCIe counter).
 /// - `rezolus_bpf_run_count`, `rezolus_bpf_run_time`: see [`BPF_SAMPLERS`].
 ///
 /// Sorted alphabetically by name; each candidate list sorted alphabetically
 /// too.
 pub(crate) const AMBIGUOUS_METRICS: &[(&str, &[&str])] = &[
     ("cpu_cores", &["cpu_cores", "cpu_usage"]),
-    ("gpu_clock", &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"]),
+    (
+        "gpu_clock",
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_apple", "gpu_nvidia"],
+    ),
     (
         "gpu_energy_consumption",
         &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
@@ -542,12 +565,15 @@ pub(crate) const AMBIGUOUS_METRICS: &[(&str, &[&str])] = &[
     ("gpu_pcie_throughput", &["gpu_amd_smi", "gpu_nvidia"]),
     (
         "gpu_power_usage",
-        &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_apple", "gpu_nvidia"],
     ),
-    ("gpu_temperature", &["gpu_amd_smi", "gpu_nvidia"]),
+    (
+        "gpu_temperature",
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_nvidia"],
+    ),
     (
         "gpu_utilization",
-        &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
+        &["gpu_amd_smi", "gpu_amd_sysfs", "gpu_apple", "gpu_nvidia"],
     ),
     ("rezolus_bpf_run_count", BPF_SAMPLERS),
     ("rezolus_bpf_run_time", BPF_SAMPLERS),
@@ -763,6 +789,25 @@ mod tests {
         assert!(!c.subsystems_absent.contains(&"gpu_nvidia".to_string()));
         // unrelated domains still assert absence.
         assert!(c.subsystems_absent.contains(&"cpu_usage".to_string()));
+    }
+
+    #[test]
+    fn gpu_amd_sysfs_is_a_source_of_its_own_and_its_shared_metrics() {
+        for name in ["gpu_rail_power", "gpu_throttle_status"] {
+            assert!(METRIC_SAMPLERS.contains(&(name, "gpu_amd_sysfs")), "{name}");
+        }
+        for name in [
+            "gpu_clock",
+            "gpu_power_usage",
+            "gpu_temperature",
+            "gpu_utilization",
+        ] {
+            let (_, candidates) = AMBIGUOUS_METRICS
+                .iter()
+                .find(|(ambiguous, _)| *ambiguous == name)
+                .unwrap();
+            assert!(candidates.contains(&"gpu_amd_sysfs"), "{name}");
+        }
     }
 
     #[test]

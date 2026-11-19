@@ -219,6 +219,86 @@
           ]
         },
         {
+          "name": "Uninterruptible Sleep",
+          "description": "Time tasks spent off-CPU in uninterruptible sleep (D state): waiting on disk IO, some locks, or page faults on slow storage. A sleep is added in full when the task next runs, so Tasks is the mean number of tasks in D state only over windows much longer than the sleeps: a long sleep shows as a spike when it ends, and a task still blocked is not counted yet.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Uninterruptible Rate",
+                "id": "uninterruptible-time-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(histogram_irate(scheduler_uninterruptible))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Uninterruptible Mean/Total",
+                "id": "uninterruptible-time-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(scheduler_uninterruptible)",
+              "promql_query_total": "histogram_sum(scheduler_uninterruptible)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Uninterruptible Time",
+                "id": "uninterruptible-time",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Time",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "scheduler_uninterruptible"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Tasks",
+                "id": "uninterruptible-tasks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(scheduler_uninterruptible_wait[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
           "name": "Context Switches",
           "description": "Involuntary context-switch rate, aggregate and per-core.",
           "plots": [

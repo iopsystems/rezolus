@@ -54,8 +54,12 @@ fn bounds(series: &[Series]) -> ([f64; 2], [f64; 2]) {
         for &(x, y) in &s.points {
             xmin = xmin.min(x);
             xmax = xmax.max(x);
-            ymin = ymin.min(y);
-            ymax = ymax.max(y);
+            // A +Inf quantile (one past a histogram's highest finite bucket)
+            // would make the y range infinite; `draw_lines` does not draw it.
+            if y.is_finite() {
+                ymin = ymin.min(y);
+                ymax = ymax.max(y);
+            }
         }
     }
     if !xmin.is_finite() {
@@ -79,27 +83,61 @@ fn bounds(series: &[Series]) -> ([f64; 2], [f64; 2]) {
     ([xmin, xmax], [ymin, ymax])
 }
 
+/// The runs of consecutive finite points in `points`. A non-finite value (a
+/// +Inf quantile, one past a histogram's highest finite bucket) ends a run,
+/// so it is drawn as a gap rather than a line joining its neighbours.
+fn finite_runs(points: &[(f64, f64)]) -> Vec<Vec<(f64, f64)>> {
+    points
+        .split(|p| !p.1.is_finite())
+        .filter(|run| !run.is_empty())
+        .map(<[(f64, f64)]>::to_vec)
+        .collect()
+}
+
 fn draw_lines(f: &mut Frame, area: Rect, block: Block, unit: Option<&str>, series: &[Series]) {
     let (xb, yb) = bounds(series);
     // Downsample each series to about one bucket per horizontal cell (braille
     // gives ~2 sub-columns/cell), keeping per-bucket min/max so spikes survive
     // and ratatui iterates O(width) points per frame instead of the full,
-    // possibly thousands-long, series. `reduced` outlives the `Chart` below.
+    // possibly thousands-long, series. `runs` outlives the `Chart` below.
     let target = (area.width as usize).saturating_mul(2).max(1);
-    let reduced: Vec<Vec<(f64, f64)>> = series
-        .iter()
-        .map(|s| min_max_decimate(&s.points, target))
-        .collect();
-    let datasets: Vec<Dataset> = series
+    // Each series is drawn as one dataset per run of finite points
+    // (`finite_runs`), so a non-finite value is a gap; `bounds` leaves it out
+    // of the y range. Each run gets its share of the cell budget. Only a
+    // series' first run is named, so the legend lists the series once
+    // (ratatui leaves an unnamed dataset out of it).
+    let runs: Vec<(usize, Vec<(f64, f64)>)> = series
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            Dataset::default()
-                .name(s.label.clone())
+        .flat_map(|(i, s)| {
+            let total = s.points.len().max(1);
+            // A series with no finite point keeps one empty dataset, so it
+            // is still named in the legend.
+            let mut runs = finite_runs(&s.points);
+            if runs.is_empty() {
+                runs.push(Vec::new());
+            }
+            runs.into_iter().map(move |run| {
+                let share = (target * run.len()).div_ceil(total).max(1);
+                (i, min_max_decimate(&run, share))
+            })
+        })
+        .collect();
+    let mut named = vec![false; series.len()];
+    let datasets: Vec<Dataset> = runs
+        .iter()
+        .map(|(i, run)| {
+            let dataset = Dataset::default()
                 .marker(symbols::Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(Style::default().fg(PALETTE[i % PALETTE.len()]))
-                .data(&reduced[i])
+                .data(run);
+            if named[*i] {
+                dataset
+            } else {
+                named[*i] = true;
+                dataset.name(series[*i].label.clone())
+            }
         })
         .collect();
 
@@ -152,6 +190,81 @@ mod tests {
             points: vec![(0.0, 1.0), (1.0, 2.0), (2.0, 1.5)],
         }]);
         render(&data, 60, 20);
+    }
+
+    #[test]
+    fn a_series_splits_into_runs_at_non_finite_values() {
+        let pts = [
+            (0.0, 1.0),
+            (1.0, 2.0),
+            (2.0, f64::INFINITY),
+            (3.0, 2.0),
+            (4.0, f64::NAN),
+            (5.0, f64::NEG_INFINITY),
+            (6.0, 1.0),
+        ];
+        assert_eq!(
+            finite_runs(&pts),
+            vec![
+                vec![(0.0, 1.0), (1.0, 2.0)],
+                vec![(3.0, 2.0)],
+                vec![(6.0, 1.0)]
+            ]
+        );
+        assert!(finite_runs(&[(0.0, f64::INFINITY)]).is_empty());
+    }
+
+    /// A +Inf quantile is a gap: the line stops before it and starts again
+    /// after it, rather than joining its neighbours.
+    #[test]
+    fn an_infinite_value_is_a_gap_in_the_line() {
+        let series = |points: Vec<(f64, f64)>| {
+            vec![Series {
+                label: "p99".into(),
+                points,
+            }]
+        };
+        let with = series(vec![
+            (0.0, 1.0),
+            (1.0, 3.0),
+            (2.0, f64::INFINITY),
+            (3.0, 1.0),
+            (4.0, 3.0),
+        ]);
+        assert_eq!(bounds(&with).1, [1.0, 3.0]);
+        let gap = render_text(&ChartData::Lines(with), 40, 15);
+        let joined = render_text(
+            &ChartData::Lines(series(vec![(0.0, 1.0), (1.0, 3.0), (3.0, 1.0), (4.0, 3.0)])),
+            40,
+            15,
+        );
+        assert!(
+            gap.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c)),
+            "the finite runs are drawn: {gap:?}"
+        );
+        assert_ne!(gap, joined, "the line is not joined across the +Inf point");
+        // The legend names the series once.
+        assert_eq!(gap.matches("p99").count(), 1, "{gap:?}");
+    }
+
+    /// A series with no finite point draws nothing but stays in the legend.
+    #[test]
+    fn a_series_with_no_finite_point_is_still_in_the_legend() {
+        let data = ChartData::Lines(vec![
+            Series {
+                label: "p50".into(),
+                points: vec![(0.0, 1.0), (1.0, 2.0)],
+            },
+            Series {
+                label: "p99".into(),
+                points: vec![(0.0, f64::INFINITY), (1.0, f64::INFINITY)],
+            },
+        ]);
+        // Tall enough for ratatui to show a two-entry legend (at most a
+        // quarter of the chart's height).
+        let text = render_text(&data, 40, 30);
+        assert_eq!(text.matches("p50").count(), 1, "{text:?}");
+        assert_eq!(text.matches("p99").count(), 1, "{text:?}");
     }
 
     #[test]

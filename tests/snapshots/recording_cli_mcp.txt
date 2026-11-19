@@ -37,7 +37,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -68,7 +68,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -93,7 +93,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -120,7 +120,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -133,9 +133,20 @@
         "name": "detect_anomalies"
       },
       {
-        "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window.",
+        "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window. Points are at the multiples of step (counted from the Unix epoch) from start to end: by default every second of the recording, or a coarser whole-second step on a recording of more than a million seconds. A query combining samplers of different cadence is evaluated at the slower one's rows instead, and histogram_quantile() and the other histogram functions without a stride argument give one point per row that holds observations, wherever the step falls (a gauge histogram gives one per step); histogram_quantiles([q], h, STEP) gives one per step. With summarize, each series is returned as statistics (points, active, min, max, mean, p50, p90, p99) instead of its points; above restricts the statistics to points above a threshold, such as the seconds a workload was running.",
         "inputSchema": {
           "properties": {
+            "above": {
+              "description": "With summarize (refused without it): the active points are those strictly above this value, so the statistics leave out idle seconds. Without it, every point that is not NaN is active. NaN is never active.",
+              "type": "number"
+            },
+            "end": {
+              "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
             "parquet_file": {
               "description": "Path to the recording (.dendro)",
               "type": "string"
@@ -148,8 +159,26 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
+            },
+            "start": {
+              "description": "Start of the window: an RFC 3339 string or Unix seconds as a JSON number (a digit-only string is refused). Defaults to the recording's start. A rate() at start reads data from before it.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "step": {
+              "description": "Time between evaluations: a humantime string (10s, 500ms, 1m) or seconds as a JSON number, fractional allowed (a digit-only string is refused). Defaults to 1 second, or a coarser whole number of seconds that keeps the window within 1,000,000 points. irate() is the rate over one step, so a larger step also averages over a longer interval.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "summarize": {
+              "description": "Return each series as statistics over its points instead of the points: resultType summary, with start, end and step, and per series its labels (metric), points, active, and min, max, mean, p50, p90 and p99 over the active points (left out when active is 0). A percentile is the nearest rank. Defaults to false.",
+              "type": "boolean"
             }
           },
           "required": [
@@ -172,7 +201,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -230,7 +259,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             },
             "source": {
@@ -278,7 +307,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             }
           },
@@ -288,50 +317,6 @@
           "type": "object"
         },
         "name": "run_checks"
-      },
-      {
-        "description": "Run a PromQL range query over the whole recording and write the result as a CSV or parquet file under the server's export directory (`rezolus mcp --export-dir`), for analysis outside PromQL. Long form: one row per series and timestamp with columns series, timestamp (Unix seconds), value, lo, hi (the rate() uncertainty band, else empty). Returns the path. Refused without an export directory, never overwrites, the filename must be bare, and a result over 1,000,000 rows is refused with a hint to raise step or aggregate.",
-        "inputSchema": {
-          "properties": {
-            "filename": {
-              "description": "A bare file name (no directories); the format's extension is added when missing. Derived from the query when omitted.",
-              "type": "string"
-            },
-            "format": {
-              "description": "Default csv.",
-              "enum": [
-                "csv",
-                "parquet"
-              ],
-              "type": "string"
-            },
-            "parquet_file": {
-              "description": "Path to the recording (.dendro)",
-              "type": "string"
-            },
-            "query": {
-              "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead.",
-              "type": "string"
-            },
-            "recording": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
-              "type": "object"
-            },
-            "step": {
-              "description": "Evaluation step in seconds. Default 1.",
-              "type": "number"
-            }
-          },
-          "required": [
-            "parquet_file",
-            "query"
-          ],
-          "type": "object"
-        },
-        "name": "export_query"
       },
       {
         "description": "Build a link that opens a running rezolus viewer at a section (or one chart) with the view state set: time range, time mode, node, GPU, cgroup, service instance, family baseline and compare anchors. Opens nothing and reads no recording. Returns the hash fragment and query string, and a full URL when viewer_url is given or the server was started with --viewer-url. Hand the URL to the person so they land on the chart you are describing.",
@@ -442,7 +427,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"alias\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
               "type": "object"
             },
             "source": {

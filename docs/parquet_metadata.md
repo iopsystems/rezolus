@@ -139,17 +139,25 @@ Identifies the recording's source(s).
 - Combined file: a JSON array of source names, e.g. `["rezolus","vllm"]`
   (deduplicated and sorted).
 
-**Set at record time:** Inferred automatically from the endpoint type; can
-also be overridden via `--metadata source=<name>`. For non-rezolus endpoints
-the source is what you tell it (or what's inferred from labels); the viewer
-picks a built-in KPI template by it.
+**Set at record time** in a parquet written by a 5.x recorder, inferred from
+the endpoint type unless `--metadata source=<name>` gave it; the viewer picks
+a built-in KPI template by it. In a `.dendro` written by 6.x `record` the
+`source` label is the one the producer's handshake declares, and the
+recorder infers none; the user names a recording with `alias=` on
+`--endpoint`, and `source=` there, `--label source=` and `--metadata source=`
+with `--url` are read as `alias`. The recording has a `source` metadata key
+only when its producer's handshake metadata carries one, or when `--metadata
+source=` is given with `--endpoint` or `--config`, where it applies to every
+recording of the run as plain metadata.
 
 **Not set after recording in 6.x.** A 5.x `recording annotate --source NAME`
 (`--overwrite` to replace one) rewrote this key. In a `.dendro` the source is
-a label of the recording, set when it is recorded (`record --endpoint
-URL,source=NAME`), and 6.x does not relabel a recording: `annotate --source`
-is refused. A parquet file's `source` becomes its recording's `source` label
-when it is converted (`recording upgrade`, or any edit given `-o`).
+a label of the recording, its producer's, and the user's name for it is its
+`alias` label, set when it is recorded (`record --endpoint URL,alias=NAME`);
+6.x does not relabel a recording: `annotate --source` is refused. A parquet file's `source` becomes its recording's `source` label
+when `recording upgrade` converts it. A combined file becomes one recording
+per input file, each labelled with that input's `source` and its `node` or
+`instance`.
 
 **In a `.rez`** the source appears both as a recording label and in the
 recording's `metadata` map; it is always `rezolus` (the format required a
@@ -168,14 +176,21 @@ numbers?") is about the agent. The recorder reads it from the agent's `/status`
 endpoint, falling back to the `Rezolus <version> Agent` banner on `/` for
 agents older than `/status` (5.16.0). `record --metadata version=...`
 overrides it. When the agent restarts mid-recording, an archive's `version`
-becomes the new process's (see [`producer_epochs`](#producer_epochs)), unless
-it was set with `--metadata`.
+becomes the new process's (the restart's epoch entry in the recorder layer
+carries it; see [`producer_epoch`](#producer_epoch)), unless it was set with
+`--metadata`.
 
 **Absent, rather than empty, when there is nothing to record**: a Prometheus
 source has no agent, and recorders that predate the capture wrote no version
 at all. `mcp describe-recording` renders those as `unknown`.
 
 ### `producer_epoch`
+
+Written by recorders before rezolus 6.0.0-alpha.119 (metriken-recorder 0.5),
+and read from archives they wrote. A recording made since keeps each producer
+epoch as an entry in its recorder layer (`metriken.layer.recorder`), with its
+`from_ts` and the `version` the process reported, in place of this key and
+[`producer_epochs`](#producer_epochs).
 
 An opaque id — a v4 UUID — minted once per agent **process**. It changes when,
 and only when, every cumulative counter in the recording restarted from zero
@@ -206,17 +221,20 @@ restart boundary nobody observed).
 Name and semantics follow dendro's `keys::PRODUCER_EPOCH`, so an archive written
 here reads the same to any consumer of that format.
 
-**When the agent restarts mid-recording**, an archive (`.dendro` or `.rez`,
-written by `record` or by `hindsight`) is amended once the first row from the
-new process is staged: `producer_epoch` becomes the new epoch,
-[`producer_epochs`](#producer_epochs) gains an entry, and `version`,
-`systeminfo` and `descriptions` are read again from the new process. A parquet
+**When the agent restarted mid-recording**, an archive (`.dendro` or `.rez`,
+written by `record` or by `hindsight`) was amended by such a recorder once
+the first row from the new process was staged: `producer_epoch` became the new
+epoch, [`producer_epochs`](#producer_epochs) gained an entry, and `version`,
+`systeminfo` and `descriptions` were read again from the new process. A parquet
 recording writes its metadata once, when it closes: `producer_epoch` is the
 last epoch seen, `version`, `systeminfo` and `descriptions` are what the agent
 reported when the recording opened, and there is no history; the recorder's
 warning naming both epochs is the record of the restart.
 
 ### `producer_epochs`
+
+Written by recorders before rezolus 6.0.0-alpha.119, as
+[`producer_epoch`](#producer_epoch) is.
 
 Every producer epoch an archive observed, in order, as a JSON array:
 
@@ -270,7 +288,7 @@ interval, since a real target can't be slower than the cadence you actually
 achieve. A declared value well above the average (more than 2×) is treated as a
 bogus default and the baseline falls back to the average of the real intervals.
 Same fallback when the field is absent. See `nominalMsFor` in
-`src/viewer/assets/lib/charts/jitter.js`.
+metriken-charts' `assets/charts/jitter.js`.
 
 **Raw vs. grid-snapped timestamps.** Jitter is only observable on the raw
 `timestamp` column. The viewer's charts are evaluated on a step grid
@@ -359,7 +377,8 @@ carry its own KPI definitions.
 # Embed a KPI file into every recording of an archive
 target/release/rezolus recording annotate run.dendro --queries my_kpis.json
 
-# Remove the KPIs
+# Remove the KPIs annotate embedded (on a recording with identity layers,
+# the template its producer sent, or record's, is used again)
 target/release/rezolus recording annotate run.dendro --undo
 
 # A parquet file or .rez is not changed: the result is a new .dendro
@@ -535,6 +554,71 @@ Top-level key only used in combined files. Value is a nested JSON object:
 The recorder writes a partial `per_source_metadata` even for single-source
 files so it can stash per-source `first_sample_ns`, `last_sample_ns`, and
 `role` without polluting the top level.
+
+`recording upgrade` converts a combined file (written by 5.x `recording
+combine`, or by the 5.x recorder given several endpoints) into one recording
+per input.
+
+- An input is the columns labelled with one `source` and one `node`
+  (rezolus, and a column with no `instance` whose name starts with
+  `<node>::`) or `instance` (any other source), and each recording also
+  holds the timestamp and duration columns.
+- A column whose `source` is an exporter's own label (5.x combine kept it
+  in place of the input's) forms a recording of that name: the file does
+  not say which input it came from.
+- Columns that share a `source` and `node` or `instance` can come from
+  several inputs (two exporters' columns with one foreign `source`, or a
+  re-combined file's inputs). 5.x combine wrote each input's columns
+  together, and one input's columns have distinct names after the last
+  `::` in each (combine's `<node|instance>::` prefixes come before it).
+  When the latest recording with those labels already holds a column with
+  the same name after its last `::` and the same field metadata (apart
+  from `source` and the `node` or `instance`), the column starts another
+  recording with the same labels.
+- A recording is labelled with its `source` and its `node` or `instance`,
+  and its series do not repeat those labels. The first rezolus recording
+  is written first, and the others follow in the file's column order.
+- A recording's top-level metadata is its `source`; the keys written under
+  `per_source_metadata.<source>` itself (the recorder's `first_sample_ns`,
+  `last_sample_ns`, `role` and `sampler_status`, and `version`, which
+  combine builds before 5.10 wrote there; when several inputs share a
+  source, these are the first input's), then the keys of its entry;
+  its source's `descriptions`, else the file's; a top-level
+  `service_queries` whose `service_name` is its source; and the file's other
+  top-level keys (`sampling_interval_ms`, `events` and the rest).
+- The first rezolus recording (else the first) also takes the file's
+  `systeminfo` when its entry has none, its `selection`, and a top-level
+  `service_queries` that names no input or has no `service_name`. That
+  template reads only that recording's series, so its KPIs on other inputs'
+  metrics have no data.
+- A file whose `source` is an array but whose columns carry no `source`
+  label (the 5.x recorder, 5.21 and later, given an array `source` for one
+  endpoint) converts to one recording.
+
+Three cases are not split as their inputs were:
+
+- An input that was itself a combined file: its rezolus columns keep their
+  `node` and form a recording per node, and their series keep the outer
+  `instance` 5.x combine gave them as a label. Its other columns, which 5.x
+  combine gave the outer `instance`, are grouped with the other columns of
+  that `source` and `instance` as above.
+- An input all of whose columns carry an exporter's own `source` (an
+  exporter that labels every series, or a 5.x recorder before 5.21, which
+  labelled an endpoint's columns with the endpoint's name, a rezolus
+  agent's included) forms a recording of that name, without the input's
+  `per_source_metadata`. Two such inputs with one name are told apart by
+  `instance`, or by `node` when their columns carry no `instance` and their
+  names start with `<node>::`. When those labels are also equal, the second
+  input's columns join the first input's recording until one repeats a
+  series the first input holds (as above), and from that column on they
+  form a recording of their own with the same labels.
+- An A/B tarball's arm that is a combined file converts to one recording,
+  as every arm does.
+
+The `recording upgrade` summary names each `per_source_metadata` entry no
+recording uses (as `<source>/<entry>`), and each source of the file's
+`source` array with neither a recording nor an entry, since their metadata
+is not carried.
 
 ### Nested keys
 

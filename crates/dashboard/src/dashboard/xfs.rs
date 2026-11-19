@@ -36,19 +36,19 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          waiting on each other's log writes as well.",
     );
     forces.plot_promql(
-        PlotOpts::counter("Forces", "log-forces", Unit::Count),
+        Plot::counter("Forces", "log-forces", Unit::Count),
         rate("xfs_log_forces"),
     );
     forces.plot_promql(
-        PlotOpts::counter("Force Sleeps", "log-force-sleeps", Unit::Count),
+        Plot::counter("Force Sleeps", "log-force-sleeps", Unit::Count),
         rate("xfs_log_force_sleeps"),
     );
     forces.plot_promql(
-        PlotOpts::counter("Log Writes", "log-writes", Unit::Count),
+        Plot::counter("Log Writes", "log-writes", Unit::Count),
         rate("xfs_log_writes"),
     );
     forces.plot_promql(
-        PlotOpts::counter("Log Bytes", "log-bytes", Unit::Datarate),
+        Plot::counter("Log Bytes", "log-bytes", Unit::Datarate),
         format!("{} * 512", rate("xfs_log_blocks_written")),
     );
 
@@ -60,15 +60,15 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          Buffer stalls are log writes that found every in-core log buffer in flight.",
     );
     space.plot_promql(
-        PlotOpts::counter("Space Requests", "log-space-requests", Unit::Count),
+        Plot::counter("Space Requests", "log-space-requests", Unit::Count),
         rate("xfs_log_space_requests"),
     );
     space.plot_promql(
-        PlotOpts::counter("Space Sleeps", "log-space-sleeps", Unit::Count),
+        Plot::counter("Space Sleeps", "log-space-sleeps", Unit::Count),
         rate("xfs_log_space_sleeps"),
     );
     space.plot_promql(
-        PlotOpts::counter("Buffer Stalls", "log-iclog-stalls", Unit::Count),
+        Plot::counter("Buffer Stalls", "log-iclog-stalls", Unit::Count),
         rate("xfs_log_iclog_stalls"),
     );
 
@@ -79,26 +79,26 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          pusher forcing the log itself because everything was pinned.",
     );
     ail.plot_promql(
-        PlotOpts::counter("Pushes", "ail-pushes", Unit::Count),
+        Plot::counter("Pushes", "ail-pushes", Unit::Count),
         rate("xfs_ail_pushes"),
     );
     ail.plot_promql(
-        PlotOpts::counter("Items by Outcome", "ail-items", Unit::Count),
+        Plot::counter("Items by Outcome", "ail-items", Unit::Count),
         "sum by (outcome) (irate(xfs_ail_push_items[5m]))".to_string(),
     );
     ail.plot_promql(
-        PlotOpts::counter("Restarts", "ail-restarts", Unit::Count),
+        Plot::counter("Restarts", "ail-restarts", Unit::Count),
         rate("xfs_ail_push_restarts"),
     );
     ail.plot_promql(
-        PlotOpts::counter("Flushes", "ail-flushes", Unit::Count),
+        Plot::counter("Flushes", "ail-flushes", Unit::Count),
         rate("xfs_ail_flushes"),
     );
 
     let trans = log.subgroup("Transactions");
     trans.describe("Transactions committed, by whether the caller waited for the log.");
     trans.plot_promql(
-        PlotOpts::counter("By Kind", "transactions", Unit::Count),
+        Plot::counter("By Kind", "transactions", Unit::Count),
         "sum by (kind) (irate(xfs_transactions[5m]))".to_string(),
     );
 
@@ -113,15 +113,15 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          cold metadata cost of every stat and atime update.",
     );
     lookups.plot_promql(
-        PlotOpts::counter("By Outcome", "inode-lookups", Unit::Count),
+        Plot::counter("By Outcome", "inode-lookups", Unit::Count),
         "sum by (outcome) (irate(xfs_inode_cache_lookups[5m]))".to_string(),
     );
     lookups.plot_promql(
-        PlotOpts::counter("Misses", "inode-misses", Unit::Count),
+        Plot::counter("Misses", "inode-misses", Unit::Count),
         rate("xfs_inode_cache_lookups{outcome=\"missed\"}"),
     );
     lookups.plot_promql(
-        PlotOpts::counter("Reclaims", "inode-reclaims", Unit::Count),
+        Plot::counter("Reclaims", "inode-reclaims", Unit::Count),
         rate("xfs_inode_reclaims"),
     );
 
@@ -135,15 +135,15 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          fragmenting: files are being split across more, smaller extents.",
     );
     extents.plot_promql(
-        PlotOpts::counter("Extents", "extents", Unit::Count),
+        Plot::counter("Extents", "extents", Unit::Count),
         "sum by (op) (irate(xfs_extents[5m]))".to_string(),
     );
     extents.plot_promql(
-        PlotOpts::counter("Blocks", "extent-blocks", Unit::Count),
+        Plot::counter("Blocks", "extent-blocks", Unit::Count),
         "sum by (op) (irate(xfs_extent_blocks[5m]))".to_string(),
     );
     extents.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "Blocks per Extent Allocated",
             "blocks-per-extent",
             Unit::Count,
@@ -156,7 +156,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let dirs = alloc.subgroup("Directories");
     dirs.describe("Directory operations at the XFS layer.");
     dirs.plot_promql(
-        PlotOpts::counter("By Operation", "directory-ops", Unit::Count),
+        Plot::counter("By Operation", "directory-ops", Unit::Count),
         "sum by (op) (irate(xfs_directory_ops[5m]))".to_string(),
     );
 
@@ -170,11 +170,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          bytes and the device's write bytes is the write-amplification chain.",
     );
     files.plot_promql(
-        PlotOpts::counter("Calls", "file-calls", Unit::Count),
+        Plot::counter("Calls", "file-calls", Unit::Count),
         "sum by (op) (irate(xfs_file_calls[5m]))".to_string(),
     );
     files.plot_promql(
-        PlotOpts::counter("Bytes", "file-bytes", Unit::Datarate),
+        Plot::counter("Bytes", "file-bytes", Unit::Datarate),
         "sum by (op) (irate(xfs_file_bytes[5m]))".to_string(),
     );
 
@@ -184,19 +184,19 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          lookups that waited for or found a busy lock.",
     );
     buffers.plot_promql(
-        PlotOpts::counter("Lookups", "buffer-lookups", Unit::Count),
+        Plot::counter("Lookups", "buffer-lookups", Unit::Count),
         rate("xfs_buffer_lookups"),
     );
     buffers.plot_promql(
-        PlotOpts::counter("Misses", "buffer-misses", Unit::Count),
+        Plot::counter("Misses", "buffer-misses", Unit::Count),
         rate("xfs_buffer_misses"),
     );
     buffers.plot_promql(
-        PlotOpts::counter("Reads", "buffer-reads", Unit::Count),
+        Plot::counter("Reads", "buffer-reads", Unit::Count),
         rate("xfs_buffer_reads"),
     );
     buffers.plot_promql(
-        PlotOpts::counter("Lock Waits", "buffer-lock-waits", Unit::Count),
+        Plot::counter("Lock Waits", "buffer-lock-waits", Unit::Count),
         rate("xfs_buffer_lock_waits"),
     );
 
@@ -218,15 +218,15 @@ fn blocked_time(view: &mut View) {
          cannot say.",
     );
     space.plot_promql(
-        PlotOpts::histogram_latency("Log Space Wait Latency", "blocked-space-latency"),
+        Plot::histogram_latency("Log Space Wait Latency", "blocked-space-latency"),
         "xfs_log_wait_latency{wait=\"space\"}".to_string(),
     );
     space.plot_promql(
-        PlotOpts::counter("Log Space Waits", "blocked-space-waits", Unit::Count),
+        Plot::counter("Log Space Waits", "blocked-space-waits", Unit::Count),
         rate("xfs_log_waits{wait=\"space\"}"),
     );
     space.plot_promql(
-        PlotOpts::counter("Mean Log Space Wait", "blocked-space-mean", Unit::Time),
+        Plot::counter("Mean Log Space Wait", "blocked-space-mean", Unit::Time),
         "sum by (mount) (irate(xfs_log_wait_time{wait=\"space\"}[5m])) / \
          sum by (mount) (irate(xfs_log_waits{wait=\"space\"}[5m]))"
             .to_string(),
@@ -239,15 +239,15 @@ fn blocked_time(view: &mut View) {
          latency says whether the fsync is waiting on the device or on other commits.",
     );
     force.plot_promql(
-        PlotOpts::histogram_latency("Log Force Latency", "blocked-force-latency"),
+        Plot::histogram_latency("Log Force Latency", "blocked-force-latency"),
         "xfs_log_wait_latency{wait=\"force\"}".to_string(),
     );
     force.plot_promql(
-        PlotOpts::counter("Log Forces", "blocked-forces", Unit::Count),
+        Plot::counter("Log Forces", "blocked-forces", Unit::Count),
         rate("xfs_log_waits{wait=\"force\"}"),
     );
     force.plot_promql(
-        PlotOpts::counter("Mean Log Force Latency", "blocked-force-mean", Unit::Time),
+        Plot::counter("Mean Log Force Latency", "blocked-force-mean", Unit::Time),
         "sum by (mount) (irate(xfs_log_wait_time{wait=\"force\"}[5m])) / \
          sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"
             .to_string(),
@@ -260,7 +260,7 @@ fn blocked_time(view: &mut View) {
          commit rate.",
     );
     cil.plot_promql(
-        PlotOpts::counter("CIL Waits", "blocked-cil-waits", Unit::Count),
+        Plot::counter("CIL Waits", "blocked-cil-waits", Unit::Count),
         rate("xfs_log_waits{wait=\"cil\"}"),
     );
 

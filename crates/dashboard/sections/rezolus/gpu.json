@@ -383,7 +383,7 @@
       "subgroups": [
         {
           "name": "Power Draw",
-          "description": "Instantaneous power consumption, total and per-GPU.",
+          "description": "Power consumption, total and per-GPU. An AMD APU reports its whole socket, including the CPU cores.",
           "plots": [
             {
               "split": {
@@ -485,7 +485,7 @@
       "subgroups": [
         {
           "name": "Clock Frequencies",
-          "description": "Per-device clock speeds for graphics, memory, compute, and video engines.",
+          "description": "Per-device clock speeds for graphics, memory, compute, video, SoC and data fabric.",
           "plots": [
             {
               "kind": "gauge",
@@ -514,6 +514,20 @@
               "id": "clock-video",
               "unit": "frequency",
               "query": "sum by (id, vendor) (gpu_clock{clock=\"video\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "SoC",
+              "id": "clock-soc",
+              "unit": "frequency",
+              "query": "sum by (id, vendor) (gpu_clock{clock=\"soc\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Data Fabric",
+              "id": "clock-fabric",
+              "unit": "frequency",
+              "query": "sum by (id, vendor) (gpu_clock{clock=\"fabric\"})"
             }
           ]
         }
@@ -680,6 +694,57 @@
               "unit": "count",
               "query": "sum(irate(gpmu_vram_write_requests[5m]))",
               "axis_label": "requests/s"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "has_label": {
+          "metric": "gpu_rail_power",
+          "label": "rail"
+        }
+      },
+      "then": [
+        {
+          "name": "AMD APU Rails and Throttling",
+          "id": "amd-apu",
+          "subgroups": [
+            {
+              "name": "Rail Power",
+              "description": "Power per rail. The VDD rail also carries loads other than graphics.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "VDD Rail (W)",
+                  "id": "rail-power-vdd",
+                  "unit": "count",
+                  "query": "sum by (id, vendor) (gpu_rail_power{rail=\"vdd\"}) / 1000",
+                  "axis_label": "Watts"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "SoC Rail (W)",
+                  "id": "rail-power-soc",
+                  "unit": "count",
+                  "query": "sum by (id, vendor) (gpu_rail_power{rail=\"soc\"}) / 1000",
+                  "axis_label": "Watts"
+                }
+              ]
+            },
+            {
+              "name": "Throttling",
+              "description": "The firmware's throttle status bitmask, nonzero while a limit is active. A limit shorter than the sampling interval can be missed. docs/metrics.md lists the bits.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Throttle Status",
+                  "id": "throttle-status",
+                  "unit": "count",
+                  "query": "max by (id, vendor) (gpu_throttle_status)"
+                }
+              ]
             }
           ]
         }

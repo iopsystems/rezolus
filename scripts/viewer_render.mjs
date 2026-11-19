@@ -8,9 +8,9 @@
 // the disabled contrast tier, or a mithril keyed-fragment warning. This does.
 //
 // It lives in `scripts/` rather than `tests/` on purpose: CI runs
-// `node --test tests/*.mjs`, and that glob takes every `.mjs` in the directory,
-// not just `*.test.mjs` — a tool parked there is executed as a test and fails
-// the suite.
+// `node --import ./tests/support/charts.mjs --test tests/*.mjs`, and that
+// glob takes every `.mjs` in the directory, not just `*.test.mjs` — a tool
+// parked there is executed as a test and fails the suite.
 //
 // It is deliberately NOT wired into CI: it needs a browser on the machine and a
 // puppeteer-core install that this repo does not carry (see the `viewer-render`

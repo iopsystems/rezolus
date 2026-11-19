@@ -32,13 +32,23 @@ pub struct Sampler {
     /// last, the `task_rename` program unless `process_attribution` is on,
     /// the walk of the per-pid map each time a snapshot is served
     /// (the slots with metadata for V3, every slot for V2), and one series
-    /// per thread plus one per rename in every recording. `None` means the
-    /// default.
+    /// per thread still running at a snapshot after it has lived
+    /// `task_min_lifetime`, plus one per rename after its series appears,
+    /// in every recording. `None` means the default.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     task_attribution: Option<bool>,
+    /// How long a task must have lived before its per-task series is
+    /// exported (`cpu_usage`'s `task_cpu_usage`), as a humantime string.
+    /// A task that exits before then has no series of its own; its CPU is
+    /// still in the host total. With `snapshot_format = "v2"` the minimum
+    /// is 0. `None` means the default, one second.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    task_min_lifetime: Option<String>,
     /// Whether a sampler that keeps per-task accounting also keeps a total
-    /// per process (`cpu_usage`'s `process_cpu_usage`). Off by default; on,
+    /// per process (`cpu_usage`'s `process_cpu_usage`). Unset, it follows
+    /// `task_attribution`, so it is off by default; on,
     /// it costs two per-pid arrays (64 MiB) and a 256 KiB ring, a
     /// process-metadata event per new process and per leader rename, a
     /// task-exit event per process exit when `task_attribution` is off (one
@@ -47,14 +57,13 @@ pub struct Sampler {
     /// of the per-process map each time a snapshot is served, contention on
     /// a process's counter when its threads run on many CPUs (principle 7
     /// in `docs/principles.md`), and one series per process in every
-    /// recording. Independent of `task_attribution`. `None` means the
-    /// default.
+    /// recording. `None` means the value of `task_attribution`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     process_attribution: Option<bool>,
-    /// The parts of a sampler that merged several older ones, each on by
-    /// default (`syscall`: `counts`, `latency`; `blockio`: `requests`,
-    /// `latency`; `scheduler`: `runqueue`, `migrations`). See `Config::part`.
+    /// The parts of a sampler, each on by default (`syscall`: `counts`,
+    /// `latency`; `blockio`: `requests`, `latency`; `scheduler`: `runqueue`,
+    /// `migrations`; `hw_sensors`: `corsair_axi`). See `Config::part`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     counts: Option<bool>,
@@ -70,6 +79,9 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     migrations: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    corsair_axi: Option<bool>,
     /// Which slab caches `memory_slabinfo` publishes `memory_slab_cache_bytes`
     /// for: `"all"` (every cache in `/proc/slabinfo`, the default) or
     /// `"fixed"` (the filesystem metadata and page-cache index caches whose
@@ -111,6 +123,11 @@ impl Sampler {
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn task_min_lifetime(&self) -> Option<&str> {
+        self.task_min_lifetime.as_deref()
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn process_attribution(&self) -> Option<bool> {
         self.process_attribution
     }
@@ -133,10 +150,13 @@ impl Sampler {
         if self.migrations.is_some() {
             parts.push("migrations");
         }
+        if self.corsair_axi.is_some() {
+            parts.push("corsair_axi");
+        }
         parts
     }
 
-    /// The switch for one part of a merged sampler, if the section sets it.
+    /// The switch for one part of a sampler, if the section sets it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn part(&self, part: &str) -> Option<bool> {
         match part {
@@ -145,6 +165,7 @@ impl Sampler {
             "requests" => self.requests,
             "runqueue" => self.runqueue,
             "migrations" => self.migrations,
+            "corsair_axi" => self.corsair_axi,
             _ => None,
         }
     }
@@ -202,6 +223,12 @@ impl Sampler {
         if let Some(ref interval) = self.interval {
             if let Err(e) = interval.parse::<humantime::Duration>() {
                 eprintln!("sampler '{name}' interval couldn't be parsed: {e}");
+                std::process::exit(1);
+            }
+        }
+        if let Some(ref lifetime) = self.task_min_lifetime {
+            if let Err(e) = lifetime.parse::<humantime::Duration>() {
+                eprintln!("sampler '{name}' task_min_lifetime couldn't be parsed: {e}");
                 std::process::exit(1);
             }
         }

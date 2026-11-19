@@ -1,5 +1,6 @@
 import { expandLink, selectButton } from '../ui/chart_controls.js';
 import { collectGroupPlots } from '../features/group_utils.js';
+import { discoverCgroups, discoverEveryCapture } from '../features/cgroup_discovery.js';
 
 // The KPI templates a recording's metadata carries, one per source:
 // `per_source_metadata.<source>.<entry>.service_queries` (a combined parquet;
@@ -300,6 +301,17 @@ const createMetadataView = () => {
     };
 };
 
+// How the cgroup selector discovers cgroups: a function resolving to the
+// names. In a comparison it searches every capture (`captureQueries` over
+// `scopedQuery`, the selected node applied to each query), so the selector
+// lists a cgroup any capture recorded; otherwise it searches the baseline
+// through `baselineQuery`.
+const cgroupDiscover = ({ compare, baselineQuery, scopedQuery, withNode, captureQueries }) =>
+    (compare
+        ? async () => discoverEveryCapture(
+            (await captureQueries(scopedQuery)).map((query) => (q) => query(withNode(q))))
+        : () => discoverCgroups(baselineQuery));
+
 const renderCgroupSection = ({
     attrs,
     titleText,
@@ -308,10 +320,13 @@ const renderCgroupSection = ({
     Chart,
     CgroupSelector,
     executePromQLRangeQuery,
+    discover = () => discoverCgroups(executePromQLRangeQuery),
     applyResultToPlot,
     substituteCgroupPattern,
     setActiveCgroupPattern,
     globalColorMapper,
+    compare = false,
+    Group = null,
 }) => {
     // `/cgroups`, or `/cgroups@<key>` for another recording of a combined
     // archive: the expand link and the selection name this section's route.
@@ -357,12 +372,26 @@ const renderCgroupSection = ({
         m(CgroupSelector, {
             groups: attrs.groups,
             executeQuery: executePromQLRangeQuery,
+            discover,
             applyResultToPlot: applyResultToPlot,
             substitutePattern: substituteCgroupPattern,
             setActiveCgroupPattern: (p) => { setActiveCgroupPattern(p); },
             sectionRoute,
         }),
-        m('div.cgroup-pairs',
+        // In compare mode each pair is a Group: its charts draw every
+        // capture, and the individual chart one overlay per selected
+        // cgroup or group.
+        compare ? pairs.map((pair) => m(Group, {
+            key: pair.left?.opts?.title || pair.right?.opts?.title || '',
+            name: pair.left?.opts?.title || pair.right?.opts?.title || '',
+            subgroups: [
+                { name: 'Aggregate', plots: pair.left ? [pair.left] : [] },
+                { name: 'Individual', plots: pair.right ? [pair.right] : [] },
+            ],
+            sectionRoute,
+            sectionName,
+            interval,
+        })) : m('div.cgroup-pairs',
             pairs.map((pair) => {
                 const title = pair.left?.opts?.title || pair.right?.opts?.title || '';
                 const description = pair.left?.opts?.description || pair.right?.opts?.description;
@@ -397,4 +426,4 @@ const renderCgroupSection = ({
     ]);
 };
 
-export { createSystemInfoView, createMetadataView, renderCgroupSection, collectServiceQueries };
+export { createSystemInfoView, createMetadataView, renderCgroupSection, cgroupDiscover, collectServiceQueries };

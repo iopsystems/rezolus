@@ -119,21 +119,24 @@
 //! use, so a template that makes the same calls renders the same JSON:
 //! `kind` is `gauge` or `counter` (which need a `unit`), `histogram` (a
 //! `unit` and a `subtype`, `percentiles` or `buckets`), or `latency`
-//! ([`PlotOpts::histogram_latency`], which takes neither). `unit` is one of
+//! ([`Plot::histogram_latency`], which takes neither). `unit` is one of
 //! `count`, `rate`, `time`, `bytes`, `datarate`, `bitrate`, `percentage`,
 //! `frequency`, `power`. `width` is absent or `full`. `range` is `[min,
 //! max]` with `min` below `max`, and cannot be given with
 //! `percentage_range`. `unit_system`, when given, is one of the same nine
-//! names as `unit`; another is a parse error. The other fields
-//! (`description`, `percentiles`, `axis_label`, `row_label`, `style`,
-//! `log_scale`, `query_total`) map to the [`PlotOpts`] option of that name.
+//! names as `unit`; another is a parse error. `style`, when given, is one of
+//! `line`, `multi`, `heatmap`, `scatter`, `histogram_heatmap`,
+//! `quantile_heatmap`; another is a parse error. The other fields
+//! (`description`, `percentiles`, `axis_label`, `row_label`, `log_scale`)
+//! map to the [`PlotBuilder`] method `with_<field>`, and `query_total` to
+//! `with_total_query`.
 //!
 //! # Substitution
 //!
 //! `${name}` and `${name.field}` are replaced in every string field except
 //! these: names (`let` keys, `params` entries, a repeat's `var`, a `var` or
 //! `param` predicate's operand, metadata keys), enumerated values (`kind`,
-//! `unit`, `unit_system`, `subtype`, `width`, `mean_unit`, `sort`,
+//! `unit`, `unit_system`, `style`, `subtype`, `width`, `mean_unit`, `sort`,
 //! `computed`, `builtin`), `revision`, a section's `name` and `route`, repeat `values`
 //! entries, and `metadata` values. A name is a repeat binding, a string or
 //! `first_present` let, or a declared parameter; [`SectionTemplate::parse`]
@@ -533,7 +536,7 @@ struct PlotDef {
     #[serde(default)]
     row_label: Option<String>,
     #[serde(default)]
-    style: Option<String>,
+    style: Option<ChartStyle>,
     #[serde(default)]
     log_scale: Option<bool>,
     #[serde(default)]
@@ -1820,12 +1823,7 @@ impl<'a> Names<'a> {
         self.text(&def.id)?;
         self.promql(&def.query)?;
         self.promql_opt(&def.query_total)?;
-        for text in [
-            &def.description,
-            &def.axis_label,
-            &def.row_label,
-            &def.style,
-        ] {
+        for text in [&def.description, &def.axis_label, &def.row_label] {
             self.text_opt(text)?;
         }
         Ok(())
@@ -2491,7 +2489,7 @@ impl<'a> Scope<'a> {
                 // into three queries and the title and id into two plots
                 // each, and adds suffixes and a unit system of its own.
                 self.spend_bytes(
-                    2 * std::mem::size_of::<Plot>()
+                    2 * std::mem::size_of::<PagePlot>()
                         + 3 * selector.len()
                         + 2 * (title.len() + id.len())
                         + 64,
@@ -2508,23 +2506,23 @@ impl<'a> Scope<'a> {
         def: &PlotDef,
         width: Option<PlotWidth>,
     ) -> Result<(), TemplateError> {
-        self.spend_bytes(std::mem::size_of::<Plot>())?;
+        self.spend_bytes(std::mem::size_of::<PagePlot>())?;
         let title = self.subst(&def.title)?;
         let id = self.subst(&def.id)?;
         // `check` has refused a plot whose kind lacks the unit or subtype
         // it needs; these fall back only so expansion cannot panic.
         let unit = def.unit.unwrap_or(Unit::Count);
         let mut opts = match def.kind {
-            PlotKind::Gauge => PlotOpts::gauge(title, id, unit),
-            PlotKind::Counter => PlotOpts::counter(title, id, unit),
+            PlotKind::Gauge => Plot::gauge(title, id, unit),
+            PlotKind::Counter => Plot::counter(title, id, unit),
             PlotKind::Histogram => {
-                let subtype = match def.subtype {
-                    Some(Subtype::Buckets) => "buckets",
-                    Some(Subtype::Percentiles) | None => "percentiles",
+                let view = match def.subtype {
+                    Some(Subtype::Buckets) => HistogramView::Buckets,
+                    Some(Subtype::Percentiles) | None => HistogramView::Percentiles,
                 };
-                PlotOpts::histogram(title, id, unit, subtype)
+                Plot::histogram(title, id, unit, view)
             }
-            PlotKind::Latency => PlotOpts::histogram_latency(title, id),
+            PlotKind::Latency => Plot::histogram_latency(title, id),
         };
         if def.percentage_range {
             opts = opts.percentage_range();
@@ -2533,7 +2531,7 @@ impl<'a> Scope<'a> {
             opts = opts.range(min, max);
         }
         if let Some(system) = def.unit_system {
-            opts = opts.with_unit_system(system.to_string());
+            opts = opts.with_unit_system(system);
         }
         if let Some(description) = self.subst_opt(&def.description)? {
             opts = opts.with_description(description);
@@ -2549,13 +2547,16 @@ impl<'a> Scope<'a> {
         if let Some(label) = self.subst_opt(&def.row_label)? {
             opts = opts.with_row_label(label);
         }
-        if let Some(style) = self.subst_opt(&def.style)? {
+        if let Some(style) = def.style {
             opts = opts.with_style(style);
         }
         if let Some(log) = def.log_scale {
             opts = opts.with_log_scale(log);
         }
         let query = self.subst_promql(&def.query)?;
+        if let Some(total) = &def.query_total {
+            opts = opts.with_total_query(self.subst_promql(total)?);
+        }
         let full = match width {
             Some(w) => w == PlotWidth::Full,
             None => matches!(def.width, Some(Width::Full)),
@@ -2564,12 +2565,6 @@ impl<'a> Scope<'a> {
             sg.plot_promql_full(opts, query);
         } else {
             sg.plot_promql(opts, query);
-        }
-        if let Some(total) = &def.query_total {
-            let total = self.subst_promql(total)?;
-            if let Some(plot) = sg.plots_mut_last() {
-                plot.promql_query_total = Some(total);
-            }
         }
         Ok(())
     }
@@ -3008,13 +3003,13 @@ mod tests {
         let data = Catalog::default().counter("c", &[&[]]);
         let pair = expand(&split(json!({ "present": "c" })), &data);
         let want = group_json(|sg| {
-            sg.plot_promql(PlotOpts::gauge("a", "a", Unit::Count), "a".into());
-            sg.plot_promql(PlotOpts::gauge("b", "b", Unit::Count), "b".into());
+            sg.plot_promql(Plot::gauge("a", "a", Unit::Count), "a".into());
+            sg.plot_promql(Plot::gauge("b", "b", Unit::Count), "b".into());
         });
         assert_eq!(groups(&pair), want);
         let one = expand(&split(json!({ "present": "x" })), &data);
         let want = group_json(|sg| {
-            sg.plot_promql_full(PlotOpts::gauge("a", "a", Unit::Count), "a".into());
+            sg.plot_promql_full(Plot::gauge("a", "a", Unit::Count), "a".into());
         });
         assert_eq!(groups(&one), want);
     }
@@ -3076,32 +3071,32 @@ mod tests {
         );
         let want = group_json(|sg| {
             sg.plot_promql_full(
-                PlotOpts::counter("T", "a", Unit::Bytes)
+                Plot::counter("T", "a", Unit::Bytes)
                     .range(1.0, 5.0)
-                    .with_unit_system("bytes")
+                    .with_unit_system(Unit::Bytes)
                     .with_description("D")
                     .with_axis_label("Y")
                     .with_row_label("R")
-                    .with_style("heatmap")
-                    .with_log_scale(true),
+                    .with_style(ChartStyle::Heatmap)
+                    .with_log_scale(true)
+                    .with_total_query("qt"),
                 "q".into(),
             );
-            sg.plots_mut_last().unwrap().promql_query_total = Some("qt".into());
             sg.plot_promql(
-                PlotOpts::histogram("H", "b", Unit::Time, "buckets")
+                Plot::histogram("H", "b", Unit::Time, HistogramView::Buckets)
                     .with_percentiles(vec![0.5, 0.99]),
                 "h".into(),
             );
             sg.plot_promql(
-                PlotOpts::histogram("P", "p", Unit::Bytes, "percentiles"),
+                Plot::histogram("P", "p", Unit::Bytes, HistogramView::Percentiles),
                 "h".into(),
             );
             sg.plot_promql(
-                PlotOpts::histogram_latency("L", "c").percentage_range(),
+                Plot::histogram_latency("L", "c").percentage_range(),
                 "l".into(),
             );
             sg.plot_promql(
-                PlotOpts::gauge("G", "d", Unit::Power).with_log_scale(false),
+                Plot::gauge("G", "d", Unit::Power).with_log_scale(false),
                 "g".into(),
             );
         });
@@ -3127,7 +3122,7 @@ mod tests {
             .collect();
         let want = group_json(|sg| {
             for (name, unit) in names {
-                sg.plot_promql(PlotOpts::gauge(name, name, unit), "q".into());
+                sg.plot_promql(Plot::gauge(name, name, unit), "q".into());
             }
         });
         assert_eq!(
@@ -3159,10 +3154,10 @@ mod tests {
         group.metadata.insert("side".into(), json!("left"));
         let sg = group.subgroup("S");
         sg.describe("D");
-        sg.plot_promql(PlotOpts::gauge("a", "a", Unit::Count), "a".into());
+        sg.plot_promql(Plot::gauge("a", "a", Unit::Count), "a".into());
         group
             .subgroup_unnamed()
-            .plot_promql(PlotOpts::gauge("b", "b", Unit::Count), "b".into());
+            .plot_promql(Plot::gauge("b", "b", Unit::Count), "b".into());
         let want = json!([serde_json::to_value(&group).unwrap()]);
         assert_eq!(groups(&expand(&t, &Catalog::default())), want);
     }
@@ -3579,6 +3574,8 @@ mod tests {
                 "unknown variant `${u}`",
             ),
             (plot(json!({ "width": "half" })), "unknown variant `half`"),
+            (plot(json!({ "style": "lines" })), "unknown variant `lines`"),
+            (plot(json!({ "style": "${s}" })), "unknown variant `${s}`"),
             (
                 plot(json!({ "kind": "histogram", "subtype": "heat" })),
                 "unknown variant `heat`",
@@ -4383,7 +4380,6 @@ mod tests {
             "description",
             "axis_label",
             "row_label",
-            "style",
             "query_total",
         ] {
             let mut p = gauge("p");
@@ -5282,7 +5278,10 @@ mod tests {
         let one = plots(json!({}), json!([gauge("a")]));
         let two = plots(json!({}), json!([gauge("a"), gauge("b")]));
         // The plot struct plus "b" three times (title, id, query).
-        assert_eq!(bytes(&two) - bytes(&one), std::mem::size_of::<Plot>() + 3);
+        assert_eq!(
+            bytes(&two) - bytes(&one),
+            std::mem::size_of::<PagePlot>() + 3
+        );
         let rate_mean = plots(
             json!({}),
             json!([gauge("a"), { "rate_mean": { "title": "t", "id": "i", "selector": "s", "mean_unit": "time" } }]),
@@ -5291,7 +5290,7 @@ mod tests {
             bytes(&rate_mean) - bytes(&one),
             // Two plots, "t", "i" and "s" from the template, and the copies
             // `histogram_rate_mean` makes: 3 selectors, 2 titles and ids, 64.
-            2 * std::mem::size_of::<Plot>() + 3 + 3 + 2 * 2 + 64
+            2 * std::mem::size_of::<PagePlot>() + 3 + 3 + 2 * 2 + 64
         );
         let groups = |extra: Value| {
             let mut groups =

@@ -4,10 +4,10 @@ use crate::agent::timing::AcquisitionGroup;
 use crate::agent::{MAX_CPUS, MAX_PACKAGES};
 use linkme::distributed_slice;
 
-// Registered here (not in mod.rs) because this file is also `include!`d
-// directly on non-Linux platforms (see `cpu/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] pub mod stats` fallback) to keep metric
-// identity stable across platforms, same as `cpu_frequency`'s
+// Registered here (not in mod.rs) because this file is also `include!`d by the
+// macOS sampler and, on platforms other than Linux and macOS, directly (see
+// `cpu/mod.rs`'s `#[cfg(not(target_os = "linux"))] pub mod stats` fallback) to
+// keep metric identity stable across platforms, same as `cpu_frequency`'s
 // `CPU_FREQUENCY_ACQ`.
 //
 // Acquisition groups are split PER METRIC, not per entity space or read loop.
@@ -45,11 +45,17 @@ use linkme::distributed_slice;
 // union of the core-scope levels -- which is correct precisely because every
 // core reader writes it.
 
+// The sampler the groups belong to: `cpu_power` where a sampler compiles this
+// file in its own module (Linux and macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "cpu_power";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("cpu_power");
+
 macro_rules! power_acq {
     ($vis_static:ident, $reg:ident, $name:literal, $doc:literal) => {
         #[doc = $doc]
-        pub static $vis_static: AcquisitionGroup =
-            AcquisitionGroup::new(crate::agent::samplers::bpf_sampler_name("cpu_power"), $name);
+        pub static $vis_static: AcquisitionGroup = AcquisitionGroup::new(GROUP_SAMPLER, $name);
 
         #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
         static $reg: &'static AcquisitionGroup = &$vis_static;

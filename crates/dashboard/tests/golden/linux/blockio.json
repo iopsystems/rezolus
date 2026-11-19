@@ -1,0 +1,688 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Operations",
+      "id": "operations",
+      "subgroups": [
+        {
+          "name": "Totals",
+          "description": "Throughput and operation rate aggregated across all block devices.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total Throughput",
+                "id": "blockio-throughput-total",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_bytes[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Total IOPS",
+                "id": "blockio-iops-total",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Read",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Throughput",
+                "id": "throughput-read",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read IOPS",
+                "id": "iops-read",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Write",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Throughput",
+                "id": "throughput-write",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write IOPS",
+                "id": "iops-write",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Latency",
+      "id": "latency",
+      "subgroups": [
+        {
+          "name": "Device",
+          "description": "How long the device took, from the moment it began servicing a request until the request completed. Percentiles broken down by read vs write.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Rate",
+                "id": "latency-read-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Mean/Total",
+                "id": "latency-read-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_device_latency{op=\"read\"})",
+              "promql_query_total": "histogram_sum(blockio_device_latency{op=\"read\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read",
+                "id": "latency-read",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_device_latency{op=\"read\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Rate",
+                "id": "latency-write-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Mean/Total",
+                "id": "latency-write-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_device_latency{op=\"write\"})",
+              "promql_query_total": "histogram_sum(blockio_device_latency{op=\"write\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write",
+                "id": "latency-write",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_device_latency{op=\"write\"}"
+            }
+          ]
+        },
+        {
+          "name": "Queue Wait",
+          "description": "How long requests waited before the device began servicing them. This is the component that grows under saturation — a device at its limit shows queue wait climbing while the device phase above stays flat.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Rate",
+                "id": "queue-latency-read-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(histogram_irate(blockio_queue_latency{op=\"read\"}))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Mean/Total",
+                "id": "queue-latency-read-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_queue_latency{op=\"read\"})",
+              "promql_query_total": "histogram_sum(blockio_queue_latency{op=\"read\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read",
+                "id": "queue-latency-read",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_queue_latency{op=\"read\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Rate",
+                "id": "queue-latency-write-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(histogram_irate(blockio_queue_latency{op=\"write\"}))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Mean/Total",
+                "id": "queue-latency-write-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_queue_latency{op=\"write\"})",
+              "promql_query_total": "histogram_sum(blockio_queue_latency{op=\"write\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write",
+                "id": "queue-latency-write",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_queue_latency{op=\"write\"}"
+            }
+          ]
+        },
+        {
+          "name": "End-to-End",
+          "description": "Queue wait and device service together, from the request entering the queue until it completed — what the workload issuing the IO actually experiences. Measured directly rather than summed, because two histograms cannot be added.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Rate",
+                "id": "total-latency-read-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Mean/Total",
+                "id": "total-latency-read-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_total_latency{op=\"read\"})",
+              "promql_query_total": "histogram_sum(blockio_total_latency{op=\"read\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read",
+                "id": "total-latency-read",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_total_latency{op=\"read\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Rate",
+                "id": "total-latency-write-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Mean/Total",
+                "id": "total-latency-write-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_total_latency{op=\"write\"})",
+              "promql_query_total": "histogram_sum(blockio_total_latency{op=\"write\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write",
+                "id": "total-latency-write",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_total_latency{op=\"write\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Size",
+      "id": "size",
+      "subgroups": [
+        {
+          "name": "By Operation",
+          "description": "IO size distribution percentiles broken down by read vs write.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Rate",
+                "id": "size-read-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Mean/Total",
+                "id": "size-read-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_size{op=\"read\"})",
+              "promql_query_total": "histogram_sum(blockio_size{op=\"read\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read",
+                "id": "size-read",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": true,
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_size{op=\"read\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Rate",
+                "id": "size-write-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Mean/Total",
+                "id": "size-write-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(blockio_size{op=\"write\"})",
+              "promql_query_total": "histogram_sum(blockio_size{op=\"write\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write",
+                "id": "size-write",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": true,
+                  "value_label": null
+                }
+              },
+              "promql_query": "blockio_size{op=\"write\"}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

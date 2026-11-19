@@ -18,7 +18,7 @@ if (typeof globalThis.document === 'undefined') {
     globalThis.document = { documentElement: {}, body: {} };
 }
 
-const { renderCompareChart } = await import('../src/viewer/assets/lib/charts/compare.js');
+const { renderCompareChart } = await import('../src/viewer/assets/lib/compare/compare.js');
 const { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } = await import('../src/viewer/assets/lib/data.js');
 
 const bp = (median) => ({

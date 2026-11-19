@@ -5,17 +5,21 @@ use crate::agent::timing::AcquisitionGroup;
 use linkme::distributed_slice;
 
 // Registered here (not in mod.rs) because this file is also `include!`d
-// directly on non-Linux platforms (see `tcp/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
-// identity stable across platforms, while `mod.rs`'s BPF sampler code is
-// Linux-only.
-//
-/// Brackets the `counters` map's refresh (single writer: this sampler's
-/// own BPF refresh path).
-pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("tcp_traffic"),
-    "tcp_traffic_counters",
-);
+// by the macOS sampler and, on other platforms, by `tcp/mod.rs`'s `mod stats`
+// fallback, to keep metric identity stable across platforms.
+
+/// The sampler the groups below belong to: `tcp_traffic` where that sampler
+/// exists (Linux, macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "tcp_traffic";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("tcp_traffic");
+
+/// Brackets one read of the counters (the BPF `counters` map on Linux, the
+/// `net.inet.tcp.stats` sysctl on macOS); the sampler's `refresh()` is the
+/// only writer.
+pub static COUNTERS_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "tcp_traffic_counters");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
@@ -28,10 +32,7 @@ static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 /// counters vs. size distribution). `BpfBuilder::histogram` batches every
 /// call naming this group into one `HistogramBatch`, stamped once per
 /// refresh — see `bpf/histogram.rs`.
-pub static SIZES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("tcp_traffic"),
-    "tcp_traffic_sizes",
-);
+pub static SIZES_ACQ: AcquisitionGroup = AcquisitionGroup::new(GROUP_SAMPLER, "tcp_traffic_sizes");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static SIZES_ACQ_REG: &'static AcquisitionGroup = &SIZES_ACQ;

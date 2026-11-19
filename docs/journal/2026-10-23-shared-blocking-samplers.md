@@ -121,3 +121,14 @@ Validation after the rebase: blocking worker, cgroup, acquisition cache,
 drivehealth, hw_sensors and timing tests passed 71 (four hardware/capacity
 tests ignored); formatting clean; clippy only the existing
 `manual_range_contains` warning in `src/mcp/link.rs`.
+
+## Merged with main (2026-11-18)
+
+#1537 was squash-merged as `e6b7288a`. The branch's three commits were applied
+onto main at `e7bc062d` (alpha.146), leaving out #1537's own commits, and the
+version moved to `6.0.0-alpha.147`. One conflict needed more than a text
+choice: main's hardware sensor sweep (#1694) takes a `corsair_axi` argument,
+which the worker closure now passes. Samplers added to main since the branch
+was cut that run their own `spawn_blocking` gate (`gpu_amd_sysfs`, `network_efa`
+and the macOS `filesystem` sampler) are not migrated here, along
+with the Linux filesystem, Intel GPU, slabinfo and XFS stats samplers.

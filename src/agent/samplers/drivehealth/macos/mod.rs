@@ -1,7 +1,7 @@
 //! NVMe drive health on macOS: the SMART / Health log page (0x02) read through
 //! IOKit's NVMe SMART user client, which needs no privileges. It publishes the
-//! same metrics as the Linux sampler: composite temperature and the
-//! thermal-throttle counters.
+//! same NVMe metrics as the Linux sampler: the composite temperature,
+//! Temperature Sensors 1 to 8 and the thermal-throttle counters.
 //!
 //! Drives are the I/O registry's block storage devices whose
 //! `NVMe SMART Capable` property is true, found once at startup. SATA drives

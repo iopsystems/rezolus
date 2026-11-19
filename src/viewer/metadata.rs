@@ -8,7 +8,7 @@ use std::path::Path;
 use tracing::warn;
 
 use super::capture_registry::CaptureId;
-use metriken_query::{MetricsSource, QueryResult};
+use metriken_query::MetricsSource;
 
 use super::state::{AppState, LazySectionStore};
 use ::dashboard::section_template::SectionTemplate;
@@ -143,50 +143,37 @@ pub fn capture_service_extensions(
 
 /// Run each KPI's PromQL against the loaded TSDB so the dashboard can
 /// hide KPIs whose queries return no data (e.g. zero-traffic histograms).
+/// A KPI whose query failed with a notable error is warned about once per
+/// process, since the terminal UI regenerates every tick; any other is
+/// logged at debug.
 pub fn validate_service_extensions(
     data: &dyn MetricsSource,
     exts: &mut [(String, ServiceExtension)],
 ) {
-    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
-
-    for (_source, ext) in exts.iter_mut() {
-        for kpi in &mut ext.kpis {
-            let query = kpi.effective_query();
-            let has_data = match data.query_range(&query, start, end, 1.0) {
-                Ok(result) => match &result {
-                    QueryResult::Vector { result } => !result.is_empty(),
-                    QueryResult::Matrix { result } => !result.is_empty(),
-                    QueryResult::Scalar { .. } => true,
-                    QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
-                },
-                Err(_) => false,
-            };
-            kpi.available = has_data;
+    for kpi in ::dashboard::dashboard::check_service_extensions(data, exts) {
+        if kpi.notable {
+            warn_once(kpi.message);
+        } else {
+            tracing::debug!("{}", kpi.message);
         }
     }
 }
 
-/// Resolve the active category for a regen pass. Activation requires
-/// `state.category_name` to be Some, two service refs attached, and each
-/// ref's source name to appear in the category's `members`. Returns
-/// None when any of those fail — the caller falls back to per-member
-/// rendering. CLI startup ran stricter checks; silent fall-back here
-/// only happens at runtime (e.g. mid-session detach).
+/// Resolve the active category for a regen pass: `state.category_name` is
+/// set, the category is in the registry, and it admits the baseline's and
+/// the experiment's templates ([`CategoryExtension::admits`], the check
+/// `--category` makes at startup). Returns None otherwise, and the caller
+/// renders one section per template; this happens at runtime when an
+/// attach or detach changes the captures.
 pub fn lookup_category<'a>(
     state: &AppState,
     registry: &'a TemplateRegistry,
-    service_refs: &[(&str, &ServiceExtension)],
+    baseline: &[(String, ServiceExtension)],
+    experiment: &[(String, ServiceExtension)],
 ) -> Option<(&'a str, &'a CategoryExtension)> {
     let cat_name = state.category_name.read().clone()?;
-    if service_refs.len() != 2 {
-        return None;
-    }
     let category = registry.get_category(&cat_name)?;
-    for (source, _) in service_refs {
-        if !category.members.iter().any(|m| m == source) {
-            return None;
-        }
-    }
+    category.admits(baseline, experiment).ok()?;
     Some((category.service_name.as_str(), category))
 }
 
@@ -312,11 +299,11 @@ pub fn regenerate_dashboards(state: &AppState) {
             exts
         })
         .unwrap_or_default();
+    let category = lookup_category(state, registry, &baseline_exts, &experiment_exts);
     let mut service_exts = baseline_exts;
     service_exts.extend(experiment_exts);
 
     let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-    let category = lookup_category(state, registry, &service_refs);
 
     let filesize = baseline_path
         .as_ref()
@@ -451,6 +438,54 @@ mod warn_once_tests {
         );
     }
 
+    /// A single recording's KPI whose query fails with a notable error (a
+    /// function given the wrong kind of metric) is marked unavailable and
+    /// warned about once; one whose metric is missing is not warned.
+    #[test]
+    fn a_single_recordings_failed_kpi_is_warned_once() {
+        let store = metriken_query::MemoryStore::builder()
+            .source("warn-once-tests-kpi")
+            .build();
+        store
+            .insert_gauge_series(
+                "warn_once_tests_depth",
+                std::collections::BTreeMap::<String, String>::new(),
+                vec![1_700_000_000_000_000_000, 1_700_000_001_000_000_000],
+                vec![1, 2],
+                None,
+            )
+            .unwrap();
+        let metadata: std::collections::HashMap<String, String> = [
+            ("source", "warn-once-tests-kpi"),
+            (
+                "service_queries",
+                r#"{"service_name": "warn-once-tests-kpi", "kpis": [
+                    {"role": "load", "title": "Depth rate", "type": "gauge",
+                     "query": "rate(warn_once_tests_depth[1m])"},
+                    {"role": "load", "title": "Missing", "type": "gauge",
+                     "query": "warn_once_tests_missing"}]}"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let mut exts = super::service_extensions_from_metadata(
+            &metadata,
+            &::dashboard::TemplateRegistry::empty(),
+            super::TemplatePreference::Archive,
+        );
+        super::validate_service_extensions(&store, &mut exts);
+        let kpis = &exts[0].1.kpis;
+        assert!(kpis.iter().all(|k| !k.available), "both are unavailable");
+        let warned = "KPI \"Depth rate\" is unavailable: rate(warn_once_tests_depth[1m]): \
+             Unsupported operation: warn_once_tests_depth is a gauge, and this function \
+             reads a counter";
+        assert!(!super::first_time(warned), "not warned: {warned:?}");
+        let missing = "KPI \"Missing\" is unavailable: warn_once_tests_missing: \
+             Metric not found: warn_once_tests_missing";
+        assert!(super::first_time(missing), "warned: {missing:?}");
+    }
+
     /// The lookup reports a malformed template through `first_time`, so the
     /// same notice is not warned again on the next regeneration.
     #[test]
@@ -489,6 +524,33 @@ mod report_mode_tests {
     use ::dashboard::TemplateRegistry;
     use metriken_query::MemoryStore;
     use std::sync::Arc;
+
+    /// `--category inference-library` activates for a vllm-prefill capture
+    /// beside an sglang one, since the prefill template is for producer
+    /// `vllm`; a valkey capture is not a member, and two templates of one
+    /// capture are not a pair.
+    #[test]
+    fn a_category_activates_for_a_refined_capture() {
+        let registry = ::dashboard::embedded_templates().unwrap();
+        let store =
+            Arc::new(MemoryStore::builder().build()) as Arc<dyn metriken_query::MetricsSource>;
+        let state = AppState::new(store, registry.clone());
+        *state.category_name.write() = Some("inference-library".to_string());
+        let named = |name: &str| vec![(name.to_string(), registry.get(name).unwrap().clone())];
+
+        let activated =
+            lookup_category(&state, &registry, &named("vllm-prefill"), &named("sglang"));
+        assert_eq!(activated.map(|(name, _)| name), Some("inference-library"));
+
+        let refused = lookup_category(&state, &registry, &named("vllm"), &named("valkey"));
+        assert!(refused.is_none());
+
+        // Two templates of one capture and none in the other: refused, as at
+        // startup.
+        let mut both = named("vllm-prefill");
+        both.extend(named("sglang"));
+        assert!(lookup_category(&state, &registry, &both, &[]).is_none());
+    }
 
     #[test]
     fn regenerate_returns_empty_sections_for_trimmed_report() {

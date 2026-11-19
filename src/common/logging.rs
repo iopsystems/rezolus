@@ -37,8 +37,8 @@ impl LogConfig {
     }
 }
 
-/// Holds the tracing worker guard. Must be kept alive for the process lifetime
-/// to ensure logs are flushed.
+/// Holds the tracing worker guard. Dropping it flushes the log, waiting up to
+/// about a second; `std::process::exit` skips that, so drop it first.
 pub struct LogDrain {
     _guard: WorkerGuard,
 }

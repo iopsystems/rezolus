@@ -262,23 +262,6 @@
               "data": [],
               "opts": {
                 "title": "Total",
-                "id": "syscall-total",
-                "type": "delta_counter",
-                "format": {
-                  "x_axis_label": null,
-                  "y_axis_label": null,
-                  "unit_system": "rate",
-                  "precision": 2,
-                  "log_scale": null,
-                  "value_label": null
-                }
-              },
-              "promql_query": "sum(irate(syscall[5m]))"
-            },
-            {
-              "data": [],
-              "opts": {
-                "title": "Total",
                 "id": "syscall-total-latency",
                 "type": "histogram",
                 "subtype": "percentiles",
@@ -305,46 +288,6 @@
       "name": "Softirq",
       "id": "softirq",
       "subgroups": [
-        {
-          "name": "Rate",
-          "description": "Softirqs handled per second, aggregate and per-CPU.",
-          "plots": [
-            {
-              "data": [],
-              "opts": {
-                "title": "Rate",
-                "id": "softirq-total-rate",
-                "type": "delta_counter",
-                "format": {
-                  "x_axis_label": null,
-                  "y_axis_label": null,
-                  "unit_system": "rate",
-                  "precision": 2,
-                  "log_scale": null,
-                  "value_label": null
-                }
-              },
-              "promql_query": "sum(irate(softirq[5m]))"
-            },
-            {
-              "data": [],
-              "opts": {
-                "title": "Rate",
-                "id": "softirq-total-rate-heatmap",
-                "type": "delta_counter",
-                "format": {
-                  "x_axis_label": null,
-                  "y_axis_label": null,
-                  "unit_system": "rate",
-                  "precision": 2,
-                  "log_scale": null,
-                  "value_label": null
-                }
-              },
-              "promql_query": "sum by (id) (irate(softirq[5m]))"
-            }
-          ]
-        },
         {
           "name": "CPU Time",
           "description": "Fraction of CPU time spent servicing softirqs.",

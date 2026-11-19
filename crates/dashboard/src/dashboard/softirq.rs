@@ -9,11 +9,11 @@ fn add_softirq_group(view: &mut View, label: &str, kind: &str) {
     let rate = group.subgroup("Rate");
     rate.describe("Softirqs handled per second, aggregate and per-CPU.");
     rate.plot_promql(
-        PlotOpts::counter("Rate", format!("softirq-{kind}-rate"), Unit::Rate),
+        Plot::counter("Rate", format!("softirq-{kind}-rate"), Unit::Rate),
         format!("sum(irate(softirq{{kind=\"{kind}\"}}[5m]))"),
     );
     rate.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "Rate (per-CPU)",
             format!("softirq-{kind}-rate-heatmap"),
             Unit::Rate,
@@ -24,12 +24,11 @@ fn add_softirq_group(view: &mut View, label: &str, kind: &str) {
     let time = group.subgroup("CPU Time");
     time.describe("Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.");
     time.plot_promql(
-        PlotOpts::counter("CPU %", format!("softirq-{kind}-time"), Unit::Percentage)
-            .percentage_range(),
+        Plot::counter("CPU %", format!("softirq-{kind}-time"), Unit::Percentage).percentage_range(),
         format!("sum(irate(softirq_time{{kind=\"{kind}\"}}[5m])) / cpu_cores / 1000000000"),
     );
     time.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "CPU % (per-CPU)",
             format!("softirq-{kind}-time-heatmap"),
             Unit::Percentage,
@@ -50,22 +49,22 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let rate = softirq.subgroup("Rate");
     rate.describe("Softirqs handled per second, aggregate and per-CPU.");
     rate.plot_promql(
-        PlotOpts::counter("Rate", "softirq-total-rate", Unit::Rate),
+        Plot::counter("Rate", "softirq-total-rate", Unit::Rate),
         "sum(irate(softirq[5m]))".to_string(),
     );
     rate.plot_promql(
-        PlotOpts::counter("Rate (per-CPU)", "softirq-total-rate-heatmap", Unit::Rate),
+        Plot::counter("Rate (per-CPU)", "softirq-total-rate-heatmap", Unit::Rate),
         "sum by (id) (irate(softirq[5m]))".to_string(),
     );
 
     let time = softirq.subgroup("CPU Time");
     time.describe("Fraction of CPU time spent servicing softirqs, aggregate and per-CPU.");
     time.plot_promql(
-        PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
+        Plot::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
         "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
     );
     time.plot_promql(
-        PlotOpts::counter(
+        Plot::counter(
             "CPU % (per-CPU)",
             "softirq-total-time-heatmap",
             Unit::Percentage,

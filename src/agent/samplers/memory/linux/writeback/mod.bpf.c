@@ -123,22 +123,34 @@ static int __always_inline handle_balance_dirty_pages(long pause) {
 // relocation, so a kernel that renumbers the enum still lands each reason in
 // the slot mod.rs labels for it. A reason this program does not know is not
 // counted.
+//
+// Each comparison is guarded by bpf_core_enum_value_exists: when the running
+// kernel's enum lacks a value (7.0's enum has no WB_REASON_LAPTOP_TIMER),
+// libbpf cannot relocate bpf_core_enum_value and poisons the instruction,
+// and the verifier rejects the program unless the guard makes it
+// unreachable. That reason's counter then stays at zero. This relies on the
+// value load staying inside the exists branch; clang can hoist it out of a
+// loop, so do not call reason_slot from one.
+#define REASON_IS(reason, value)                                                \
+    (bpf_core_enum_value_exists(enum wb_reason, value) &&                      \
+     (reason) == bpf_core_enum_value(enum wb_reason, value))
+
 static __always_inline int reason_slot(int reason) {
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_BACKGROUND))
+    if (REASON_IS(reason, WB_REASON_BACKGROUND))
         return 0;
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_VMSCAN))
+    if (REASON_IS(reason, WB_REASON_VMSCAN))
         return 1;
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_SYNC))
+    if (REASON_IS(reason, WB_REASON_SYNC))
         return 2;
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_PERIODIC))
+    if (REASON_IS(reason, WB_REASON_PERIODIC))
         return 3;
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_LAPTOP_TIMER))
+    if (REASON_IS(reason, WB_REASON_LAPTOP_TIMER))
         return 4;
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_FS_FREE_SPACE))
+    if (REASON_IS(reason, WB_REASON_FS_FREE_SPACE))
         return 5;
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_FORKER_THREAD))
+    if (REASON_IS(reason, WB_REASON_FORKER_THREAD))
         return 6;
-    if (reason == bpf_core_enum_value(enum wb_reason, WB_REASON_FOREIGN_FLUSH))
+    if (REASON_IS(reason, WB_REASON_FOREIGN_FLUSH))
         return 7;
     return -1;
 }

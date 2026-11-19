@@ -115,6 +115,8 @@ fn serve_stream(mut stream: TcpStream, path: &str) {
         gauges: Vec::new(),
         histograms: Vec::new(),
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     let start = wall_ns();
     for seq in 0u64.. {
@@ -129,6 +131,8 @@ fn serve_stream(mut stream: TcpStream, path: &str) {
             gauges: Vec::new(),
             histograms: Vec::new(),
             gauge_histograms: Vec::new(),
+            float_counters: Vec::new(),
+            float_gauges: Vec::new(),
         };
         let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(
             &group,
@@ -267,6 +271,22 @@ fn plot_queries(section: &serde_json::Value) -> Vec<(String, String)> {
     out
 }
 
+/// Every plot's `scope` in a section, by plot id.
+fn plot_scopes(section: &serde_json::Value) -> Vec<(String, serde_json::Value)> {
+    let mut out = Vec::new();
+    for group in section["groups"].as_array().unwrap() {
+        for sg in group["subgroups"].as_array().unwrap() {
+            for plot in sg["plots"].as_array().unwrap() {
+                out.push((
+                    plot["opts"]["id"].as_str().unwrap().to_string(),
+                    plot["scope"].clone(),
+                ));
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn an_agent_and_a_service_of_one_run_open_as_one_view() {
     let agent = spawn_agent();
@@ -301,27 +321,29 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
         "kpis": [{
             "role": "throughput",
             "title": "Requests",
-            "query": "sum(irate(svc_requests_total{source=\"svc\"}[1s]))",
+            "query": "sum(irate(svc_requests_total{alias=\"svc\"}[1s]))",
             "type": "delta_counter",
             "denominator": true,
         }],
     })
     .to_string();
-    {
+    let (svc_uuid, agent_uuid) = {
         let mut db = dendro::archive::ArchiveMut::open(&archive).unwrap();
         let sources = db.read_sources().unwrap();
         assert_eq!(sources.len(), 2, "{sources:?}");
         let svc = sources
             .iter()
-            .find(|s| s.meta.labels.get("source").map(String::as_str) == Some("svc"))
+            .find(|s| s.meta.labels.get("alias").map(String::as_str) == Some("svc"))
             .unwrap();
         let agent = sources.iter().find(|s| s.id != svc.id).unwrap();
-        assert_eq!(agent.meta.labels.get("source").unwrap(), "rezolus");
+        // The agent is named by the producer the probe hook reports.
+        assert_eq!(agent.meta.labels.get("__producer__").unwrap(), "rezolus");
         assert_eq!(agent.meta.labels.get("host").unwrap(), "h1");
         let mut metadata = svc.meta.metadata.clone();
         metadata.insert("service_queries".to_string(), template);
         db.update_source_metadata(svc.id, &metadata).unwrap();
-    }
+        (svc.uuid.clone().unwrap(), agent.uuid.clone().unwrap())
+    };
 
     let viewer = spawn_viewer(&archive);
     let sections = get(&viewer, "/api/v1/sections")["data"].clone();
@@ -357,24 +379,30 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
     let mode = get(&viewer, "/api/v1/captures");
     assert_eq!(mode.to_string().matches("\"id\"").count(), 1, "{mode}");
 
+    // Each section's queries are its template's, as written: the recording
+    // carries the `alias=svc` its endpoint was given (`source=svc`, read as
+    // `alias=`), so the template's `alias` matcher selects it. Each plot
+    // names the sources of its recording as its scope.
     let svc = get(&viewer, "/data/service/svc.json");
     let queries = plot_queries(&svc);
-    // The template's own `source="svc"`, and `host!="h1"`: the service's
-    // recording has no `host`, the agent's has.
     assert_eq!(
         queries[0].1,
-        "sum(irate(svc_requests_total{source=\"svc\",host!=\"h1\"}[1s]))"
+        "sum(irate(svc_requests_total{alias=\"svc\"}[1s]))"
     );
+    for (id, scope) in plot_scopes(&svc) {
+        assert_eq!(scope, serde_json::json!([svc_uuid]), "{id}");
+    }
     let cpu = get(&viewer, "/data/cpu.json");
     let cpu_queries = plot_queries(&cpu);
     assert!(!cpu_queries.is_empty());
     for (id, q) in &cpu_queries {
-        assert!(q.contains("source=\"rezolus\""), "{id}: {q}");
+        assert!(!q.contains("source="), "{id}: {q}");
+    }
+    for (id, scope) in plot_scopes(&cpu) {
+        assert_eq!(scope, serde_json::json!([agent_uuid]), "{id}");
     }
 
-    // The service's KPI reads the service's series through its recording's
-    // `source` label.
-    let range = |query: &str| {
+    let range = |query: &str, scope: &str| {
         let start = sections["start_time"].as_u64().unwrap() as f64 / 1000.0;
         let end = sections["end_time"].as_u64().unwrap() as f64 / 1000.0;
         let q: String = query
@@ -388,41 +416,32 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
             .collect();
         get(
             &viewer,
-            &format!("/api/v1/query_range?query={q}&start={start}&end={end}&step=0.1"),
+            &format!(
+                "/api/v1/query_range?query={q}&start={start}&end={end}&step=0.1&scope={scope}"
+            ),
         )
     };
-    let svc_result = range(&queries[0].1);
+    // The service's KPI reads the service's series within its scope.
+    let svc_result = range(&queries[0].1, &svc_uuid);
     let series = svc_result["data"]["result"].as_array().unwrap();
     assert_eq!(series.len(), 1, "{svc_result}");
-    // The agent's series under the matchers its sections carry, and none
-    // under the service's.
-    let busy = cpu_queries
-        .iter()
-        .find(|(id, _)| id == "busy-pct")
-        .map(|(_, q)| q.clone())
-        .unwrap_or_else(|| panic!("{cpu_queries:?}"));
-    assert!(
-        busy.contains(r#"cpu_usage{host="h1",source="rezolus"}"#),
-        "{busy}"
-    );
-    for (query, n) in [
-        (r#"irate(cpu_usage{host="h1",source="rezolus"}[1s])"#, 1),
-        (r#"irate(cpu_usage{source="svc"}[1s])"#, 0),
-    ] {
-        let result = range(query);
+    // The agent's series within the agent's scope, and none within the
+    // service's.
+    for (scope, n) in [(&agent_uuid, 1), (&svc_uuid, 0)] {
+        let result = range("irate(cpu_usage[1s])", scope);
         assert_eq!(
             result["data"]["result"].as_array().unwrap().len(),
             n,
-            "{query}: {result}"
+            "{scope}: {result}"
         );
     }
 }
 
 /// A single-source parquet upgraded to a `.dendro` (the demo recording) is a
 /// recording of one member: its series carry its `source`, and so do they in
-/// the copy it is annotated into, so a KPI template whose queries select
-/// `source=` (as an archive's do) renders, and `mcp query` with the matcher
-/// reads the series of either.
+/// the copy it is annotated into, so `mcp query` with a `source=` matcher
+/// reads the series of either, and a KPI template whose queries select
+/// `source=` renders, read without the matcher.
 #[test]
 fn an_upgraded_parquets_template_selecting_its_source_renders() {
     let dir = tempfile::tempdir().unwrap();
@@ -486,10 +505,7 @@ fn an_upgraded_parquets_template_selecting_its_source_renders() {
     let viewer = spawn_viewer(&archive);
     let svc = get(&viewer, "/data/service/rezolus.json");
     assert!(svc["metadata"].get("unavailable_kpis").is_none(), "{svc}");
-    assert_eq!(
-        plot_queries(&svc)[0].1,
-        "sum(cpu_cores{source=\"rezolus\"})"
-    );
+    assert_eq!(plot_queries(&svc)[0].1, "sum(cpu_cores)");
 }
 
 /// Record two endpoints in one run; `arms` gives each an `arm=`.

@@ -110,6 +110,8 @@ fn expected(members: Vec<Want>) -> (GroupSchema, Values) {
         gauges: Vec::new(),
         histograms: Vec::new(),
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     let mut values: Values = (Vec::new(), Vec::new(), Vec::new());
     for (pos, w) in members {
@@ -301,6 +303,8 @@ fn assert_external(tick: &str, g: &GroupSnapshot, generation: u64) {
             ),
         }],
         gauge_histograms: Vec::new(),
+        float_counters: Vec::new(),
+        float_gauges: Vec::new(),
     };
     assert_eq!(
         g.schema.as_deref(),

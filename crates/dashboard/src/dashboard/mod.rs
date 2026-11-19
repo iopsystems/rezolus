@@ -87,7 +87,7 @@ pub struct DashboardContext {
 
 /// What a route of a combined source renders against.
 pub struct RouteScope {
-    /// The recording's matchers, header and metadata.
+    /// The recording's sources, matchers, header and metadata.
     pub scope: Scope,
     /// The template the route's section expands, for a built-in section.
     /// `None` for a service section.
@@ -95,6 +95,10 @@ pub struct RouteScope {
     /// The viewer parameter `throughput` the section expands with; see
     /// [`build_combined_context`].
     pub throughput: Option<String>,
+    /// The uuids of the sources of the recording the throughput query is
+    /// a service of: a plot whose query includes it reads those sources
+    /// besides its own recording's.
+    pub throughput_sources: Vec<String>,
     /// For a recording shown beside a comparison ([`add_beside_sections`]):
     /// its key and its own source, which the section is expanded against,
     /// its queries carrying `__capture__="<key>"` for
@@ -286,25 +290,79 @@ fn build_context(
 
 /// Run each KPI's query against `data` and mark the KPIs that return
 /// nothing unavailable, so their charts are listed as such rather than drawn
-/// empty. What both viewers do for a capture's service templates.
+/// empty, and log each KPI whose query failed ([`UnavailableKpi::log`]). What
+/// both viewers do for a capture's service templates, for a single
+/// recording, each side of a comparison and each recording of a combined
+/// archive.
 pub fn validate_service_extensions(
     data: &dyn MetricsSource,
     exts: &mut [(String, ServiceExtension)],
 ) {
+    for kpi in check_service_extensions(data, exts) {
+        kpi.log();
+    }
+}
+
+/// [`validate_service_extensions`] without the logging: marks each KPI's
+/// availability and returns the KPIs whose query failed, for a caller that
+/// logs them its own way (the server viewer warns once per process).
+pub fn check_service_extensions(
+    data: &dyn MetricsSource,
+    exts: &mut [(String, ServiceExtension)],
+) -> Vec<UnavailableKpi> {
     use metriken_query::QueryResult;
     let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
+    let mut failed = Vec::new();
     for (_source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
             let query = kpi.effective_query();
             kpi.available = match data.query_range(&query, start, end, 1.0) {
-                Ok(QueryResult::Vector { result }) => !result.is_empty(),
-                Ok(QueryResult::Matrix { result }) => !result.is_empty(),
+                Ok(QueryResult::Vector { result, .. }) => !result.is_empty(),
+                Ok(QueryResult::Matrix { result, .. }) => !result.is_empty(),
                 Ok(QueryResult::Scalar { .. }) => true,
-                Ok(QueryResult::HistogramHeatmap { result }) => !result.data.is_empty(),
-                Err(_) => false,
+                Ok(QueryResult::HistogramHeatmap { result, .. }) => !result.data.is_empty(),
+                Err(e) => {
+                    failed.push(UnavailableKpi {
+                        notable: kpi_error_is_notable(&e),
+                        message: format!("KPI {:?} is unavailable: {query}: {e}", kpi.title),
+                    });
+                    false
+                }
             };
         }
     }
+    failed
+}
+
+/// A KPI whose query failed, found by [`check_service_extensions`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnavailableKpi {
+    /// Whether the error says more than that the recording lacks the
+    /// KPI's metric ([`kpi_error_is_notable`]): logged at warn, else debug.
+    pub notable: bool,
+    /// The KPI's title, its query and the error.
+    pub message: String,
+}
+
+impl UnavailableKpi {
+    /// Log the message, at warn when it is notable and at debug otherwise.
+    pub fn log(&self) {
+        if self.notable {
+            tracing::warn!("{}", self.message);
+        } else {
+            tracing::debug!("{}", self.message);
+        }
+    }
+}
+
+/// Whether a KPI query's error says more than that the recording lacks its
+/// metric, which a template written for several producers expects: an
+/// evaluation or unsupported-operation error (a function given the wrong
+/// kind of metric). A parse error is not notable here, since an archive
+/// reports a metric it does not hold as one.
+pub fn kpi_error_is_notable(e: &metriken_query::QueryError) -> bool {
+    use metriken_query::QueryError::*;
+    matches!(e, EvaluationError(_) | Unsupported(_))
 }
 
 /// The section context of a combined source: `data` reads every recording
@@ -329,14 +387,20 @@ pub fn validate_service_extensions(
 ///
 /// Every route but the query explorer and `/source/` renders against
 /// [`Scoped`]: the recording's catalog, its own header (interval, source,
-/// version and time range), and its queries restricted to its series by
-/// [`combined::restrict_query`], with the matchers also under
-/// [`combined::SCOPE_KEY`] in the view's metadata. An instance's Overview
-/// shows the throughput of a service of its own recording, else of a
-/// service recorded from the same `host`, restricted to that service's
-/// recording; an instance with neither has none, rather than another
-/// host's. `DashboardContext::throughput_query` is the first instance's (or,
-/// with no built-in instance, the first service's).
+/// version and time range), and each plot's [`Plot::scope`] set to the
+/// uuids of the recording's sources, which are also under
+/// [`combined::SCOPE_KEY`] in the view's metadata. A recording without
+/// source uuids ([`combined::source_uuids`]) has no scope; its queries are
+/// restricted by [`combined::restrict_query`] instead.
+///
+/// An instance's Overview shows the throughput of a service of its own
+/// recording, else of a service recorded from the same `host`, a plot that
+/// includes it reading that service's sources as well. An instance with
+/// neither has none, rather than another host's, and so does one whose
+/// throughput would come from another recording when either recording has
+/// no source uuids.
+/// `DashboardContext::throughput_query` is the first instance's (or, with
+/// no built-in instance, the first service's).
 ///
 /// `catalog`, when the shell has the archive `data` reads, answers each
 /// recording's names and label sets without opening other recordings'
@@ -368,6 +432,7 @@ pub fn build_combined_context(
         .zip(matchers)
         .map(|(member, matchers)| {
             let scope = Scope {
+                sources: member.sources.clone(),
                 matchers,
                 header: member.header.clone(),
                 metadata: member.metadata.clone(),
@@ -425,35 +490,42 @@ pub fn build_combined_context(
     let builtin: Vec<usize> = (0..parts.len())
         .filter(|&i| parts[i].template.is_some())
         .collect();
-    // Each service's throughput query, restricted to its recording, with
-    // the recording it reads.
+    // Each service's throughput query, with the recording it reads.
     let throughputs: Vec<(usize, String)> = parts
         .iter()
         .enumerate()
         .flat_map(|(i, part)| {
             part.service_exts
                 .iter()
-                .filter_map(move |(_, ext)| ext.throughput_query().map(|q| (i, q)))
+                .filter_map(move |(_, ext)| ext.throughput_query().map(|q| (i, q.to_string())))
         })
-        .map(|(i, q)| (i, combined::restrict_query(q, &parts[i].scope.matchers)))
         .collect();
     // An instance's throughput: a service of its own recording's, else of a
-    // recording on its host, else none.
+    // recording on its host, else none; with that recording's sources. None
+    // for a service of another recording when either recording has no
+    // source uuids, since its query could not be scoped to the service; a
+    // service of the instance's own recording is read as the instance is.
     let host = |i: usize| series_labels[i].get("host");
-    let throughput_for = |i: usize| -> Option<String> {
+    let throughput_for = |i: usize| -> Option<(String, Vec<String>)> {
         throughputs
             .iter()
             .find(|(j, _)| *j == i)
             .or_else(|| host(i).and_then(|h| throughputs.iter().find(|(j, _)| host(*j) == Some(h))))
-            .map(|(_, q)| q.clone())
+            .filter(|(j, _)| {
+                *j == i
+                    || (!parts[i].scope.sources.is_empty() && !parts[*j].scope.sources.is_empty())
+            })
+            .map(|(j, q)| (q.clone(), parts[*j].scope.sources.clone()))
     };
     let (names, keys) = instance_naming(&builtin, &series_labels);
     for (n, &i) in builtin.iter().enumerate() {
         let template = parts[i].template.clone().expect("filtered on a template");
+        let (throughput, throughput_sources) = throughput_for(i).unzip();
         let scope = Arc::new(RouteScope {
             scope: parts[i].scope.clone(),
             template: Some(Arc::clone(&template)),
-            throughput: throughput_for(i),
+            throughput,
+            throughput_sources: throughput_sources.unwrap_or_default(),
             capture: None,
         });
         for mut section in template.sections() {
@@ -509,6 +581,7 @@ pub fn build_combined_context(
                     scope: scope.clone(),
                     template: None,
                     throughput: None,
+                    throughput_sources: Vec::new(),
                     capture: None,
                 }),
             );
@@ -543,7 +616,7 @@ pub fn build_combined_context(
     let template = builtin.first().and_then(|&i| parts[i].template.clone());
     let throughput_query = builtin
         .first()
-        .and_then(|&i| throughput_for(i))
+        .and_then(|&i| throughput_for(i).map(|(q, _)| q))
         .or_else(|| throughputs.first().map(|(_, q)| q.clone()));
     let context = DashboardContext {
         sections,
@@ -610,7 +683,10 @@ pub fn render_section(
 }
 
 /// A route of a combined source ([`build_combined_context`]): rendered
-/// against [`Scoped`], with every query restricted to the recording.
+/// against [`Scoped`], each plot carrying the scope its queries read with
+/// (the recording's sources, and the throughput's recording's where the
+/// plot's query includes the throughput query), and the section's metadata
+/// the recording's under [`combined::SCOPE_KEY`].
 fn render_scoped(
     data: &dyn MetricsSource,
     route: &str,
@@ -632,22 +708,45 @@ fn render_scoped(
         )?,
         None => generate_section(&scoped, route, ctx).map(|view| Rendered { view, error: None })?,
     };
-    let mut matchers = route_scope.scope.matchers.clone();
+    let own = &route_scope.scope.sources;
+    if !own.is_empty() {
+        let mut with_throughput = own.clone();
+        for source in &route_scope.throughput_sources {
+            if !with_throughput.contains(source) {
+                with_throughput.push(source.clone());
+            }
+        }
+        let throughput = route_scope.throughput.as_deref();
+        rendered.view.scope_plots(|queries| {
+            let reads_throughput =
+                throughput.is_some_and(|t| queries.iter().any(|q| q.contains(t)));
+            match reads_throughput {
+                true => with_throughput.clone(),
+                false => own.clone(),
+            }
+        });
+        rendered.view.metadata.insert(
+            combined::SCOPE_KEY.to_string(),
+            serde_json::to_value(own).unwrap_or_default(),
+        );
+    } else {
+        // A recording without source uuids: its queries restricted by its
+        // matchers.
+        let matchers = &route_scope.scope.matchers;
+        rendered
+            .view
+            .map_queries(|q| combined::restrict_query(q, matchers));
+    }
     if let Some((key, _)) = &route_scope.capture {
-        matchers.push(combined::Matcher::eq(combined::CAPTURE_LABEL, key));
-        // A recording beside a comparison renders as a single capture.
+        // A recording beside a comparison renders as a single capture, its
+        // queries sent to its source by their `__capture__` matcher.
+        let capture = [combined::Matcher::eq(combined::CAPTURE_LABEL, key)];
+        rendered
+            .view
+            .map_queries(|q| combined::restrict_query(q, &capture));
         rendered.view.metadata.insert(
             combined::SINGLE_CAPTURE_KEY.to_string(),
             serde_json::Value::String(key.clone()),
-        );
-    }
-    if !matchers.is_empty() {
-        rendered
-            .view
-            .map_queries(|q| combined::restrict_query(q, &matchers));
-        rendered.view.metadata.insert(
-            combined::SCOPE_KEY.to_string(),
-            serde_json::to_value(&matchers).unwrap_or_default(),
         );
     }
     Some(rendered)
@@ -668,14 +767,16 @@ pub struct Beside {
 /// The keys and names of recordings shown beside a comparison, from their
 /// labels, told apart among themselves as instances are
 /// ([`combined::instance_names`]). One that no label tells apart (a lone
-/// beside recording, or twins) is named by its `host`, else its `source`,
-/// else `recording N` from its archive position (`positions`, 0-based).
+/// beside recording, or twins) is named by its `alias`, else its `host`,
+/// else its `source`, else `recording N` from its archive position
+/// (`positions`, 0-based).
 pub fn beside_names(
     labels: &[BTreeMap<String, String>],
     positions: &[usize],
 ) -> Vec<(String, String)> {
     let names = combined::names_or(labels, |i, l| {
-        l.get("host")
+        l.get(crate::identity::ALIAS_LABEL)
+            .or_else(|| l.get("host"))
             .or_else(|| l.get("source"))
             .cloned()
             .unwrap_or_else(|| format!("recording {}", positions.get(i).copied().unwrap_or(i) + 1))
@@ -708,10 +809,12 @@ pub fn add_beside_sections(
 ) -> Vec<String> {
     let mut notices = Vec::new();
     for b in beside {
+        // Rendered against its own source, so its queries need no scope.
         let member = Member {
             series_labels: BTreeMap::new(),
             metadata: b.data.file_metadata(),
             header: combined::Header::of(b.data.as_ref()),
+            sources: Vec::new(),
         };
         let (sub, sub_notices) = build_combined_context(
             b.data.as_ref(),
@@ -736,6 +839,7 @@ pub fn add_beside_sections(
                         scope: scope.scope.clone(),
                         template: scope.template.clone(),
                         throughput: scope.throughput.clone(),
+                        throughput_sources: scope.throughput_sources.clone(),
                         capture: Some((b.key.clone(), Arc::clone(&b.data))),
                     }),
                 );
@@ -767,12 +871,16 @@ pub fn add_beside_sections(
     notices
 }
 
-/// Whether the built-in sections can show `data`: it is a Rezolus agent's
-/// recording (its `source` is `rezolus`), whichever samplers it ran, or it
-/// carries the agent's `cpu_usage` under another source (a combined
+/// Whether `data` has the agent's system metrics, which decides the landing
+/// section of a comparison: it is a Rezolus agent's recording (its `source`
+/// is `rezolus`, or its identity layers name the agent,
+/// [`crate::identity::Identity::is_rezolus`]), whichever samplers it ran, or
+/// it carries the agent's `cpu_usage` under another source (a combined
 /// recording). A service's recording is neither.
 pub fn has_system_metrics(data: &dyn MetricsSource) -> bool {
-    data.source() == "rezolus" || data.counter_names().iter().any(|n| n == "cpu_usage")
+    data.source() == crate::identity::REZOLUS
+        || crate::identity::Identity::read(&data.file_metadata()).is_rezolus()
+        || data.counter_names().iter().any(|n| n == "cpu_usage")
 }
 
 /// The file-metadata key under which a comparison's baseline lists the
@@ -933,6 +1041,19 @@ pub fn generate_section(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_an_evaluation_or_unsupported_error_is_a_notable_kpi_error() {
+        use metriken_query::QueryError::*;
+        assert!(super::kpi_error_is_notable(&EvaluationError(
+            "x_total is stored under a and b".into()
+        )));
+        assert!(super::kpi_error_is_notable(&Unsupported("f".into())));
+        assert!(!super::kpi_error_is_notable(&MetricNotFound("x".into())));
+        assert!(!super::kpi_error_is_notable(&ParseError(
+            "query references no metric present in this .rez: x".into()
+        )));
+    }
+
     use super::*;
 
     /// An agent is known by its source, whichever samplers it ran; another
@@ -956,6 +1077,26 @@ mod tests {
             )
             .unwrap();
         assert!(has_system_metrics(&joined));
+
+        // A recording with identity layers is the agent's by its producer,
+        // whatever `source` it was given.
+        let layered = metriken_query::MemoryStore::builder().build();
+        let agent_metadata = crate::identity::tests::layered(&[
+            (
+                metriken_storage::layers::Layer::Recorder,
+                &[],
+                &[("producer_name", "rezolus")],
+            ),
+            (
+                metriken_storage::layers::Layer::User,
+                &[("source", "web-01")],
+                &[],
+            ),
+        ]);
+        for (k, v) in agent_metadata {
+            layered.set_metadata(k, v);
+        }
+        assert!(has_system_metrics(&layered));
     }
 
     /// The baseline's systeminfo is one node unless every value is a node's
@@ -1001,6 +1142,13 @@ mod tests {
         assert_eq!(
             name(&[l(&[("source", "rezolus")])], &[0]),
             [("rezolus".to_string(), "rezolus".to_string())]
+        );
+        assert_eq!(
+            name(
+                &[l(&[("alias", "web"), ("host", "h"), ("source", "rezolus")])],
+                &[0]
+            ),
+            [("web".to_string(), "web".to_string())]
         );
         assert_eq!(
             name(&[l(&[])], &[2]),
@@ -1094,6 +1242,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             header: Default::default(),
+            sources: vec![format!("uuid-{host}")],
         };
         let data = metriken_query::MemoryStore::builder().build();
         let (ctx, notices) = build_combined_context(
@@ -1121,12 +1270,59 @@ mod tests {
         let names: Vec<&str> = ctx.service_exts.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["svc", "svc@h2"]);
         // The KPI has no data here, so it is listed, not drawn; the view is
-        // the second recording's.
+        // the second recording's, its scope that recording's sources.
         let view = render_section(&data, "/service/svc@h2", &ctx).unwrap().view;
-        assert_eq!(
-            view.metadata["scope"],
-            serde_json::json!([{"label": "host", "op": "=", "value": "h2"}])
-        );
+        assert_eq!(view.metadata["scope"], serde_json::json!(["uuid-h2"]));
+    }
+
+    /// A recording whose own metadata carries a service template keeps that
+    /// service's throughput on its Overview with or without source uuids:
+    /// the throughput query is read as the recording's other queries are.
+    #[test]
+    fn a_recording_without_uuids_keeps_its_own_services_throughput() {
+        let template = serde_json::json!({
+            "service_name": "svc",
+            "kpis": [{
+                "role": "throughput",
+                "title": "t",
+                "query": "sum(irate(svc_requests[5m]))",
+                "type": "delta_counter",
+                "denominator": true,
+            }],
+        })
+        .to_string();
+        let member = |host: &str, sources: Vec<String>| crate::combined::Member {
+            series_labels: [("source", "rezolus"), ("host", host)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            metadata: [
+                ("source", "rezolus"),
+                ("service_queries", template.as_str()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+            header: Default::default(),
+            sources,
+        };
+        let data = metriken_query::MemoryStore::builder().build();
+        for sources in [vec!["u".to_string()], vec![]] {
+            let (ctx, _) = build_combined_context(
+                &data,
+                None,
+                &[member("h1", sources.clone())],
+                &TemplateRegistry::empty(),
+                TemplatePreference::Archive,
+                None,
+                None,
+            );
+            assert_eq!(
+                ctx.scopes["/overview"].throughput.as_deref(),
+                Some("sum(irate(svc_requests[5m]))"),
+                "{sources:?}"
+            );
+        }
     }
 
     #[test]
@@ -1201,12 +1397,16 @@ mod tests {
         };
         let vllm = ServiceExtension {
             service_name: "vllm".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "vllm_q")],
         };
         let sglang = ServiceExtension {
             service_name: "sglang".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
@@ -1279,12 +1479,16 @@ mod tests {
         };
         let vllm = ServiceExtension {
             service_name: "vllm".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "vllm_q")],
         };
         let sglang = ServiceExtension {
             service_name: "sglang".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
@@ -1352,6 +1556,8 @@ mod tests {
         };
         let vllm_a = ServiceExtension {
             service_name: "vllm".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi.clone()],

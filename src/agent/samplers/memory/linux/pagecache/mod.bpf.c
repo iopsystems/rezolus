@@ -166,6 +166,31 @@ struct page___compound_order {
     unsigned char compound_order;
 } __attribute__((preserve_access_index));
 
+// From 6.18 `folio->flags` is a `memdesc_flags_t`, a struct whose one member
+// `f` holds the word. An integer read of `flags` does not relocate against it:
+// libbpf poisons the instruction and the verifier rejects the program. This
+// flavor names the wrapped shape. libbpf matches a local struct member to any
+// target struct but never to an integer, so `flags.f` exists only where
+// `flags` is the wrapper.
+struct memdesc_flags___wrapped {
+    unsigned long f;
+} __attribute__((preserve_access_index));
+
+struct folio___memdesc_flags {
+    struct memdesc_flags___wrapped flags;
+} __attribute__((preserve_access_index));
+
+// The folio's flags word, wherever the running kernel keeps it.
+static __always_inline unsigned long folio_flags(struct folio* folio) {
+    struct folio___memdesc_flags* wrapped = (void*)folio;
+
+    if (bpf_core_field_exists(wrapped->flags.f)) {
+        return BPF_CORE_READ(wrapped, flags.f);
+    }
+
+    return BPF_CORE_READ(folio, flags);
+}
+
 // Pages in a folio: 1 << order for a large folio (PG_head set), 1 otherwise.
 // Before folios (5.16) every page-cache page is one page. An order past any
 // the page cache allocates is treated as a misread and counted as one.
@@ -174,7 +199,7 @@ static __always_inline u64 folio_pages(struct folio* folio) {
         return 1;
     }
 
-    unsigned long flags = BPF_CORE_READ(folio, flags);
+    unsigned long flags = folio_flags(folio);
     if (!(flags & (1UL << bpf_core_enum_value(enum pageflags, PG_head)))) {
         return 1;
     }

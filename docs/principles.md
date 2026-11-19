@@ -30,20 +30,21 @@ majority of workloads. Every other principle in this section is *how we hold
 to that target*.
 
 *Caveat:* "light enough" is bounded by the rate of the kernel events being
-instrumented and the per-probe entry cost. Workloads that drive any one hot
-path at extreme rates — millions of packets per second, millions of context
-switches per second, millions of syscalls per second, or millions of block
-I/Os per second — can see measurable impact, both from the cumulative
-entry/exit tax across all enabled probes and, at extreme connection rates,
-from the hashmap in `tcp_connect_latency` (an insert, a lookup and a
-delete per connect, and a delete per destroyed socket). Less common patterns
-can trip the same threshold for individual samplers (heavy mmap churn for
-`cpu/tlb_flush`, throttle storms for `cpu/bandwidth`, PMU contention with
-other consumers for `cpu/perf`) — the shape is always the same: one hot
-path firing at an extreme rate. On those workloads the right answer is to
-run Rezolus on a representative subset of machines, or to disable the
-specific samplers driving the cost — not to treat it as a failure of the
-design.
+instrumented and the per-probe entry cost. Workloads that drive any one
+hot path at extreme rates — millions of packets per second, millions of
+context switches per second, millions of syscalls per second, or millions
+of block I/Os per second — can see measurable impact, both from the
+cumulative entry/exit tax across all enabled probes and, at extreme
+connection rates, from `tcp_connect_latency`, which runs a program on
+every inet socket state change (TCP, and SCTP, DCCP or MPTCP where
+present) and does an insert, a lookup and a delete per connect, and a
+delete per destroyed socket. Less common patterns can trip the same
+threshold for individual samplers (heavy mmap churn for `cpu/tlb_flush`,
+throttle storms for `cpu/bandwidth`, PMU contention with other consumers
+for `cpu/perf`) — the shape is always the same: one hot path firing at an
+extreme rate. On those workloads the right answer is to run Rezolus on a
+representative subset of machines, or to disable the specific samplers
+driving the cost — not to treat it as a failure of the design.
 
 **How to apply.**
 - Treat any change that increases per-event work in a hot path as an overhead
@@ -212,8 +213,8 @@ a constant; over-allocates on small machines, silently under-counts past
 
 ### 7. Counter map layout matches the writer-concurrency pattern
 
-Five counter strategies coexist in `src/agent/bpf/counters.rs`, and the
-choice is principled:
+Five counter strategies coexist in `src/agent/bpf/counters.rs`, and a
+sixth, `process_table`, in `cpu_usage` (below). The choice is principled:
 
 - **`Counters`** (per-CPU bank, cacheline-padded, summed at userspace) — for
   hot-path totals where many CPUs increment the same logical counter and
@@ -254,14 +255,28 @@ advanced, which the kernel does about once per scheduler tick per busy
 CPU, so a process's slot takes at most about one write per CPU per tick.
 With tick-based accounting, ticks fire at the same time on every CPU
 unless the kernel is booted with `skew_tick=1`, so those writes arrive
-together. In the same 56-vCPU guest
+together. With that copy alone, in the same 56-vCPU guest
 (HZ=250, 15.3k runs per second) with 48 spinning threads, the `cpu_usage`
 programs took 306-314 ns per run with the threads in one process and
 195-203 ns with 48 one-thread processes, against 162-177 ns without the
 process counter: about 2 ms of CPU per second across the host. The cost
-grows with the number of CPUs running the process and with HZ; it has
-not been measured on a larger host. Sharding it as `CgroupCounters` are
-sharded would cost 16 copies of a 32 MiB array, so it keeps one copy.
+grows with the number of CPUs running the process and with HZ.
+
+None of the five fits that slot. The array is indexed by pid, so the
+`CgroupCounters` layout costs 32 MiB per copy, 512 MiB for `CGROUP_SHARDS`
+copies, and the per-CPU layouts cost more. So `cpu_usage` has a sixth
+layout, `process_table`: `CGROUP_SHARDS` copies assigned from the L3
+topology as for `CgroupCounters`, each a direct-mapped table of 256
+cache-line entries keyed by tgid and start time, 256 KiB in all. The agent
+(`src/agent/samplers/cpu/linux/usage/process_table.rs`) gives an entry to a labelled process that used at least
+half a CPU over a refresh, and frees it below an eighth. BPF adds to the
+CPU's copy when the entry matches the task, and to `process_cpu_usage`
+otherwise. Each refresh the agent moves the entries' counts into
+`process_cpu_usage`, which stays the only exported map. In the same guest
+the 1 × 48 case took 213 ns per run with the table (mean of four
+interleaved rounds; 209 with 4,096 buckets), against 186 without the
+process counter
+([journal](journal/2026-10-27-process-cpu-usage-contention.md)).
 
 **How to apply.**
 - New samplers prefer `CpuCounters` over `Counters` (see also principle 9).
@@ -275,6 +290,8 @@ sharded would cost 16 copies of a 32 MiB array, so it keeps one copy.
 
 **What we refuse.**
 - Hand-rolling another counter strategy when one of the five fits.
+  `process_table` exists because none did; a new layout records why in
+  this principle.
 - Padding `PackedCounters`-style keyed slots where each slot has one
   natural writer.
 
@@ -383,6 +400,16 @@ If the agent had to push at a cadence, it would need explicit timing logic.
 **What we refuse.**
 - Agent-side timers that flush, decay, or downsample metrics.
 - Coupling between collection cadence and exposition cadence.
+
+**Exception: widening a narrow kernel counter.** A counter the kernel keeps
+in 32 bits can wrap more than once between two consumer reads, and the lost
+wraps cannot be recovered. A sampler over such a counter may read it on its
+own timer, often enough that it cannot advance by the counter's range or
+more between reads (for `tcp::macos`, 2^32 less the 256 MiB it accepts as a
+racing update), to keep a 64-bit total; the timer updates that total and
+sets no metric, and `refresh()` still reads the source itself. macOS
+`tcp_traffic` does this, reading `net.inet.tcp.stats` every 250 ms
+(`tcp::macos`).
 
 ### 11. Prefer to combine samplers to share probes
 
@@ -647,7 +674,15 @@ enforces, and that reviewers must protect:
   schema is what the sampler registers (bounded by real population — e.g.
   possible CPUs, never the array capacity); a quiet member reports zero,
   it does not vanish. Value-sentinel membership is a V2 transitional
-  behavior confined to the un-migrated default groups.
+  behavior confined to the un-migrated default groups. One exception: a
+  declared group of histograms is published from its first stamp, and its
+  histograms are left out until then rather than published with no values.
+  A histogram group no sampler on the host reads, such as one from a Linux
+  `stats.rs` compiled on macOS, is never stamped and never published. An
+  unstamped declared group of counters or gauges is still published, with
+  null members. A declared group must hold only histograms or no
+  histograms; a test (`no_declared_group_mixes_histograms_with_other_metrics`)
+  checks this.
 - **A changing population may revise its bound on every read.** Most groups
   set `set_member_bound` once at init from a boot-fixed population. A
   sampler whose population changes while it runs — the `filesystem` sweep,
@@ -669,7 +704,13 @@ enforces, and that reviewers must protect:
   the value is exposed, not a staleness claim. It is still an honest,
   deliberate upper bound (marking the end immediately after that group's
   member reads, not at eventual publish, keeps the width to the group's
-  own read span rather than whole-walk time). One exception on magnitude:
+  own read span rather than whole-walk time). When a step before the read
+  fixes some members' values, the window begins no later than that step
+  (`AcquisitionGroup::values_fixed_at`): `cpu_usage` moves `process_table`'s
+  counts into `process_cpu_usage` before the read, so while any table entry
+  is in use, and for the refresh that drains the last one, the
+  `cpu_usage_process` window begins no later than the move. One
+  exception on magnitude:
   V2's `task_cpu_usage` and `process_cpu_usage` spans include their full
   capacity walks — kept deliberately for ringbuf-loss robustness (see the
   comment at the V2 reader-stamped arm in `snapshot.rs`) — so those two
@@ -940,18 +981,11 @@ caveat in principle 4), so each needs a kprobe twin, selected with
 `kernel_can_fentry`, where the hook matters there (`tlb_finish_mmu` is
 aarch64-only):
 
-- TCP: `tcp_sendmsg`, `tcp_retransmit_skb`, `tcp_rcv_state_process`,
-  `tcp_rcv_established`, `tcp_cleanup_rbuf`.
+- TCP: `tcp_sendmsg`, `tcp_retransmit_skb`, `tcp_rcv_established`,
+  `tcp_cleanup_rbuf`.
 - CFS bandwidth: `throttle_cfs_rq`, `unthrottle_cfs_rq`,
   `tg_set_cfs_bandwidth`.
 - Other: `tlb_finish_mmu`, `cpuacct_account_field`.
-
-### `fexit` collapse (principle 4)
-
-Kprobe + exit-tracepoint pair → single `fexit` program:
-
-- `tcp_v4_connect` / `tcp_v6_connect` paired today with
-  `tracepoint/tcp/tcp_destroy_sock` for connect latency.
 
 ### `Counters` → `CpuCounters` evaluation (principle 9)
 

@@ -29,7 +29,9 @@ files (site keeps its own copy):
   `.dendro` file
 
 Everything else — **including `data.js`** — is a same-name symlink into
-`src/viewer/assets/lib/`. (There is no `data_base.js`; that was an older
+`src/viewer/assets/lib/`, except `charts/` and `charts.css`, which
+`crates/viewer/build.sh` copies from the metriken-charts crate and git
+ignores. (There is no `data_base.js`; that was an older
 architecture. `dashboards.js` no longer exists.)
 
 ## Coverage can be per-file OR a directory symlink
@@ -64,8 +66,8 @@ before pushing a viewer change: `bash scripts/check-viewer-symlinks.sh`.
 
 3. **Check** whether the expected symlink exists and points to the correct
    target. Compute the relative path from the symlink location back to the
-   source file (e.g., `../../../src/viewer/assets/lib/charts/chart.js` for a
-   file in `site/viewer/lib/charts/`).
+   source file (e.g., `../../../src/viewer/assets/lib/ui/controls.js` for a
+   file in `site/viewer/lib/ui/`).
 
 4. **Create** any missing symlinks. Create parent directories if needed.
    Report each symlink created.

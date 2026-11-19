@@ -151,7 +151,7 @@ mod tests {
         .remove(0)
         .1;
         let (start, end) = r.time_range().unwrap();
-        let metriken_query::QueryResult::Matrix { result } = r
+        let metriken_query::QueryResult::Matrix { result, .. } = r
             .query_range("sum by (comm) (rate(task_ops[3s]))", start, end + 1.0, 1.0)
             .unwrap()
         else {
@@ -252,7 +252,7 @@ mod tests {
     fn the_occupant_lead_is_the_writers_restatement_period() {
         assert_eq!(
             ::report_save::OCCUPANT_RESTATE_NS,
-            metriken_storage::WriterConfig::default().restate_every_ns
+            metriken_recorder::WriterConfig::default().restate_every_ns
         );
     }
 

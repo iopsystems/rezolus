@@ -15,7 +15,7 @@ package manager.
 
 **Supported distributions:**
 - Debian: 13 (trixie/stable), 12 (bookworm/oldstable)
-- Ubuntu: 22.04 (jammy), 24.04 (noble). 20.04 (focal) was last packaged in 5.22.1.
+- Ubuntu: 22.04 (jammy), 24.04 (noble), 26.04 (resolute). 20.04 (focal) was last packaged in 5.22.1.
 - Enterprise Linux 9 and 10 (Rocky Linux, AlmaLinux, RHEL, CentOS Stream, Oracle Linux)
 - Amazon Linux: 2023
 
@@ -37,9 +37,12 @@ For macOS users, install via Homebrew:
 brew install iopsystems/iop/rezolus
 ```
 
-Local macOS collection provides CPU and Apple GPU metrics, not Linux eBPF
-samplers. The viewer, recorder, and analysis tools can also work with remote
-Linux agents or existing recordings. No systemd services are installed on macOS.
+Local macOS collection provides CPU usage, CPU frequency and CPU and SoC energy
+(Apple silicon), memory, network traffic, TCP counters, block-I/O counters,
+filesystem space, NVMe drive health and Apple GPU metrics (the TCP counters
+need root), not Linux eBPF samplers. The viewer, recorder, and
+analysis tools can also work with remote Linux agents or existing recordings.
+No systemd services are installed on macOS.
 
 Or build from source following the instructions below.
 

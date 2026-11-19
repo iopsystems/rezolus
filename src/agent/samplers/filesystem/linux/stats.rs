@@ -19,13 +19,17 @@ pub const MAX_TMPFS: usize = 64;
 /// slot space, so one member bound and one set of labels serve both.
 pub const MAX_SLOTS: usize = MAX_MOUNTS + MAX_TMPFS;
 
+// The sampler the group belongs to: `filesystem` where a sampler compiles this
+// file in its own module (Linux and macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "filesystem";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("filesystem");
+
 // Must remain in stats.rs so non-Linux builds register the group too.
 /// Shared window for discovery and every gauge family; see linux/mod.rs.
-pub static FILESYSTEM_SWEEP_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    // Must match metric attribution on non-Linux as well as Linux.
-    crate::agent::samplers::bpf_sampler_name("filesystem"),
-    "filesystem_sweep",
-);
+pub static FILESYSTEM_SWEEP_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "filesystem_sweep");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static FILESYSTEM_SWEEP_ACQ_REG: &'static AcquisitionGroup = &FILESYSTEM_SWEEP_ACQ;

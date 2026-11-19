@@ -34,7 +34,7 @@ That's an **arbitrary** timestamp, not aligned to the step boundary, so:
 2. **A/B compare breakage.** Two recordings with different `minTime` phases
    (almost always — different hosts/start times) on the same 1s step are offset
    by `(minTime_b − minTime_e) mod step`. Their grids never coincide, so
-   `src/viewer/assets/lib/charts/util/compare_math.js`'s `1e-6` coincidence
+   `src/viewer/assets/lib/compare/compare_math.js`'s `1e-6` coincidence
    check (`Math.abs(ta[i] - tb[i]) > 1e-6`) bails to `null`.
 
 The engine (metriken-query) generates the grid in

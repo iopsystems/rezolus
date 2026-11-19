@@ -24,22 +24,26 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     capacity.describe(
         "Bytes per locally mounted filesystem. Available is what an unprivileged writer can \
          still use and is the number to alert on; Free also counts the superuser reserve. \
-         Used % is computed as df computes it, so the reserve does not count as used.",
+         Used % is computed as df computes it on Linux, so the reserve does not count as used. \
+         An APFS volume without a quota or reserve reports its container's size and free \
+         space, so its Used % is the container's. Volume Used, recorded on macOS, is the bytes \
+         each volume itself uses, the number df reports as used, and Volume Used % is that \
+         over itself plus Available, which df rounds up to a whole percent as Capacity.",
     );
     capacity.plot_promql(
-        PlotOpts::gauge("Available", "available", Unit::Bytes),
+        Plot::gauge("Available", "available", Unit::Bytes),
         by_mount("filesystem_available"),
     );
     capacity.plot_promql(
-        PlotOpts::gauge("Free", "free", Unit::Bytes),
+        Plot::gauge("Free", "free", Unit::Bytes),
         by_mount("filesystem_free"),
     );
     capacity.plot_promql(
-        PlotOpts::gauge("Total", "total", Unit::Bytes),
+        Plot::gauge("Total", "total", Unit::Bytes),
         by_mount("filesystem_total"),
     );
     capacity.plot_promql(
-        PlotOpts::gauge("Used %", "used-pct", Unit::Percentage).percentage_range(),
+        Plot::gauge("Used %", "used-pct", Unit::Percentage).percentage_range(),
         // As df computes it: used over used plus available, so the superuser
         // reserve counts as neither.
         format!(
@@ -49,6 +53,22 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             available = by_mount("filesystem_available"),
         ),
     );
+    if has_metric(data, "filesystem_volume_used") {
+        capacity.plot_promql(
+            Plot::gauge("Volume Used", "volume-used", Unit::Bytes),
+            by_mount("filesystem_volume_used"),
+        );
+        capacity.plot_promql(
+            Plot::gauge("Volume Used %", "volume-used-pct", Unit::Percentage).percentage_range(),
+            // As df computes Capacity on macOS: the volume's own use over that
+            // plus available.
+            format!(
+                "{used} / ({used} + {available})",
+                used = by_mount("filesystem_volume_used"),
+                available = by_mount("filesystem_available"),
+            ),
+        );
+    }
 
     view.group(space);
 
@@ -63,12 +83,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              shown.",
         );
         usage.plot_promql(
-            PlotOpts::gauge("Free Inodes", "inodes-free", Unit::Count),
+            Plot::gauge("Free Inodes", "inodes-free", Unit::Count),
             by_mount("filesystem_inodes_free"),
         );
         usage.plot_promql(
-            PlotOpts::gauge("Inodes Free %", "inodes-free-pct", Unit::Percentage)
-                .percentage_range(),
+            Plot::gauge("Inodes Free %", "inodes-free-pct", Unit::Percentage).percentage_range(),
             format!(
                 "{} / {}",
                 by_mount("filesystem_inodes_free"),
@@ -90,7 +109,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              once per sweep (60s by default), so the rate is a per-minute average.",
         );
         device.plot_promql(
-            PlotOpts::counter("Device Writes", "device-writes", Unit::Datarate),
+            Plot::counter("Device Writes", "device-writes", Unit::Datarate),
             rate_by_mount("filesystem_written_bytes"),
         );
 
@@ -109,7 +128,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                  writable while its writes fail.",
             );
             readonly.plot_promql(
-                PlotOpts::gauge("Read-only", "readonly", Unit::Count),
+                Plot::gauge("Read-only", "readonly", Unit::Count),
                 by_mount("filesystem_readonly"),
             );
         }
@@ -123,7 +142,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                  happened.",
             );
             errors.plot_promql(
-                PlotOpts::gauge("Errors", "errors", Unit::Count),
+                Plot::gauge("Errors", "errors", Unit::Count),
                 by_mount("filesystem_errors"),
             );
         }
@@ -190,6 +209,19 @@ mod tests {
              (sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free) + \
              sum by (mount) (filesystem_available))"
         ));
+    }
+
+    #[test]
+    fn volume_used_appears_only_when_the_recording_has_the_metric() {
+        let without = generate(&store_with(&["filesystem_total"]), vec![]);
+        assert!(!json(&without).contains("filesystem_volume_used"));
+
+        let with = generate(
+            &store_with(&["filesystem_total", "filesystem_volume_used"]),
+            vec![],
+        );
+        assert!(json(&with).contains("sum by (mount) (filesystem_volume_used)"));
+        assert!(json(&with).contains("volume-used-pct"));
     }
 
     #[test]

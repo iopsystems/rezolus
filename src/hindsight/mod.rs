@@ -59,6 +59,18 @@ pub fn command() -> Command {
         )
 }
 
+/// The log drain, held here so [`exit`] can flush it from anywhere in the
+/// daemon: the log is written by a background thread, and
+/// `std::process::exit` runs no destructors, so a line logged just before it
+/// could otherwise be lost.
+static LOG_DRAIN: std::sync::Mutex<Option<crate::common::LogDrain>> = std::sync::Mutex::new(None);
+
+/// Flush the log, then exit with `code`.
+fn exit(code: i32) -> ! {
+    drop(LOG_DRAIN.lock().unwrap_or_else(|e| e.into_inner()).take());
+    std::process::exit(code)
+}
+
 /// Runs the Rezolus `flight-recorder`: a Rezolus client that subscribes to the
 /// agent's replication stream and keeps a rolling archive buffer covering the
 /// configured lookback. On SIGHUP it writes the buffer to a timestamped file
@@ -83,7 +95,8 @@ pub fn command() -> Command {
 pub fn run(config: Config) {
     let config: Arc<Config> = config.into();
 
-    let _log_drain = configure_logging(config.log().level().to_tracing_level());
+    *LOG_DRAIN.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(configure_logging(config.log().level().to_tracing_level()));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -105,64 +118,17 @@ pub fn run(config: Config) {
         Ok(c) => c,
         Err(e) => {
             error!("error connecting to Rezolus: {e}");
-            std::process::exit(1);
+            exit(1);
         }
     };
-
-    let output = config.general().output();
-
-    // Fail fast rather than after fifteen minutes of buffering: if the output
-    // cannot be written there is no point recording anything to dump into it.
-    if let Err(e) = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&output)
-    {
-        error!("failed to open destination file: {e}");
-        std::process::exit(1);
-    }
-
-    let buffer_dir = config.general().buffer_dir();
-
-    // Created if absent, so a hand-run daemon works without the operator
-    // preparing anything. Under systemd `StateDirectory=rezolus` has already
-    // made it, with the right ownership for `User=rezolus` — which is the case
-    // that would otherwise fail, since a non-root service cannot create a
-    // directory under `/var/lib` itself.
-    if let Err(e) = std::fs::create_dir_all(&buffer_dir) {
-        eprintln!(
-            "could not create the buffer directory {}: {e}\n\
-             Set `buffer_dir` in the config, or run under a unit with \
-             `StateDirectory=rezolus`.",
-            buffer_dir.display()
-        );
-        std::process::exit(1);
-    }
-
-    // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
-    // sidecars cannot collide with anything and the whole lot is removed
-    // together when the daemon exits cleanly.
-    let staging = match tempfile::TempDir::new_in(&buffer_dir) {
-        Ok(t) => t,
-        Err(error) => {
-            eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
-            std::process::exit(1);
-        }
-    };
-    signals::set_buffer_dir(staging.path());
-    let buffer_path = staging.path().join("hindsight.dendro");
 
     let interval_dur: Duration = config.general().interval().into();
     let lookback: Duration = config.general().duration().into();
     let timeout = crate::recorder::tick_timeout(interval_dur);
 
-    // Detect the agent before the buffer exists: its stream, or a refusal
-    // naming its version. An agent that cannot stream, or is not there, ends
-    // the run before anything is written. The buffer is a recording with
-    // retention: everything older than the lookback is evicted each tick,
-    // measured back from the newest row.
+    // Detect the agent before the output file and the buffer exist: its
+    // stream, or a refusal naming its version. An agent that cannot stream,
+    // or is not there, ends the run before anything is created.
     let probe: Arc<dyn mr::Probe> = Arc::new(crate::recorder::agent_probe::RezolusProbe::new(
         async_client.clone(),
     ));
@@ -185,14 +151,59 @@ pub fn run(config: Config) {
                  run a rezolus 5.x hindsight ({} or later) for an older agent",
                 crate::recorder::RELEASE_5X
             );
-            std::process::exit(1);
+            exit(1);
         }
         mr::Detected::Pending { reason, .. } => {
             error!("could not subscribe to the agent at {url}: {reason}");
-            std::process::exit(1);
+            exit(1);
         }
         mr::Detected::Scraped { .. } => unreachable!("a declared stream is never scraped"),
     }
+
+    let output = config.general().output();
+
+    // Fail fast rather than after fifteen minutes of buffering: if the output
+    // cannot be written there is no point recording anything to dump into it.
+    if let Err(e) = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&output)
+    {
+        error!("failed to open destination file: {e}");
+        exit(1);
+    }
+
+    let buffer_dir = config.general().buffer_dir();
+
+    // Created if absent, so a hand-run daemon works without the operator
+    // preparing anything. Under systemd `StateDirectory=rezolus` has already
+    // made it, with the right ownership for `User=rezolus` — which is the case
+    // that would otherwise fail, since a non-root service cannot create a
+    // directory under `/var/lib` itself.
+    if let Err(e) = std::fs::create_dir_all(&buffer_dir) {
+        eprintln!(
+            "could not create the buffer directory {}: {e}\n\
+             Set `buffer_dir` in the config, or run under a unit with \
+             `StateDirectory=rezolus`.",
+            buffer_dir.display()
+        );
+        exit(1);
+    }
+
+    // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
+    // sidecars cannot collide with anything and the whole lot is removed
+    // together when the daemon exits cleanly.
+    let staging = match tempfile::TempDir::new_in(&buffer_dir) {
+        Ok(t) => t,
+        Err(error) => {
+            eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
+            exit(1);
+        }
+    };
+    signals::set_buffer_dir(staging.path());
+    let buffer_path = staging.path().join("hindsight.dendro");
 
     // Segment size tracks the interval rather than being fixed: the
     // writer's 900 rows is a segment per ~15 minutes at the default 1 s
@@ -205,12 +216,14 @@ pub fn run(config: Config) {
         policy.max_rows = rows.max(1);
     }
     let mut recorder_cfg = mr::RecorderConfig::new(buffer_path.clone(), interval_dur);
-    recorder_cfg.writer = metriken_storage::WriterConfig {
+    recorder_cfg.writer = mr::WriterConfig {
         seal: policy,
-        ..metriken_storage::WriterConfig::default()
+        ..mr::WriterConfig::default()
     };
     recorder_cfg.timeout = timeout;
     recorder_cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+    // The buffer is a recording with retention: everything older than the
+    // lookback is evicted each tick, measured back from the newest row.
     recorder_cfg.retain = Some(lookback);
     // A dump copies the buffer while it records. The agent's frame for an
     // interval arrives just after the recorder's aligned tick, so committed
@@ -229,7 +242,7 @@ pub fn run(config: Config) {
         Ok(started) => started,
         Err(e) => {
             error!("failed to create the hindsight buffer: {e}");
-            std::process::exit(1);
+            exit(1);
         }
     };
     info!(
@@ -255,12 +268,13 @@ pub fn run(config: Config) {
         });
     }
 
-    let (refused, capture_failed) = rt.block_on(async move {
+    let (agent_lost, capture_failed) = rt.block_on(async move {
         // The stop's capture failed: exit 1 rather than 0, so a supervisor
         // can tell the buffer was not saved.
         let mut capture_failed = false;
-        // The agent refused a reconnect: capture the buffer, then exit.
-        let mut refused = false;
+        // The agent stopped recording (refused on a reconnect, or its rows could
+        // not be recorded): capture the buffer, then exit.
+        let mut agent_lost = false;
         // Whether the capture that ends the run has started. A capture
         // already in flight when the refusal arrives was snapshotted before
         // it, so the refusal starts one of its own after that.
@@ -322,7 +336,7 @@ pub fn run(config: Config) {
                     // The run ends after this capture if a stop was asked for,
                     // or if it is the capture a refusal started.
                     let stop = signals::STATE.load(Ordering::SeqCst) == signals::TERMINATING
-                        || (refused && refusal_capture_started);
+                        || (agent_lost && refusal_capture_started);
                     // Otherwise back to RUNNING BEFORE the log line, so a
                     // signal sent on seeing that line is acted on as a new
                     // request rather than as one made during the capture.
@@ -331,7 +345,7 @@ pub fn run(config: Config) {
                     // the signal task runs on another thread, and a stop it
                     // stored since must not be overwritten.
                     let terminating = stop || {
-                        let next = if refused { signals::CAPTURING } else { signals::RUNNING };
+                        let next = if agent_lost { signals::CAPTURING } else { signals::RUNNING };
                         signals::STATE
                             .compare_exchange(
                                 signals::CAPTURING,
@@ -369,16 +383,28 @@ pub fn run(config: Config) {
                         info!("the agent's stream reconnected");
                     }
                     Some(mr::Event::Restarted { version, .. }) => info!(
-                        "the buffer's metadata now records the agent restart (producer_epochs; \
-                         version {})",
+                        "the buffer's metadata now records the agent restart (an epoch entry \
+                         in its recorder layer; version {})",
                         version.as_deref().unwrap_or("not reported")
                     ),
-                    Some(mr::Event::Refused { reason, .. }) if !refused => {
-                        error!(
-                            "the agent at {url} can no longer serve /metrics/stream ({reason}); \
-                             capturing the buffer and exiting"
-                        );
-                        refused = true;
+                    // Hindsight records one agent, so when it stops
+                    // recording (refused on a reconnect, or its rows cannot
+                    // be recorded) hindsight captures the buffer and exits.
+                    Some(
+                        event @ (mr::Event::Refused { .. } | mr::Event::SourceFailed { .. }),
+                    ) if !agent_lost => {
+                        match event {
+                            mr::Event::Refused { reason, .. } => error!(
+                                "the agent at {url} can no longer serve /metrics/stream \
+                                 ({reason}); capturing the buffer and exiting"
+                            ),
+                            mr::Event::SourceFailed { reason, .. } => error!(
+                                "the agent at {url}'s rows could not be recorded ({reason}); \
+                                 capturing the buffer and exiting"
+                            ),
+                            _ => {}
+                        }
+                        agent_lost = true;
                         // A capture already asked for (or a stop's) serves;
                         // otherwise ask for one. A compare-and-swap, as the
                         // signal task may change the state meanwhile.
@@ -428,7 +454,7 @@ pub fn run(config: Config) {
                         );
                     }
                     capturing = true;
-                    if refused {
+                    if agent_lost {
                         refusal_capture_started = true;
                     }
                     info!("capture in progress; the recording continues");
@@ -467,17 +493,20 @@ pub fn run(config: Config) {
         }
         // The buffer is temporary: stop recording and remove it.
         recorder.discard().await;
-        (refused, capture_failed)
+        (agent_lost, capture_failed)
     });
 
     // Reached once the loop has stopped. Dropping `staging` deletes the buffer
-    // directory, and the log drain flushes; both have to happen before `exit`,
-    // which runs no destructors.
+    // directory. It has to happen here because `std::process::exit`, which
+    // `exit` calls, runs no destructors; `exit` drops the log drain first.
     drop(staging);
-    if refused || capture_failed {
-        drop(_log_drain);
-        std::process::exit(1);
+    if agent_lost || capture_failed {
+        exit(1);
     }
+    // The runtime first, so a line logged while it shuts down still reaches
+    // the drain.
+    drop(rt);
+    drop(LOG_DRAIN.lock().unwrap_or_else(|e| e.into_inner()).take());
 }
 
 /// Hindsight's signal state. Separate from `crate::STATE`, which the recorder
@@ -559,9 +588,10 @@ fn on_signal(request: Request) {
             info!("stop requested: exiting once the capture in progress completes")
         }
         (Request::Stop, false, _) => {
-            // `exit` runs no destructors and the log drain may not flush, so
-            // the buffer directory is removed here and the line goes straight
-            // to stderr.
+            // A second stop exits at once: `std::process::exit` runs no
+            // destructors, so the buffer directory is removed here, and the
+            // line goes straight to stderr rather than through the log, whose
+            // flush in [`exit`] can wait up to about a second.
             eprintln!("second stop requested: exiting now");
             signals::remove_buffer_dir();
             std::process::exit(2);
@@ -577,7 +607,7 @@ fn listen_for_signals(rt: &tokio::runtime::Runtime, wake: tokio::sync::mpsc::Sen
     let listen = |kind: SignalKind| {
         signal(kind).unwrap_or_else(|e| {
             error!("could not listen for signals: {e}");
-            std::process::exit(1);
+            exit(1);
         })
     };
     let (mut hup, mut term, mut int) = (
@@ -670,7 +700,7 @@ fn fatal(error: &str, buffer_path: &Path) -> ! {
         "note: everything recorded so far is readable at {}",
         buffer_path.display()
     );
-    std::process::exit(1);
+    exit(1);
 }
 
 fn wall_ns() -> u64 {

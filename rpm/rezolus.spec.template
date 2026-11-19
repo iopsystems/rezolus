@@ -15,15 +15,39 @@ High resolution systems performance telemetry agent
 %build
 # Nothing to build - using pre-built binary
 
+# The scriptlets run under /bin/sh. On an upgrade rpm runs this package's
+# pre and post scriptlets, then the outgoing package's preun and postun, then
+# this package's posttrans. Rezolus 5.x stops and disables the agent and the
+# exporter in preun whether or not it is an upgrade, so pre records which
+# units were enabled and running, and posttrans, which runs after the
+# outgoing package's scriptlets, restores that state. Every systemctl call
+# tolerates a host where systemd is not running (a container image build).
+
 %pre
-#!/bin/bash
 # Create rezolus system user and group for running services
 if ! getent group rezolus > /dev/null 2>&1; then
-    groupadd -r rezolus
+    groupadd -r rezolus || exit 1
 fi
 if ! getent passwd rezolus > /dev/null 2>&1; then
-    useradd -r -g rezolus -d /usr/share/rezolus -s /sbin/nologin -c "Rezolus metrics agent" rezolus
+    useradd -r -g rezolus -d /usr/share/rezolus -s /sbin/nologin -c "Rezolus metrics agent" rezolus || exit 1
 fi
+# Every install starts without a state record, so one an interrupted upgrade
+# left behind is not restored. On an upgrade, record each unit's state for
+# posttrans; a unit starting or in its restart delay counts as running.
+state=%{_localstatedir}/lib/rpm-state/rezolus
+rm -rf "$state" || :
+if [ "$1" -ge 2 ]; then
+    mkdir -p "$state" || :
+    for unit in rezolus rezolus-exporter rezolus-hindsight; do
+        if systemctl is-enabled --quiet "$unit.service" > /dev/null 2>&1; then
+            touch "$state/$unit.enabled" || :
+        fi
+        case "$(systemctl is-active "$unit.service" 2> /dev/null)" in
+            active|activating|reloading) touch "$state/$unit.active" || : ;;
+        esac
+    done
+fi
+exit 0
 
 %install
 mkdir -p %{buildroot}/usr/bin
@@ -49,17 +73,38 @@ install -m 644 %{_sourcedir}/debian/rezolus.rezolus-hindsight.service %{buildroo
 %attr(644, root, root) /usr/lib/systemd/system/rezolus-hindsight.service
 
 %post
-#!/bin/bash
-set -eu
-systemctl enable rezolus
-systemctl start rezolus
-systemctl enable rezolus-exporter
-systemctl start rezolus-exporter
+# First install: enable and start the agent and the exporter. An upgrade is
+# handled in posttrans.
+if [ "$1" -eq 1 ]; then
+    systemctl daemon-reload > /dev/null 2>&1 || :
+    systemctl enable rezolus.service rezolus-exporter.service > /dev/null 2>&1 || :
+    systemctl start rezolus.service rezolus-exporter.service > /dev/null 2>&1 || :
+fi
 
 %preun
-#!/bin/bash
-set -eu
-systemctl stop rezolus-exporter
-systemctl disable rezolus-exporter
-systemctl stop rezolus
-systemctl disable rezolus
+# Removal only: on an upgrade ($1 is 1) the units stay as they are.
+if [ "$1" -eq 0 ]; then
+    systemctl --no-reload disable --now rezolus-hindsight.service rezolus-exporter.service rezolus.service > /dev/null 2>&1 || :
+fi
+
+%postun
+# The unit files were replaced or removed.
+systemctl daemon-reload > /dev/null 2>&1 || :
+
+%posttrans
+# After an upgrade, put back what pre recorded: enable each unit that was
+# enabled, and restart each that was running, on the new binary. A unit the
+# operator had disabled or stopped stays so.
+state=%{_localstatedir}/lib/rpm-state/rezolus
+if [ -d "$state" ]; then
+    systemctl daemon-reload > /dev/null 2>&1 || :
+    for unit in rezolus rezolus-exporter rezolus-hindsight; do
+        if [ -e "$state/$unit.enabled" ]; then
+            systemctl enable "$unit.service" > /dev/null 2>&1 || :
+        fi
+        if [ -e "$state/$unit.active" ]; then
+            systemctl restart "$unit.service" > /dev/null 2>&1 || :
+        fi
+    done
+    rm -rf "$state" || :
+fi

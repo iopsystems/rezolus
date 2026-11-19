@@ -44,15 +44,3 @@ test('braces inside a string literal are left alone', () => {
         'label_replace(cpu_usage{node="n"}, "dst", "{$1}", "src", "(.*)")',
     );
 });
-
-test('a section scope restricts the queries the page builds', async () => {
-    const { applyScope } = await import('../src/viewer/assets/lib/data.js');
-    assert.equal(
-        applyScope('sum by (name) (cgroup_cpu_usage)', [
-            { label: 'host', op: '=', value: 'h2' },
-            { label: 'role', op: '!=', value: 'x' },
-        ]),
-        'sum by (name) (cgroup_cpu_usage{host="h2",role!="x"})',
-    );
-    assert.equal(applyScope('cgroup_cpu_usage', undefined), 'cgroup_cpu_usage');
-});

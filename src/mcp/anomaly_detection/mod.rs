@@ -23,7 +23,17 @@ pub use stability::{CycleMinima, NoiseTransition};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AnomalyDetectionResult {
     pub query: String,
+    /// Points analysed: the finite values of the result.
     pub total_points: usize,
+    /// Points of the result left out because they are not finite: a
+    /// `histogram_quantile` past a histogram's highest finite bucket is +Inf
+    /// (metriken-query 0.47), and one such value would make every moving
+    /// average and CUSUM sum over it infinite or NaN.
+    #[serde(default)]
+    pub non_finite_points: usize,
+    /// How many of `non_finite_points` are +Inf.
+    #[serde(default)]
+    pub infinite_points: usize,
     pub timestamps: Vec<f64>,
     pub values: Vec<f64>,
     pub smoothed_values: Option<Vec<f64>>,
@@ -42,6 +52,9 @@ pub struct AnomalyDetectionResult {
 pub struct Anomaly {
     pub timestamp: f64,
     pub value: f64,
+    /// Position in the analysed series: the result's finite values, so it
+    /// indexes `AnomalyDetectionResult::values` and `timestamps`, not the
+    /// query result when that held non-finite points (`non_finite_points`).
     pub index: usize,
     pub anomaly_type: AnomalyType,
     pub severity: AnomalySeverity,
@@ -276,15 +289,33 @@ fn auto_construct_query(
         query
     };
 
-    if data.has_counter(metric_name) {
-        Ok(format!("sum(irate({}[1m]))", query))
-    } else if data.has_gauge(metric_name) {
-        Ok(format!("sum({})", query))
-    } else if data.has_histogram(metric_name) {
-        Ok(format!("histogram_quantile(0.99, {})", query))
-    } else {
+    let kind = kind_of(data, metric_name);
+    match kind {
+        Some(Kind::Counter) => Ok(format!("sum(irate({}[1m]))", query)),
+        Some(Kind::Gauge) => Ok(format!("sum({})", query)),
+        Some(Kind::Histogram) => Ok(format!("histogram_quantile(0.99, {})", query)),
         // Unknown metric: return as-is and let normal error handling report it
-        Ok(query.to_string())
+        None => Ok(query.to_string()),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Counter,
+    Gauge,
+    Histogram,
+}
+
+/// The kind of metric `name` in `data`'s catalog.
+fn kind_of(data: &dyn MetricsSource, name: &str) -> Option<Kind> {
+    if data.has_counter(name) {
+        Some(Kind::Counter)
+    } else if data.has_gauge(name) {
+        Some(Kind::Gauge)
+    } else if data.has_histogram(name) {
+        Some(Kind::Histogram)
+    } else {
+        None
     }
 }
 
@@ -482,6 +513,33 @@ pub fn detect_anomalies(
         return Err("Query returned no data points. The metric might not exist or label selectors filtered out all series.".into());
     }
 
+    analyze(&query, timestamps, values, step)
+}
+
+/// The analyses of one extracted series, `values` at `timestamps`, sampled
+/// every `step` seconds. Non-finite values are left out and counted.
+fn analyze(
+    query: &str,
+    timestamps: Vec<f64>,
+    values: Vec<f64>,
+    step: f64,
+) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
+    let received = values.len();
+    let infinite_points = values.iter().filter(|v| **v == f64::INFINITY).count();
+    let (timestamps, values): (Vec<f64>, Vec<f64>) = timestamps
+        .into_iter()
+        .zip(values)
+        .filter(|(_, v)| v.is_finite())
+        .unzip();
+    let non_finite_points = received - values.len();
+    if values.is_empty() {
+        return Err(format!(
+            "Query {query} has no finite value to analyse: {received} points, \
+             {infinite_points} of them +Inf (above a histogram's highest finite bucket)."
+        )
+        .into());
+    }
+
     // Allan deviation also determines the optimal smoothing window used below
     let allan_analysis = stability::perform_allan_analysis(&values, step)?;
 
@@ -550,6 +608,8 @@ pub fn detect_anomalies(
     Ok(AnomalyDetectionResult {
         query: query.to_string(),
         total_points: values.len(),
+        non_finite_points,
+        infinite_points,
         timestamps,
         values,
         smoothed_values: if use_smoothed {
@@ -578,7 +638,7 @@ fn extract_time_series(
     query: &str,
 ) -> Result<(Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
     match result {
-        QueryResult::Vector { result } => {
+        QueryResult::Vector { result, .. } => {
             // Vector results from query_range indicate something is wrong:
             // shouldn't happen with properly formed rate() queries
             let has_range_vector = query.contains("[") && query.contains("]");
@@ -632,7 +692,7 @@ fn extract_time_series(
                 example_query
             ).into())
         }
-        QueryResult::Matrix { result } => {
+        QueryResult::Matrix { result, .. } => {
             if result.is_empty() {
                 return Ok((vec![], vec![]));
             }
@@ -659,7 +719,7 @@ fn extract_time_series(
                 Ok((timestamps, values))
             }
         }
-        QueryResult::Scalar { result } => {
+        QueryResult::Scalar { result, .. } => {
             // Single scalar value - not enough for anomaly detection
             Err(format!(
                 "Scalar query returned a single value ({:.4}). \
@@ -1056,6 +1116,19 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
 
     output.push_str(&format!("Query: {}\n", result.query));
     output.push_str(&format!("Total Data Points: {}\n", result.total_points));
+    if result.non_finite_points > 0 {
+        let received = result.total_points + result.non_finite_points;
+        output.push_str(&format!(
+            "+Inf: {} of {received} points left out (above the histogram's highest finite bucket)\n",
+            result.infinite_points
+        ));
+        let other = result.non_finite_points - result.infinite_points;
+        if other > 0 {
+            output.push_str(&format!(
+                "-Inf or NaN: {other} of {received} points left out\n"
+            ));
+        }
+    }
     output.push_str(&format!("Anomalies Detected: {}\n", result.anomalies.len()));
     output.push_str(&format!(
         "Overall Confidence: {:.2}%\n\n",
@@ -1492,4 +1565,55 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A latency series with a level shift halfway, and a +Inf every tenth
+    /// point (a quantile past the histogram's highest finite bucket).
+    fn series_with_infinities() -> (Vec<f64>, Vec<f64>) {
+        (0..200)
+            .map(|i| {
+                let v = if i % 10 == 5 {
+                    f64::INFINITY
+                } else if i < 100 {
+                    10.0 + (i % 3) as f64
+                } else {
+                    20.0 + (i % 3) as f64
+                };
+                (1_700_000_000.0 + i as f64, v)
+            })
+            .unzip()
+    }
+
+    #[test]
+    fn non_finite_values_are_left_out_of_the_analysis_and_counted() {
+        let (timestamps, values) = series_with_infinities();
+        let result = analyze("q", timestamps, values, 1.0).unwrap();
+        assert!(result.cusum_analysis.mean.is_finite(), "CUSUM mean");
+        assert!(result.cusum_analysis.std_dev.is_finite(), "CUSUM std dev");
+        if let Some(smoothed) = &result.smoothed_values {
+            assert!(smoothed.iter().all(|v| v.is_finite()), "{smoothed:?}");
+        }
+        assert!(result.mad_analysis.median.is_finite());
+        assert!(result.values.iter().all(|v| v.is_finite()));
+        assert_eq!(result.non_finite_points, 20);
+        assert_eq!(result.infinite_points, 20);
+        assert_eq!(result.total_points, 180);
+        assert_eq!(result.timestamps.len(), 180);
+        let text = format_anomaly_detection_result(&result);
+        assert!(text.contains("+Inf: 20 of 200 points left out"), "{text}");
+        assert!(!text.contains("NaN") && !text.contains(" inf"), "{text}");
+    }
+
+    #[test]
+    fn a_series_with_no_finite_value_is_refused() {
+        let err = analyze("q", vec![1.0, 2.0], vec![f64::INFINITY, f64::NAN], 1.0)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("no finite value"), "{err}");
+    }
 }

@@ -1,12 +1,20 @@
 # Rezolus 6.0.0: release readiness
 
-**Status: OPEN.** Plan opened 2026-10-08, updated 2026-10-12. `Cargo.toml` is
-at `6.0.0-alpha.46`; no `v6.*` tag exists and the latest release is v5.27.0.
+**Status: OPEN.** Plan opened 2026-10-08, updated 2026-11-12. `Cargo.toml` is
+at `6.0.0-alpha.139`; no `v6.*` tag exists and the latest release is v5.31.0.
 This entry lists what has to be true before 6.0.0 is tagged and in what order,
-and records the decisions taken on 2026-10-08 and 2026-10-12. On 2026-10-12
+and records the decisions taken on 2026-10-08, 2026-10-12, 2026-11-05,
+2026-11-06 and 2026-11-12. On 2026-10-12
 6.x became `.dendro`-only for writing, decision 1 was withdrawn (an agent
 older than 5.21.0 is refused), and 6.0.0 now waits for metriken path steps 4
-to 7, the viewer move included. The parent issue is #1224.
+to 7, the viewer move included. On 2026-11-05 and 2026-11-06 (decisions 8
+to 14) decision 7 was narrowed to what is merged, the 24-hour run and the
+release candidate were waived, several items were deferred, and 6.0.0 was
+made to wait for three Prometheus ingestion fixes and for systemslab to read
+and record `.dendro`. On 2026-11-12 (decisions 15 to 17) Prometheus series
+became stored as the exporter serves them, replacing decision 13's renaming,
+an endpoint lost mid-run stopped changing `record`'s exit status, and the
+RPM upgrade fix joined the release. The parent issue is #1224.
 
 Related entries in other repositories, opened the same day:
 
@@ -29,11 +37,13 @@ Save as Report from a dendro source. `view` (server and WASM), `mcp` and every
 `recording` subcommand that reads an archive read `.dendro` and `.rez` through
 `RezReader`, which wraps metriken-storage's `ArchiveReader` (metriken-archive
 until metriken path step 2). Parquet is read through
-`metriken_query::ParquetReader`.
+`metriken_query::ParquetReader`. Changed 2026-10-26 by #1554: 6.x opens
+`.dendro` only, and refuses `.rez`, parquet and `.parquet.ab.tar` with the
+`recording upgrade` command that converts them.
 
 Measured on 2026-10-08:
 
-- **The 5.25.1 reader reads 6.0 archives.** A recording made by
+- **The 5.25.1 reader read 6.0.0-alpha.41 archives.** A recording made by
   6.0.0-alpha.41's agent and `record` on a 32-core Linux host (3 minutes,
   2.2 MB, 89 tables, 28 long tables with occupant streams, 18 cgroups) was
   queried with the v5.25.1 and the 6.0 binaries. Of 431 query results over
@@ -46,7 +56,12 @@ Measured on 2026-10-08:
   (`metriken-archive/1`) are the same in dendro 0.3.3 / metriken-archive 0.2.7
   (5.25.1) and dendro 0.3.4 / metriken-archive 0.3.5 (6.0). This is what lets
   a reader pinned at 5.25.1, such as systemslab's after its phase 0 bump, read
-  6.0 output.
+  6.0 output. Corrected 2026-11-06: this no longer holds. Since #1506
+  (2026-10-19, dendro 0.6) 6.0 writes dendro schema 5. 5.23.0 to 5.29.2
+  read schema 4 only (dendro 0.3.3), and earlier releases do not open
+  `.dendro`: rezolus 5.29.2 on a `.dendro` written by 6.0 exits 1 with
+  `unsupported archive schema version 5: this build writes v4 and reads
+  v4`. No 5.x release reads 6.0 output.
 - **Long tables, checked against the values written.** An archive written by
   metriken-archive 0.3.5's `ArchiveWriter` with 57 task occupants replaced
   over 600 ticks, one vacant slot and a cgroup gauge group, finalized and
@@ -89,7 +104,8 @@ recorded.
    the stream route in `metriken-exposition`, `metriken-recorder` (from
    `src/recorder`, with `rezolus record` as its CLI), `metriken-dashboard` and
    `metriken-viewer` (from `crates/dashboard` and the viewer crates; planned
-   for after 6.0.0 until decision 7 moved them before it). Applications own
+   for after 6.0.0 until decision 7 moved them before it, and after it
+   again since decision 8). Applications own
    their dashboard templates, and the viewer loads them from the archive.
 
 ## Decisions (2026-10-12)
@@ -101,7 +117,9 @@ Taken with the metriken-recorder design (metriken
    (already `.dendro` only), Save as Report in the server and the WASM viewer,
    and every `recording` subcommand that writes a new file produce `.dendro`.
    `.rez`, parquet and raw output are removed from 6.x. Reading `.rez` and
-   parquet stays, in `view`, `mcp` and the `recording` subcommands. The
+   parquet stays, in `view`, `mcp` and the `recording` subcommands (changed
+   2026-10-26 by #1554: 6.x opens `.dendro` only, and `recording upgrade`
+   converts `.rez` and parquet). The
    inventory of writers to remove is under "Removing the `.rez`, parquet and
    raw writers" below. `metriken-recorder` writes `.dendro` only and has no
    sink trait as a consequence.
@@ -111,9 +129,11 @@ Taken with the metriken-recorder design (metriken
    exits 1 (`refuse_mid_run`, as today for an agent that cannot stream).
    This replaces decision 1. rezolus's 5.x line does not adopt
    `metriken-recorder`: it keeps its own recorder and dependencies, and its
-   scrape paths keep recording every agent version.
-7. **6.0.0 ships after metriken path steps 4 to 7 and the follow-ups listed in
-   the plan's step 7.** The steps: `metriken-recorder` (4), templates in the
+   scrape paths keep recording every agent version. Changed 2026-11-12 by
+   decision 16: a mid-run refusal no longer changes the exit status.
+7. **Narrowed 2026-11-05 by decision 8.** It read: **6.0.0 ships after
+   metriken path steps 4 to 7 and the follow-ups listed in the plan's step
+   7.** The steps: `metriken-recorder` (4), templates in the
    archive (5), `metriken-py` (6), `metriken-dashboard` and `metriken-viewer`
    (7). The follow-ups: the stream's frame size, sending only changed
    histogram members or sparse buckets; dendro's compaction keeping
@@ -124,9 +144,170 @@ Taken with the metriken-recorder design (metriken
    6.0.0 no longer ships "from whichever side holds" the moved crates: all
    of them are on the metriken side by then.
 
+## Decisions (2026-11-05)
+
+Main was at fe47b669 (`6.0.0-alpha.124`); the latest release was v5.29.2.
+
+8. **Decision 7 is narrowed.** 6.0.0 ships on `metriken-recorder` (path step
+   4, released, rezolus on 0.8.1) and with the step 5 work merged by then:
+   `alias`, `tier` and `service_kind` in `record`, the identity layers,
+   `template=` as the recorder default below the producer's template with
+   `template_override=true`, and `recording annotate` writing a user-layer
+   entry (#1651, #1653). After 6.0.0: the rest of step 5 (`dashboard=FILE` and
+   `dashboard_override=`, `recording upgrade` and `recording convert` writing
+   the layers, `/about` and `agent_version`, `combine` and the agent's
+   external metrics under the one clash rule), `metriken-py` (step 6),
+   `metriken-dashboard` and `metriken-viewer` (step 7), and the decision 7
+   follow-ups. None of them is planned to remove an argument of `record` or
+   `recording` or change its meaning (`dashboard=FILE` and
+   `dashboard_override=` are added), or to change the `.dendro` layout or the
+   stream's wire format; a follow-up that changes the stream's frames after
+   6.0.0 is negotiated in the handshake, as `metriken.frame_interval` and
+   `metriken.update_floor` are.
+9. **A legacy recording keeps its `source` label** (metriken
+   `docs/journal/2026-10-19-recording-identity-and-views.md`, Q6, changed
+   from option (c) to option (a) for 6.0.0). metriken-storage answers
+   PromQL from a source's flat labels, which `layers::append` sets to the
+   merged labels only when it writes the source, so hiding a legacy
+   `source` needs a read-path change. rezolus reads `source` directly in
+   about 25 places outside tests (`git grep` for `get("source")`,
+   `== "source"` and `"source" =>` in `src` and `crates`; among them the
+   dashboard's kind lookup, `src/recorder/mod.rs:886`, MCP and the viewer),
+   and more through `.source` fields, which would first have to read the
+   kind through D2. A 6.x recording carries `alias` and
+   `__producer__`, and `source` only where its producer's handshake
+   declares one (the 6.x agent declares `source=rezolus`,
+   `src/agent/exposition/http/mod.rs:247`); a user's `source=` is recorded
+   as `alias`. The selectors accept `source=X` for both.
+10. **The 24-hour run and the day-long release candidate are waived for
+    6.0.0**, by the owner's decision. `record`'s RSS and hindsight's RSS and
+    file size over a day are therefore not checked before the tag. A
+    shorter run would still check hindsight: its default retention is 15
+    minutes (`config/hindsight.toml:8`), so its buffer is full long before
+    hour 12.
+11. **Deferred past 6.0.0:** the cross-version CI job, the smaller test
+    gaps, and the measurement harness with the size comparison. The
+    compatibility fixtures are reduced to a v3 `.rez` and a `.dendro` written
+    by a 5.x release, each opened (the `.rez` after `recording upgrade`) and
+    queried against that release's answers. The tar `.rez` from a 5.17.1
+    prerelease, the parquet from a release before 5.18 and the 6.0
+    recording of the 2026-10-08 measurement are deferred, so no test reads a
+    parquet written by a release.
+12. **The `ArrowWriter` criterion excludes the conversion stage.**
+    `src/parquet_tools/combined_parquet.rs:392` writes a staging parquet
+    while converting a 5.x combined parquet to `.dendro`, and writes no
+    output parquet.
+
+## Decisions (2026-11-06)
+
+13. **6.0.0 waits for three Prometheus ingestion fixes in
+    metriken-recorder**, so that the first 6.x release stores Prometheus
+    series as later 6.x releases will:
+    - Prometheus scalars stored as floats: a float gauge and a float counter
+      kind, chosen per source (iopsystems/metriken#378). A reader without
+      them cannot decode a float cell, so if they landed after 6.0.0, a 6.0
+      reader could not read a later 6.x recording of a Prometheus endpoint.
+    - Units detected in Prometheus names and normalized (time to
+      nanoseconds, bytes and bits to bytes), the unit token in the name
+      replaced, and the original name kept in `__prometheus_name__`
+      (iopsystems/metriken#379). A selector whose metric name matches no
+      series is matched against `__prometheus_name__` by metriken-query, so
+      queries and KPI lists written with the original names keep working.
+      Renaming after 6.0.0 would leave two sets of names in recordings.
+      Superseded 2026-11-12 by decision 15: series are stored under the
+      exporter's names, in the exporter's units.
+    - A histogram's observations above its highest finite bucket written as
+      an overflow counter, and `histogram_quantile` returning `+Inf` with
+      the band `[top bound, +Inf)` for a quantile among them
+      (iopsystems/metriken#377).
+
+    All three have landed. Floats (iopsystems/metriken#378):
+    iopsystems/metriken#384, released in metriken-recorder 0.9 and
+    metriken-storage 0.8, and taken by rezolus in #1677 (metriken-recorder
+    0.10, metriken-storage 0.9, metriken-query 0.46). The overflow
+    (iopsystems/metriken#377): iopsystems/metriken#388, released in
+    metriken-recorder 0.11, metriken-storage 0.10 and metriken-query 0.47
+    (iopsystems/metriken#389), and taken by rezolus in #1679. Units
+    (iopsystems/metriken#379): iopsystems/metriken#392, released in
+    metriken-recorder 0.12, metriken-storage 0.11 and metriken-query 0.48
+    (iopsystems/metriken#393), and taken by rezolus in #1681. A query by an
+    original name reads the renamed series in the normalized unit, under the
+    stored name (metriken's D1a), so a KPI over a scalar whose name ended in
+    `_seconds` or `_ms` reads nanoseconds in a new recording; a `_seconds`
+    histogram's buckets were in nanoseconds already. The only Prometheus
+    names with a unit in the shipped templates are 46 `_seconds` histogram
+    KPIs, which keep the original names. Decision 15 replaced this
+    renaming before 6.0.0 was tagged, so no release stores renamed series.
+
+    Per-endpoint intervals, label selectors in `recording filter`, repeated
+    scrapes of interval aggregates and grouping power 3 for converted
+    histograms follow 6.0.0 (iopsystems/metriken#380, #1661,
+    iopsystems/metriken#381 and iopsystems/metriken#382, in that order).
+14. **6.0.0 waits for systemslab to read and record `.dendro`**, merged before
+    the tag: its reader opening dendro schema 5 and decision 13's float
+    kinds (the metriken-storage release that carries
+    iopsystems/metriken#378), and the runner asking
+    `rezolus record` for `.dendro`. iopsystems/systemslab#6371 does not do
+    that as it stands: it pins rezolus `ab24b072` and metriken-storage 0.2,
+    whose dendro 0.4 reads schema 4 only, and it says not to merge until 6.0.0
+    is tagged. It has to move to that reader on a pre-release pin first. systemslab's runner asks any rezolus
+    from 5.19 for `-o metrics.rez` (`crates/runner/src/metrics.rs:411`,
+    `:466`), which 6.x refuses, and lab images install the `rezolus` package
+    unpinned (`dockerfiles/scripts/install-rezolus.sh`), so a 6.0.0 package
+    would leave newly built lab hosts recording nothing.
+
+    Status 2026-11-12: iopsystems/systemslab#6853 is merged. It reads
+    `.dendro` artifacts and records `.dendro` on rezolus 6.0 hosts. Its
+    reader comes from a rezolus git pin whose `rez` and `dashboard` crates
+    are on metriken-storage 0.5 and metriken-query 0.42, which cannot read
+    float kinds (metriken-storage 0.8) or decision 15's histogram scale
+    (metriken-query 0.50). The pin moves to a rezolus main commit in
+    systemslab; until then this criterion is not met.
+
+## Decisions (2026-11-12)
+
+15. **Prometheus series are stored as the exporter serves them**
+    (iopsystems/metriken#410; metriken-recorder 0.15, metriken-storage
+    0.13, metriken-query 0.50, metriken-charts 0.1.5; rezolus #1689). This
+    replaces decision 13's renaming, by the owner's decision to stop
+    rewriting metrics before 6.0.0 rather than after it. A series keeps the
+    exporter's name and values; its unit (from a `# UNIT` line or the
+    name's unit token) is written as the `unit` storage key. A histogram's
+    bounds are stored as integers times a `scale` key, which metriken-query
+    divides by, so a `_seconds` quantile reads seconds. The viewers' metric
+    catalogs list each series' `unit`, and the metric browser, a gauge or
+    histogram KPI over a bare selector, and `view --tui` scale by it, so the
+    46 `_seconds` histogram KPIs draw times from 5.x recordings
+    (nanoseconds, no `unit`) and 6.0 ones (seconds). `__prometheus_name__`
+    and the fallback are gone. A recording made by a 6.0 development build
+    with metriken-recorder 0.12 to 0.14 keeps its rewritten names
+    (`..._nanoseconds`) and is read by them. A comparison of a 5.x and a
+    6.0 recording of one `_seconds` histogram is off by 1e9, and the
+    CHANGELOG and the upgrade page say so.
+16. **An endpoint lost mid-run does not change `record`'s exit status**
+    (metriken-recorder 0.15, rezolus #1689), by the owner's decision: a run
+    that loses one endpoint must not fail a whole SystemsLab run. A refused
+    endpoint, or one whose rows cannot be recorded, stops alone and is
+    named at the end of the run. `record` exits 1 when the recording cannot
+    start, when the archive cannot be written or saved, or when nothing was
+    recorded. When no endpoint is left recording, a run with neither
+    `--duration` nor a wrapped command ends; the others run to their own
+    end. hindsight and the live viewer record one agent, so they stop on
+    a source failure as on a refusal.
+17. **The RPM upgrade fix ships with 6.0.0** (#1464, #1692). Every RPM
+    upgrade left `rezolus` and `rezolus-exporter` stopped and disabled,
+    because the outgoing package's `%preun` ran unguarded after the new
+    `%post`. 6.0.0's package restores the units' state in `%posttrans`,
+    which also repairs the upgrade from a 5.x package. Tested in an Amazon
+    Linux 2023 guest with a control that reproduced the bug. `release/5.x`
+    keeps the old scriptlets; a backport is not decided.
+
 ## Plan
 
 ### Compatibility (blocks 6.0.0)
+
+Reduced on 2026-11-05 (decision 11): the fixtures as decision 11 states;
+the cross-version job and the smaller gaps are deferred.
 
 No test opens an archive written by a released version. The tests build their
 inputs with current code, and the only checked-in files from a release are the
@@ -146,19 +327,25 @@ on request (`record -o x.dendro`, a hindsight `output` ending in `.dendro`,
   (decided 2026-10-08), and the identity index it wrote is not carried into
   `metriken-storage`. With decision 5, these fixtures are the only `.rez`
   and parquet inputs to the read-path tests that 6.x's own fixture writers
-  did not produce.
-- A CI job that runs the v5.25.1 and v5.27.0 binaries against the current
-  agent, the current recorder against a v5.25.1 and a v5.27.0 agent, and the
-  v5.25.1 and v5.27.0 readers on 6.0 output. v5.25.1 is the version measured
-  above and the reader systemslab pins after its phase 0 bump. v5.27.0 is
-  the latest 5.x release, the one a host upgrading to 6.0 runs. Both build
-  with dendro 0.3.3, metriken-archive 0.2.7 and metriken-query 0.33.1 (each
-  tag's `Cargo.lock`). The v5.22.1 reader on a 6.0 `.rez` (systemslab's
-  current pin) is dropped: 6.0 writes no `.rez`, and 5.22.1 does not read
-  `.dendro`, so systemslab's pin must move to a reader that does (5.23.0 or
-  later: the same dendro, metriken-archive and metriken-query versions as
-  5.25.1; only 5.25.1 was measured) before it consumes 6.x output
-  (systemslab entry).
+  did not produce. Reduced on 2026-11-05 (decision 11) to two archives from
+  5.29.2, a v3 `.rez` and a `.dendro`, in `tests/fixtures/released/` and
+  read by `tests/released_archives.rs`. They were recorded from a macOS
+  agent, whose histogram samplers recorded nothing, so histogram reads of a
+  released archive are still untested; that needs a recording from a Linux
+  agent.
+- Deferred (decision 11). Its reader leg cannot pass as written, since no 5.x
+  release reads 6.0 output (see the correction above). A CI job that runs the
+  v5.25.1 and v5.27.0 binaries against the current agent, the current recorder
+  against a v5.25.1 and a v5.27.0 agent, and the v5.25.1 and v5.27.0 readers
+  on 6.0 output. v5.25.1 is the version measured above and the reader
+  systemslab pins after its phase 0 bump. v5.27.0 was the latest 5.x release,
+  the one a host upgrading to 6.0 runs. Both build with dendro 0.3.3,
+  metriken-archive 0.2.7 and metriken-query 0.33.1 (each tag's `Cargo.lock`).
+  The v5.22.1 reader on a 6.0 `.rez` (systemslab's current pin) is dropped:
+  6.0 writes no `.rez`, and 5.22.1 does not read `.dendro`, so systemslab's
+  pin must move to a reader that does (5.23.0 or later: the same dendro,
+  metriken-archive and metriken-query versions as 5.25.1; only 5.25.1 was
+  measured) before it consumes 6.x output (systemslab entry).
 - A test that 6.x refuses an agent older than 5.21.0 at startup and mid-run
   (decision 6; metriken-recorder entry, check 3).
 - Smaller gaps: `recording convert` is tested on V2 raw snapshots only and
@@ -183,7 +370,8 @@ on request (`record -o x.dendro`, a hindsight `output` ending in `.dendro`,
   route. This is the metriken-recorder entry's step 2, in rezolus's own
   recorder, before the library is extracted.
 
-  Done 2026-10-12 (6.0.0-alpha.50): `src/recorder/detect.rs` asks a `/` or
+  Done 2026-10-12 (6.0.0-alpha.50; in metriken-recorder `src/detect.rs`
+  since #1448): `src/recorder/detect.rs` asked a `/` or
   `/metrics/stream` URL for its stream first and hands any other answer to
   the `Probe` hook (`src/recorder/agent_probe.rs`), which recognises an
   agent by `/status` or the `/` banner; `/metrics/binary` is no longer read.
@@ -314,13 +502,11 @@ Each must ask for `.dendro` (and, where it combines files afterwards, combine
 - CI smoke steps in `.github/workflows/cargo.yml`: **done (this PR).** The
   release and debug steps record `.dendro`, and `-o rezolus.rez` is kept as
   a check that the refusal exits 2.
-- llm-perf's server metrics: an `output` not ending in `.dendro` asks for
-  parquet (llm-perf `src/server_metrics.rs:22,46-53`, per the
-  metriken-recorder entry).
+- llm-perf's server metrics: done. llm-perf records in-process and ignores
+  `rezolus_bin` (llm-perf `src/recording.rs:102-105`).
 - systemslab's runner: asks a rezolus from 5.19 for `-o metrics.rez`
-  (systemslab `crates/runner/src/metrics.rs:238-260`, `MIN_REZ_VERSION` :376,
-  per the metriken-recorder entry). Not yet written; iopsystems/systemslab#6371
-  covers reading `.dendro`.
+  (systemslab `crates/runner/src/metrics.rs:293`, `MIN_REZ_VERSION` :411,
+  the choice at :466). Decision 14.
 
 Not blocking: `labels/specs/cpu_saturation.toml` and
 `scheduler_contention.toml` record `-o /tmp/recording.rez` with a pinned
@@ -334,6 +520,9 @@ that move, since 6.x refuses an agent older than 5.21.0.
 
 ### metriken path (blocks 6.0.0)
 
+Narrowed on 2026-11-05 (decision 8): step 4 only, with the step 5 work
+merged by then.
+
 Decision 7: metriken path steps 4 to 7 released and rezolus on them, and each
 follow-up listed in decision 7 either landed or measured and dropped, with the
 result recorded in the metriken entry. Step 4 moves `record`, hindsight and
@@ -341,6 +530,8 @@ the live viewer onto `metriken-recorder`; step 7 moves `crates/dashboard` and
 the viewer crates into `metriken-dashboard` and `metriken-viewer`.
 
 ### Measurement
+
+Deferred on 2026-11-05 (decisions 10 and 11).
 
 Most numbers behind the format were measured once, while deciding one design
 question; the scripts behind several are on a test host and not in any
@@ -391,9 +582,11 @@ repository. Before 6.0.0:
 
 ### Distribution
 
-- The Homebrew tap (`iopsystems/homebrew-iop`, `Formula/rezolus.rb`) is at
-  5.19.0. Sixteen rezolus bump PRs from two workflows are open and unmerged
-  (#134–#151; #135 and #144 in that range are systemslab bumps).
+- The Homebrew tap (`iopsystems/homebrew-iop`, `Formula/rezolus.rb`) was at
+  5.19.0 with sixteen bump PRs open (iopsystems/homebrew-iop#134–#151). On
+  2026-11-06 it is at 5.29.2, and 5.29.2 produced one bump PR
+  (iopsystems/homebrew-iop#172), landed through `pr-pull` (GitHub shows it
+  closed).
   `install.sh` sends macOS users to the tap.
 - Hosts whose agents are older than 5.21 must be upgraded before a 6.0
   recorder can record them; until then a 5.x recorder records them
@@ -401,13 +594,16 @@ repository. Before 6.0.0:
 
 ### Release candidate
 
+Waived on 2026-11-05 (decision 10).
+
 Run a release candidate's agent, `record` and `hindsight` for a day on a Linux
 host and on one fleet host, and read the results with the 5.25.1 and the 6.0
 reader.
 
 ## GO criteria for tagging 6.0.0
 
-- The fixture tests and the cross-version job pass in CI.
+- The fixture tests pass in CI (the cross-version job is deferred,
+  decision 11).
 - The endpoint detection fix and the refusal of agents older than 5.21.0
   (decision 6) are merged, with tests.
 - No 6.x mode writes `.rez`, parquet or raw: every writer in the inventory
@@ -417,31 +613,40 @@ reader.
   in `src/`, `crates/viewer` or `crates/report-save` names `RezArchive`,
   `StreamRecorderV3`, `MsgpackToParquet`, `ArrowWriter` or
   `copy_recordings_into`. The first two write `.rez`, the next two write
-  parquet, and the last copies `.rez` into `.rez`; no conversion to
-  `.dendro` uses any of them. `rez_v3_rewrite::upgrade_tar_to_v3` and
+  parquet, and the last copies `.rez` into `.rez`. The one use allowed is
+  `ArrowWriter` staging a 5.x combined parquet while it is converted to
+  `.dendro` (decision 12). `rez_v3_rewrite::upgrade_tar_to_v3` and
   `rez_v3_writer::ManifestSeed` are not on the list, because 6.x still uses
   them (below, "Out of scope").
 - Every caller listed under "Callers that ask `record` for parquet or `.rez`"
   records `.dendro`.
-- metriken path steps 4 to 7 are released, rezolus is on them, and each
-  decision 7 follow-up is landed or recorded as dropped.
+- metriken path step 4 is released and rezolus is on it (decision 8).
+- The three Prometheus ingestion fixes of decision 13, with decision 15's
+  storage as served in place of its renaming, are released in metriken and
+  rezolus is on them. Done 2026-11-12 (#1689).
+- systemslab reads dendro schema 5 with decision 13's float kinds and
+  decision 15's histogram scale, and its runner records `.dendro`, merged
+  (decision 14). The runner and the `.dendro` reader are merged
+  (iopsystems/systemslab#6853); the reader's rezolus pin is not yet on
+  metriken-storage 0.13 and metriken-query 0.50.
+- An RPM upgrade keeps the units enabled and running (decision 17). Done
+  2026-11-12 (#1692).
+- hindsight says why it refuses an agent at startup and creates nothing
+  first (found 2026-11-06, while writing the upgrade page). Done:
+  `tests/hindsight_dump.rs`,
+  `an_agent_older_than_the_stream_is_refused_with_a_message_and_nothing_created`.
+- `site/docs/usage.html`'s config example uses `alias =`, in the release PR
+  (the site deploys from main, and 5.29.2 ignores `alias`).
 - The upgrade page and the documentation fixes above are merged.
-- The size comparison and the 24-hour run are recorded here, with the
-  harness that produced them in the repository.
 - The Homebrew formula is at the release being tagged, or the tap's bump
   automation is fixed so the tag produces one PR that is merged.
-- The release candidate ran for a day, and in its recordings no gap between
-  consecutive rows of a table is longer than two of that table's measured
-  intervals, checked by a query with both readers (groups that skip ticks by
-  design are listed here and exempt), and no endpoint was refused other than
-  an agent older than 5.21.0.
 
 ## Out of scope for 6.0.0
 
 - Segment compaction (dendro `CompactSpec`), and the "20 segments to 1"
   acceptance of #1224's phase 4 that depends on it. The decision 7 follow-up
-  on compaction keeping long-layout metadata is in scope; compaction itself
-  is not.
+  on compaction keeping long-layout metadata was in scope until decision 8
+  moved it after 6.0.0; compaction itself is not.
 - #1224's optional phase 5, an in-agent archive, which overlaps #1144.
 - Reading `producer_epochs`, which 6.0 writes and nothing reads yet
   (`2026-10-05-metadata-after-agent-restart.md`).

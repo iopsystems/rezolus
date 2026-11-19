@@ -30,8 +30,9 @@ pub const KEY_PRODUCER_EPOCH: &str = "producer_epoch";
 
 /// Every producer epoch a recording observed, in order: a JSON array of
 /// `{"epoch": <id>, "from_ts": <first row timestamp>, "version": <agent
-/// version>}`. Written when the agent restarts mid-recording; absent when no
-/// restart was seen. The last entry is the current epoch, which is also under
+/// version>}`. Written by recorders before metriken-recorder 0.7 when the
+/// agent restarted mid-recording, and read from archives they wrote; refused
+/// as `--metadata`. Absent when no restart was seen. The last entry is the current epoch, which is also under
 /// [`KEY_PRODUCER_EPOCH`]. Every cumulative counter reset at each entry's
 /// `from_ts` after the first.
 ///

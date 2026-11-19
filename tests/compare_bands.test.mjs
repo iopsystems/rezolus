@@ -8,7 +8,7 @@ import { promqlResultToLinePair, applyResultToPlot, CAPTURE_BASELINE, CAPTURE_EX
 // ESM imports are hoisted, so compare.js is imported dynamically below.
 globalThis.document = globalThis.document || { documentElement: {} };
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));
-const { renderCompareChart } = await import('../src/viewer/assets/lib/charts/compare.js');
+const { renderCompareChart } = await import('../src/viewer/assets/lib/compare/compare.js');
 
 // Round 3 of the measurement-uncertainty arc: rate()/histogram value bands
 // must render on COMPARE (A/B overlay) and MULTI-series charts, not just

@@ -8,8 +8,10 @@
 //! host with three GPUs from two vendors, two vendors' GPUs sharing
 //! `id="0"`, GPUs with no `vendor` label or a non-integer `id`, an Intel GPU
 //! with every engine class and an unknown one, devices with ids `"01"` and
-//! `"1"`, an empty recording, and `sink` with each named metric removed in
-//! turn, so every presence predicate is seen both ways.
+//! `"1"`, a macOS recording, `bench` with the Linux filesystem, meminfo and
+//! vmstat metrics it lacks (`linux`), an empty recording, and `sink` with
+//! each named metric removed in turn, so every presence predicate is seen
+//! both ways.
 //!
 //! Golden files under `tests/golden/` hold the generators' output for the
 //! named catalogs, so the template stays checked once a generator is
@@ -280,6 +282,7 @@ fn sink(bench: &Catalog) -> Catalog {
             ("sensor", "coretemp:native-0"),
             ("name", "coretemp temp1 native-0"),
             ("kind", "net_rx"),
+            ("rail", "vdd"),
         ]),
         labels(&[
             ("id", "1"),
@@ -293,6 +296,7 @@ fn sink(bench: &Catalog) -> Catalog {
             ("sensor", "coretemp:native-1"),
             ("name", "coretemp temp1 native-1"),
             ("kind", "timer"),
+            ("rail", "soc"),
         ]),
     ];
     let mut out = Catalog::default();
@@ -367,6 +371,239 @@ fn legacy(bench: &Catalog) -> Catalog {
         .without("blockio_queue_latency")
         .without("blockio_total_latency");
     out.rename("blockio_device_latency", "blockio_latency");
+    out
+}
+
+/// The CPU, memory, block IO, network and TCP series a macOS agent
+/// publishes when it can read the TCP statistics. CPU usage is per CPU in
+/// user and system; frequency is the aperf/mperf/tsc triple and power the
+/// cores, per-core, GPU, DRAM and SoC-block energy counters. Memory has no
+/// buffers, LRU lists, commit accounting or swap cache, and has the
+/// macOS-only page classes and compressor. Block IO
+/// has the storage driver's counters but no latency or size histograms.
+/// Network has bytes and packets, and the macOS-only interface errors and
+/// drops, but no network_drop. TCP has the tcp_mib,
+/// tcp_retransmit and tcp_bytes counters but no tcp_packet_latency.
+/// Filesystem has the space, inode and read-only gauges, and the macOS-only
+/// per-volume use. Hardware sensors has temperature, power, voltage, current
+/// and fan speed, but no fan PWM or cooling state, and the macOS-only thermal
+/// pressure level.
+fn macos() -> Catalog {
+    let mut out = Catalog::default();
+    for name in [
+        "memory_total",
+        "memory_free",
+        "memory_available",
+        "memory_cached",
+        "memory_anon",
+        "memory_swap_total",
+        "memory_swap_free",
+        "memory_purgeable",
+        "memory_speculative",
+        "memory_compressed",
+        "memory_compressed_stored",
+        "memory_wired",
+        "cpu_cores",
+        "thermal_pressure",
+    ] {
+        out.gauges.insert(name.into(), vec![labels(&[])]);
+    }
+    out.counters.insert(
+        "cpu_usage".into(),
+        ["0", "1"]
+            .iter()
+            .flat_map(|id| {
+                ["user", "system"]
+                    .iter()
+                    .map(move |state| labels(&[("id", id), ("state", state)]))
+            })
+            .collect(),
+    );
+    for name in ["cpu_tsc", "cpu_aperf", "cpu_mperf", "cpu_core_energy"] {
+        out.counters.insert(
+            name.into(),
+            vec![labels(&[("id", "0")]), labels(&[("id", "1")])],
+        );
+    }
+    for name in ["cpu_cores_energy", "cpu_igpu_energy", "cpu_dram_energy"] {
+        out.counters
+            .insert(name.into(), vec![labels(&[("id", "0")])]);
+    }
+    out.counters.insert(
+        "cpu_soc_energy".into(),
+        vec![labels(&[("block", "ANE")]), labels(&[("block", "DISP")])],
+    );
+    for name in [
+        "blockio_bytes",
+        "blockio_operations",
+        "blockio_driver_errors",
+        "blockio_retries",
+        "blockio_service_time",
+    ] {
+        out.counters.insert(
+            name.into(),
+            vec![labels(&[("op", "read")]), labels(&[("op", "write")])],
+        );
+    }
+    for name in [
+        "memory_page_faults",
+        "memory_swap_in",
+        "memory_swap_out",
+        "memory_compressions",
+        "memory_decompressions",
+        "memory_pageins",
+        "memory_pageouts",
+        "tcp_retransmit",
+        "tcp_segments_retransmitted",
+        "tcp_delayed_acks",
+        "tcp_rto_expirations",
+        "tcp_checksum_errors",
+        "tcp_input_errors",
+    ] {
+        out.counters.insert(name.into(), vec![labels(&[])]);
+    }
+    for name in [
+        "filesystem_total",
+        "filesystem_free",
+        "filesystem_available",
+        "filesystem_inodes_total",
+        "filesystem_inodes_free",
+        "filesystem_readonly",
+        "filesystem_volume_used",
+    ] {
+        out.gauges.insert(
+            name.into(),
+            vec![
+                labels(&[("mount", "/"), ("fstype", "apfs")]),
+                labels(&[("mount", "/System/Volumes/Data"), ("fstype", "apfs")]),
+            ],
+        );
+    }
+    for name in [
+        "network_bytes",
+        "network_packets",
+        "network_host_bytes",
+        "network_host_packets",
+        "network_interface_errors",
+        "network_interface_drops",
+        "tcp_bytes",
+    ] {
+        out.counters.insert(
+            name.into(),
+            vec![
+                labels(&[("direction", "receive")]),
+                labels(&[("direction", "transmit")]),
+            ],
+        );
+    }
+    for (name, sensors) in [
+        (
+            "sensor_temperature",
+            &[
+                ("TP1b", "PMU tdie1", "hid"),
+                ("TN0n", "NAND CH0 temp", "hid"),
+            ][..],
+        ),
+        (
+            "sensor_power",
+            &[("PDTR", "DC in", "smc"), ("PP0b", "PMU buck0", "smc")],
+        ),
+        (
+            "sensor_voltage",
+            &[("VD0R", "DC in", "smc"), ("VP0b", "PMU buck0", "smc")],
+        ),
+        (
+            "sensor_current",
+            &[("ID0R", "DC in", "smc"), ("IP0b", "PMU buck0", "smc")],
+        ),
+        (
+            "sensor_fan_speed",
+            &[("F0Ac", "fan 0", "smc"), ("F1Ac", "fan 1", "smc")],
+        ),
+    ] {
+        out.gauges.insert(
+            name.into(),
+            sensors
+                .iter()
+                .map(|(sensor, n, source)| {
+                    labels(&[("sensor", sensor), ("name", n), ("source", source)])
+                })
+                .collect(),
+        );
+    }
+    out
+}
+
+/// The `bench` recording with the Linux filesystem sampler's metrics for an
+/// ext4 root and an XFS data volume, a tmpfs, and the meminfo and vmstat
+/// metrics that gate the tmpfs and page fault charts. The sections read only
+/// whether each metric is present, so the labels and types follow the agent
+/// but no test asserts them.
+fn linux(bench: &Catalog) -> Catalog {
+    let mut out = bench.clone();
+    let ext4 = [
+        ("mount", "/"),
+        ("fstype", "ext4"),
+        ("devnum", "259:2"),
+        ("block_device", "nvme0n1p2"),
+    ];
+    let xfs = [
+        ("mount", "/data"),
+        ("fstype", "xfs"),
+        ("devnum", "259:5"),
+        ("block_device", "nvme1n1"),
+    ];
+    for name in [
+        "filesystem_total",
+        "filesystem_free",
+        "filesystem_available",
+        "filesystem_inodes_total",
+        "filesystem_inodes_free",
+        "filesystem_readonly",
+    ] {
+        out.gauges
+            .insert(name.into(), vec![labels(&ext4), labels(&xfs)]);
+    }
+    out.gauges
+        .insert("filesystem_errors".into(), vec![labels(&ext4)]);
+    out.counters
+        .insert("filesystem_written_bytes".into(), vec![labels(&ext4)]);
+    let tmpfs = [
+        ("mount", "/dev/shm"),
+        ("fstype", "tmpfs"),
+        ("devnum", "0:25"),
+    ];
+    for name in [
+        "filesystem_tmpfs_used",
+        "filesystem_tmpfs_size",
+        "filesystem_tmpfs_inodes_used",
+        "filesystem_tmpfs_inodes_total",
+    ] {
+        out.gauges.insert(name.into(), vec![labels(&tmpfs)]);
+    }
+    for name in ["memory_active", "memory_inactive"] {
+        out.gauges.insert(
+            name.into(),
+            vec![labels(&[("kind", "anon")]), labels(&[("kind", "file")])],
+        );
+    }
+    for name in ["memory_shmem", "memory_mapped"] {
+        out.gauges.insert(name.into(), vec![labels(&[])]);
+    }
+    for name in ["memory_reclaim_scanned", "memory_reclaim_reclaimed"] {
+        out.counters.insert(
+            name.into(),
+            vec![labels(&[("kind", "kswapd")]), labels(&[("kind", "direct")])],
+        );
+    }
+    for name in [
+        "memory_allocation_stalls",
+        "memory_page_faults",
+        "memory_major_page_faults",
+        "memory_oom_kills",
+    ] {
+        out.counters.insert(name.into(), vec![labels(&[])]);
+    }
     out
 }
 
@@ -477,6 +714,118 @@ fn intel_all_engines() -> Catalog {
     out
 }
 
+/// An AMD APU read by `gpu_amd_sysfs`, whose rail and throttle metrics no
+/// other sampler publishes.
+fn amd_apu() -> Catalog {
+    let amd =
+        |label: (&'static str, &'static str)| labels(&[("id", "0"), ("vendor", "amd"), label]);
+    let mut out = Catalog::default();
+    out.gauges.insert(
+        "gpu_clock".into(),
+        ["graphics", "compute", "memory", "soc", "fabric"]
+            .iter()
+            .map(|clock| amd(("clock", clock)))
+            .collect(),
+    );
+    out.gauges.insert(
+        "gpu_rail_power".into(),
+        vec![amd(("rail", "vdd")), amd(("rail", "soc"))],
+    );
+    out.gauges.insert(
+        "gpu_throttle_status".into(),
+        vec![labels(&[("id", "0"), ("vendor", "amd")])],
+    );
+    out
+}
+
+/// An EFA host read by `network_efa`: two devices with one port each, every
+/// port and device counter the sampler publishes.
+fn efa() -> Catalog {
+    let mut out = Catalog::default();
+    let ports: Vec<Labels> = ["rdmap0s27", "rdmap0s28"]
+        .iter()
+        .enumerate()
+        .map(|(i, device)| labels(&[("id", &i.to_string()), ("device", device), ("port", "1")]))
+        .collect();
+    let devices: Vec<Labels> = ["rdmap0s27", "rdmap0s28"]
+        .iter()
+        .enumerate()
+        .map(|(i, device)| labels(&[("id", &i.to_string()), ("device", device)]))
+        .collect();
+    for name in EFA_PORT_METRICS {
+        out.counters.insert(name.to_string(), ports.clone());
+    }
+    for name in EFA_DEVICE_METRICS {
+        out.counters.insert(name.to_string(), devices.clone());
+    }
+    out
+}
+
+/// Every port counter `network_efa` publishes (its `stats.rs`).
+const EFA_PORT_METRICS: &[&str] = &[
+    "network_efa_tx_bytes",
+    "network_efa_tx_pkts",
+    "network_efa_rx_bytes",
+    "network_efa_rx_pkts",
+    "network_efa_rx_drops",
+    "network_efa_send_bytes",
+    "network_efa_send_wrs",
+    "network_efa_recv_bytes",
+    "network_efa_recv_wrs",
+    "network_efa_rdma_read_wrs",
+    "network_efa_rdma_read_bytes",
+    "network_efa_rdma_read_wr_err",
+    "network_efa_rdma_read_resp_bytes",
+    "network_efa_rdma_write_wrs",
+    "network_efa_rdma_write_bytes",
+    "network_efa_rdma_write_wr_err",
+    "network_efa_rdma_write_recv_bytes",
+    "network_efa_retrans_bytes",
+    "network_efa_retrans_pkts",
+    "network_efa_retrans_timeout_events",
+    "network_efa_unresponsive_remote_events",
+    "network_efa_impaired_remote_conn_events",
+];
+
+/// Every device counter `network_efa` publishes.
+const EFA_DEVICE_METRICS: &[&str] = &[
+    "network_efa_cmds_err",
+    "network_efa_no_completion_cmds",
+    "network_efa_alloc_pd_err",
+    "network_efa_alloc_mr_err",
+    "network_efa_alloc_ucontext_err",
+    "network_efa_create_ah_err",
+    "network_efa_create_cq_err",
+    "network_efa_create_qp_err",
+    "network_efa_get_dma_mr_err",
+    "network_efa_mmap_err",
+    "network_efa_reg_mr_err",
+];
+
+/// The checklist in `docs/principles.md` requires a test that the queries
+/// name each metric a sampler adds.
+#[test]
+fn the_network_section_plots_every_metric_network_efa_adds() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let json = render_generator(&efa(), "/network", &ctx);
+    for name in EFA_PORT_METRICS {
+        assert!(
+            json.contains(&format!("sum by (device, port) (irate({name}[5m]))")),
+            "{name} is not plotted per port"
+        );
+    }
+    for name in EFA_DEVICE_METRICS {
+        assert!(
+            json.contains(&format!("sum by (device) (irate({name}[5m]))")),
+            "{name} is not plotted per device"
+        );
+    }
+
+    let other = render_generator(&Catalog::default(), "/network", &ctx);
+    assert!(!other.contains("network_efa"));
+    assert!(!other.contains("\"EFA\""));
+}
+
 /// GPUs and CPUs with ids `"01"` and `"1"`: one device where ids are
 /// compared as integers, two where they are compared as strings.
 fn non_canonical_ids() -> Catalog {
@@ -499,6 +848,16 @@ fn non_canonical_ids() -> Catalog {
     out
 }
 
+/// `bench`, which has no `cpu_instructions`, with DTLB misses added: the
+/// dtlb and perf samplers are configured separately, so DTLB MPKI is hidden
+/// while DTLB Misses is drawn.
+fn dtlb_without_instructions(bench: &Catalog) -> Catalog {
+    let mut out = bench.clone();
+    out.counters
+        .insert("cpu_dtlb_miss".into(), vec![labels(&[("id", "0")])]);
+    out
+}
+
 fn named_catalogs() -> Vec<(&'static str, Catalog)> {
     let bench = Catalog::from_json(include_str!("../tests/fixtures/catalogs/bench.json"));
     let sink = sink(&bench);
@@ -517,7 +876,15 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("gpus-without-vendor", gpus_without_vendor()),
         ("gpus-with-unparsed-id", gpus_with_unparsed_id()),
         ("intel-all-engines", intel_all_engines()),
+        ("amd-apu", amd_apu()),
+        ("efa", efa()),
         ("non-canonical-ids", non_canonical_ids()),
+        ("macos", macos()),
+        ("linux", linux(&bench)),
+        (
+            "dtlb-without-instructions",
+            dtlb_without_instructions(&bench),
+        ),
         ("empty", Catalog::default()),
     ]
 }
@@ -574,6 +941,26 @@ fn golden_name(catalog: &str, route: &str, ctx: &str) -> String {
     }
 }
 
+/// The checklist in `docs/principles.md` requires a test that the queries
+/// name each metric a sampler adds.
+#[test]
+fn the_gpu_section_plots_what_gpu_amd_sysfs_adds_on_an_apu_only() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let apu = render_generator(&amd_apu(), "/gpu", &ctx);
+    for name in [
+        "gpu_rail_power{rail=\\\"vdd\\\"}",
+        "gpu_rail_power{rail=\\\"soc\\\"}",
+        "gpu_throttle_status",
+        "gpu_clock{clock=\\\"soc\\\"}",
+        "gpu_clock{clock=\\\"fabric\\\"}",
+    ] {
+        assert!(apu.contains(name), "{name} is not plotted");
+    }
+
+    let other = render_generator(&intel_all_engines(), "/gpu", &ctx);
+    assert!(!other.contains("gpu_rail_power"));
+}
+
 #[test]
 fn section_template_matches_the_generators() {
     let t = template();
@@ -618,6 +1005,102 @@ fn section_template_matches_the_generators_with_each_metric_absent() {
     assert!(
         failures.is_empty(),
         "template differs from the generator without: {failures:#?}"
+    );
+}
+
+/// The group names of a rendered section.
+fn group_names(json: &str) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    v["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// On a macOS recording the overview draws CPU, network traffic and block
+/// IO, and none of the Linux-only charts.
+#[test]
+fn overview_on_macos_draws_only_what_a_mac_records() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let json = render_generator(&macos(), "/overview", &ctx);
+    assert_eq!(group_names(&json), ["CPU", "Network", "BlockIO"]);
+    for query in [
+        "\"tcp_packet_latency\"",
+        "\"scheduler_runqueue_latency\"",
+        "\"syscall_latency\"",
+        "irate(syscall[",
+        "irate(softirq[",
+        "irate(softirq_time[",
+    ] {
+        assert!(!json.contains(query), "{query} in {json}");
+    }
+}
+
+/// On a macOS recording the exceptions section draws only TCP Retransmits,
+/// and nothing when the agent could not read the TCP statistics.
+#[test]
+fn exceptions_on_macos_draw_only_tcp_retransmits() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let json = render_generator(&macos(), "/exceptions", &ctx);
+    assert_eq!(group_names(&json), ["TCP"]);
+    let json = render_generator(&macos().without("tcp_retransmit"), "/exceptions", &ctx);
+    assert!(group_names(&json).is_empty(), "{json}");
+}
+
+/// A macOS recording without the TCP statistics has the interface errors
+/// and drops but neither network_drop nor tcp_retransmit, so the network
+/// section's Errors group has no Drops & Retransmits subgroup.
+#[test]
+fn network_on_macos_without_tcp_stats_matches_the_template() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let data = macos().without("tcp_retransmit");
+    let generated = render_generator(&data, "/network", &ctx);
+    assert!(!generated.contains("Drops & Retransmits"), "{generated}");
+    assert!(
+        generated.contains("Interface Errors & Drops"),
+        "{generated}"
+    );
+    assert_eq!(
+        generated,
+        render_template(&template(), &data, "/network", &ctx)
+    );
+}
+
+/// A subgroup gated on any of several metrics, rendered with only one of
+/// them present, so each alternative of the gate is seen alone. The
+/// each-metric-absent test leaves the others present, which keeps the gate
+/// true whichever one is removed.
+#[test]
+fn section_template_matches_the_generators_with_one_metric_of_each_any_gate() {
+    let t = template();
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let gates: [&[&str]; 2] = [
+        &["memory_wired", "memory_purgeable", "memory_speculative"],
+        &[
+            "memory_compressed",
+            "memory_compressed_stored",
+            "memory_compressions",
+        ],
+    ];
+    let mut failures = Vec::new();
+    for gate in gates {
+        for keep in gate {
+            let data = gate
+                .iter()
+                .filter(|m| *m != keep)
+                .fold(macos(), |c, m| c.without(m));
+            if render_generator(&data, "/memory", &ctx)
+                != render_template(&t, &data, "/memory", &ctx)
+            {
+                failures.push(*keep);
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "template differs from the generator with only: {failures:?}"
     );
 }
 
@@ -809,4 +1292,34 @@ fn reserved_routes_are_the_frontends_and_deeper_ones() {
         assert!(!is_reserved_route(&section.route), "{}", section.route);
     }
     assert!(!is_reserved_route("/aboutx"));
+}
+
+/// `tcp_connect_latency` labeled by `outcome` gets the rate by outcome and
+/// one latency chart per outcome class, in place of the single chart a
+/// recording without the label gets.
+#[test]
+fn section_template_matches_the_generator_with_connect_outcomes() {
+    let t = template();
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let data = Catalog::from_json(include_str!("../tests/fixtures/catalogs/bench.json")).histogram(
+        "tcp_connect_latency",
+        &[
+            &[("outcome", "established")],
+            &[("outcome", "refused")],
+            &[("outcome", "timeout")],
+            &[("outcome", "error")],
+            &[("outcome", "aborted")],
+        ],
+    );
+    let json = render_generator(&data, "/network", &ctx);
+    assert_eq!(json, render_template(&t, &data, "/network", &ctx));
+    for query in [
+        "sum by (outcome) (histogram_irate(tcp_connect_latency))",
+        r#"tcp_connect_latency{outcome=\"established\"}"#,
+        r#"tcp_connect_latency{outcome=\"refused\"}"#,
+        r#"tcp_connect_latency{outcome=~\"timeout|error|aborted\"}"#,
+    ] {
+        assert!(json.contains(query), "{query} missing from {json}");
+    }
+    assert!(!json.contains(r#""tcp_connect_latency""#), "{json}");
 }
