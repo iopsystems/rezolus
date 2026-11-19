@@ -1058,7 +1058,7 @@ fn run_query(
         }
     };
 
-    let window = match window::resolve(reader.time_range(), reader.interval(), start, end, step) {
+    let window = match window::resolve(reader.time_range(), start, end, step) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("Query failed: {e}");
@@ -1734,14 +1734,7 @@ pub fn command() -> Command {
                      gives one per step). irate() is the rate over one step, so a\n\
                      larger step also averages over a longer interval; a rate() at --start\n\
                      reads data from before it. No point after the recording's last row is\n\
-                     printed. Over a sampler whose rows are further apart than 120 s (or\n\
-                     two of the recording's finest row interval, when that is longer; or a\n\
-                     million steps, when that is shorter), the points of the strided\n\
-                     histogram functions (histogram_quantiles([q], h, STEP), and\n\
-                     histogram_mean, histogram_count, histogram_sum and histogram_heatmap\n\
-                     with a STEP) near --end can be missing, and the last one can fall at\n\
-                     that sampler's last row read, off the step grid, with only the part of\n\
-                     a step before that row.\n\n\
+                     printed.\n\n\
                      Each series prints its point count, its first and last points, and\n\
                      lines Min:, Max:, Mean:, p50:, p90: and p99: over all its points that\n\
                      are not NaN (percentiles by nearest rank). With --above VALUE those\n\

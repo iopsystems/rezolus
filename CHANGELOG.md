@@ -210,6 +210,20 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   longer held from the row before. In MCP `query` this now holds for a
   sampler whose rows are more than 120 s apart too.
 
+- **A strided histogram function's points at the end of a range have the
+  values they have in a longer range.** With metriken-query 0.50.3,
+  `histogram_quantiles([q], h, STEP)` and `histogram_mean/count/sum/heatmap`
+  with a `STEP` read each series' rows after the end until the windows at
+  the end are closed, except in the cases metriken-query's docs list. MCP
+  `query` no longer reads 120 s past a window's end, and its help no longer
+  warns that a strided histogram's points near the end can be missing over
+  a sampler whose rows are further apart. Without `--end`, a `rate` or
+  `irate` over a sampler slower than the recording's fastest now has points
+  after that sampler's last row, held at the rate ending there, as the
+  viewer shows them. A strided `histogram_heatmap` with no point in the
+  window can return an empty matrix rather than an empty heatmap, and
+  `summarize` then gives an empty summary rather than refusing it.
+
 - **`rezolus view` uses less memory.** With metriken-storage 0.13.1,
   `--cache-size-mb` bounds a `.dendro`'s opened segments and the blocks
   decoded from them together. Before, each table kept its opened segments in

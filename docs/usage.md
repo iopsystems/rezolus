@@ -952,17 +952,11 @@ at the slower one's rows instead, and `histogram_quantile()` and the other
 histogram functions without a stride argument give one point per row that
 holds observations, wherever the step falls (a gauge histogram gives one per
 step; `histogram_quantiles([q], h, STEP)` gives one per step). No point after
-the recording's last row is returned. Over a sampler whose rows are further
-apart than 120 s (or two of the recording's finest row interval, when that is
-longer; or a million steps, when that is shorter), the points of the strided
-histogram functions (`histogram_quantiles([q], h, STEP)`, and `histogram_mean`,
-`histogram_count`, `histogram_sum` and `histogram_heatmap` with a `STEP`) near
-the end can be missing, and the last one can fall at that sampler's last row
-read, off the step grid, with only the part of a step before that row. `--step` takes seconds or humantime such as `10s`. `irate()` is the
-rate over one step, so a larger step also averages over a longer interval.
-Each series prints min, max, mean, p50, p90 and p99 over its points that are
-not NaN (nearest rank); `--above VALUE` computes them over the points strictly above VALUE, and
-prints how many there were.
+the recording's last row is returned. `--step` takes seconds or humantime such
+as `10s`. `irate()` is the rate over one step, so a larger step also averages
+over a longer interval. Each series prints min, max, mean, p50, p90 and p99
+over its points that are not NaN (nearest rank); `--above VALUE` computes
+them over the points strictly above VALUE, and prints how many there were.
 
 The MCP `query` tool takes `start` and `end` (an RFC 3339 string or Unix
 seconds as a JSON number) and `step` (a humantime string or seconds as a JSON
