@@ -23,12 +23,12 @@ mod stats {
     include!("../linux/stats.rs");
 }
 
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
 use crate::agent::*;
 use discovery::{Candidate, Family, Origin};
 use metriken::GaugeGroup;
 use smc::{FloatKey, Smc};
 use stats::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -304,19 +304,11 @@ impl Readers {
     }
 }
 
-struct InFlight(Arc<AtomicBool>);
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 struct HwSensors {
-    interval: Duration,
-    last_read: Mutex<Option<Instant>>,
-    reading: Arc<AtomicBool>,
-    stuck_warned: AtomicBool,
+    /// Admits one read at a time, at most once per interval from dispatch,
+    /// and warns once about a read still running after `STUCK_INTERVALS`
+    /// intervals.
+    worker: BlockingWorker,
     readers: Arc<Mutex<Readers>>,
 }
 
@@ -341,39 +333,9 @@ impl HwSensors {
         SENSOR_COOLING_STATE_ACQ.set_member_bound(0);
         debug!("{NAME}: reading every {interval:?}");
         Self {
-            interval,
-            last_read: Mutex::new(None),
-            reading: Arc::new(AtomicBool::new(false)),
-            stuck_warned: AtomicBool::new(false),
+            worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+                .with_stuck_warning(interval * STUCK_INTERVALS),
             readers: Arc::new(Mutex::new(readers)),
-        }
-    }
-
-    /// True, and the read time recorded, if `interval` has passed since the
-    /// last read was dispatched.
-    fn due(&self, now: Instant) -> bool {
-        let mut last = self.last_read.lock().unwrap();
-        if last.is_some_and(|l| {
-            now.checked_duration_since(l)
-                .is_some_and(|d| d < self.interval)
-        }) {
-            return false;
-        }
-        *last = Some(now);
-        true
-    }
-
-    fn warn_if_stuck(&self) {
-        let Some(dispatched) = *self.last_read.lock().unwrap() else {
-            return;
-        };
-        let running = dispatched.elapsed();
-        if running > self.interval * STUCK_INTERVALS
-            && !self.stuck_warned.swap(true, Ordering::AcqRel)
-        {
-            warn!(
-                "{NAME}: a sensor read has run for {running:?}, over {STUCK_INTERVALS} intervals; no second read was dispatched"
-            );
         }
     }
 }
@@ -385,25 +347,12 @@ impl Sampler for HwSensors {
     }
 
     async fn refresh(&self) {
-        if self.reading.load(Ordering::Acquire) {
-            self.warn_if_stuck();
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
-        if !self.due(Instant::now()) {
-            return;
-        }
-        if self.reading.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.stuck_warned.store(false, Ordering::Release);
-        let reading = self.reading.clone();
+        };
         let readers = self.readers.clone();
-        tokio::task::spawn_blocking(move || {
-            let _in_flight = InFlight(reading);
-            readers
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .sweep();
+        permit.spawn(move || {
+            recover_lock(NAME, &readers).sweep();
         });
     }
 }
@@ -458,19 +407,17 @@ mod tests {
 
         sampler.refresh().await;
         for _ in 0..100 {
-            if !sampler.reading.load(Ordering::Acquire) {
+            if !sampler.worker.is_running() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(!sampler.reading.load(Ordering::Acquire));
+        assert!(!sampler.worker.is_running());
         assert_eq!(metric(Family::Temperature).value(0), None);
         assert_eq!(SENSOR_TEMPERATURE_ACQ.window(), before);
         assert_eq!(sampler.readers.lock().unwrap().failed[0], 1);
-        // Inside the interval, a second refresh does not dispatch.
-        let dispatched = *sampler.last_read.lock().unwrap();
-        sampler.refresh().await;
-        assert_eq!(*sampler.last_read.lock().unwrap(), dispatched);
+        // Inside the interval, no second read is admitted.
+        assert!(sampler.worker.try_acquire().is_none());
     }
 
     #[test]
