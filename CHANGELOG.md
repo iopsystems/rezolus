@@ -658,10 +658,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 - **A `drivehealth` or `memory_cgroup` read that finishes a full interval
   or more after its dispatch is followed by an idle interval with no read.**
   Otherwise the next read is due one interval after the previous dispatch.
-  `drivehealth`,
-  `memory_cgroup` and the Linux `hw_sensors` sampler use the same admission
-  code (`BlockingWorker`, `src/agent/samplers/blocking.rs`) for cadence,
-  overlap and cancellation; each sampler has its own worker. (#1542)
+  `drivehealth`, `memory_cgroup` and the Linux `hw_sensors` sampler use the
+  same admission code (`BlockingWorker`, `src/agent/samplers/blocking.rs`) for
+  cadence, overlap and cancellation; each sampler has its own worker. (#1542)
 
 - **Every sampler that reads on a blocking worker admits a scrape arriving up
   to 50ms early**, as `gpu_intel_pmu`, `gpu_amd_sysfs` and `network_efa`
@@ -672,7 +671,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   counters) the next delta then covered two intervals. The idle interval after
   an overrunning read is 50ms shorter too. The allowance is at most half the
   interval, so a configured interval under 100ms keeps reads at least half an
-  interval apart.
+  interval apart. `hw_sensors` on Linux rediscovers sensors on the first sweep
+  at least 60s less 50ms after the last discovery, so a sweep admitted early
+  at the 60s mark does not push rediscovery to the next sweep.
 
 - **A Prometheus series is stored as the exporter serves it, with its
   unit** (metriken-recorder 0.15, metriken-storage 0.13, metriken-query

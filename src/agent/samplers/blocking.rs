@@ -24,8 +24,8 @@ use tokio::task::JoinHandle;
 pub(super) const SCRAPE_TOLERANCE: Duration = Duration::from_millis(50);
 
 /// When the next read is due after a read that ran. A worker built with
-/// [`BlockingWorker::with_tolerance`] admits each read that much before the
-/// time described here.
+/// [`BlockingWorker::with_tolerance`] admits each read up to that tolerance,
+/// capped at half the interval, before the time described here.
 #[derive(Clone, Copy)]
 pub(super) enum Cadence {
     /// One interval after the previous read was dispatched. After a read that
@@ -163,7 +163,8 @@ impl Permit {
             if catch_unwind(AssertUnwindSafe(work)).is_err() {
                 self.outcome = Some(Outcome::Panicked);
                 error!(
-                    "{}: sweep unwound; next admission delayed by the configured interval",
+                    "{}: sweep unwound; next admission delayed by the configured interval, less any \
+                     tolerance",
                     self.worker.name
                 );
             }

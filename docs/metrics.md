@@ -1252,7 +1252,8 @@ firmware. On SMU 13.0.4 (`smu13_driver_if_v13_0_4.h`), bit 0 is SPL, 1 FPPT,
 
 This sampler reads on its own interval (`[samplers.gpu_amd_sysfs] interval`,
 default 1s), dispatched via `spawn_blocking`, and serves cached values in
-between. On a Radeon 780M a `gpu_metrics` read took about 0.3 ms, 2.3 ms at
+between. A scrape arriving up to 50ms early counts as due, so timer jitter does
+not make a consumer polling at the interval miss readings. On a Radeon 780M a `gpu_metrics` read took about 0.3 ms, 2.3 ms at
 worst, and a `pp_dpm_fclk` read about 0.04 ms, 0.5 ms at worst.
 
 ### gpu_apple
@@ -1791,7 +1792,8 @@ by default). On an im4gn.16xlarge sending about 55 Gbit/s over EFA, the first
 file read took 1.8 ms at p50 and 2.8 ms at worst, and the other 21 files about
 0.5 ms together. So this sampler reads on its own interval
 (`[samplers.network_efa] interval`, default 1s), dispatched via
-`spawn_blocking`, and serves cached values in between. A port read that
+`spawn_blocking`, and serves cached values in between; a scrape arriving up to
+50ms early counts as due. A port read that
 returns an error ends that port's read for the interval, because the RDMA core
 caches only a successful fetch and each further file would send the stats
 commands again. At start, the agent warns when a port's `lifespan` is above
@@ -2005,8 +2007,8 @@ On macOS, see [hw_sensors on macOS](#hw_sensors-on-macos).
 Reads run in a nonoverlapping blocking task, dispatched by consumer activity
 at most once per interval (5 seconds by default). A scrape arriving up to 50ms
 early counts as due, so timer jitter does not make a consumer polling at the
-interval miss readings. Discovery runs every 60
-seconds during sampling; descriptive metadata is cached between passes.
+interval miss readings. Discovery runs with the first sweep at least 60
+seconds (less the same 50ms) after the previous discovery; descriptive metadata is cached between passes.
 Failed, disabled, faulted, removed or unreadable measurements are absent from
 the live endpoint rather than zero. If every channel in a family fails, its
 last successful acquisition window remains unchanged; a recorder that

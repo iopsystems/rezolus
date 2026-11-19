@@ -175,8 +175,9 @@ cumulative counters, the case `gpu_intel_pmu`'s comment describes.
 ## Tolerance everywhere (2026-11-19)
 
 The follow-up PR applies `with_tolerance(SCRAPE_TOLERANCE)` to those six
-samplers, so all twelve samplers on the worker admit a scrape up to 50 ms
-early. `SCRAPE_TOLERANCE` moved into `blocking.rs` from the three samplers
+samplers, so all nine samplers on the worker (twelve worker instances,
+counting the Linux and macOS implementations separately) admit a scrape up to
+50 ms early. `SCRAPE_TOLERANCE` moved into `blocking.rs` from the three samplers
 that each defined it. The worker now caps the tolerance at half the interval:
 without the cap, a configured interval of 50 ms or less would admit a read on
 every refresh. No default interval comes near that (the shortest is 1 s). The
@@ -184,3 +185,8 @@ tolerance also shortens the idle interval after an overrunning read by 50 ms,
 since the same due check admits it. The `memory_cgroup` reference
 documentation still said reads were anchored on the previous sweep's finish,
 left over from #1542's first cadence; it now points at the cadence paragraph.
+Linux `hw_sensors` has a second time gate, the 60 s rediscovery throttle,
+checked inside the sweep. With reads 5 s apart less 50 ms, the twelfth sweep
+can land just under 60 s after the last discovery and the throttle would wait
+for the thirteenth; the throttle now compares against 60 s less
+`SCRAPE_TOLERANCE`. No other worker sampler has a time gate of its own.

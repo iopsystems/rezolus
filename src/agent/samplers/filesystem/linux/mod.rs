@@ -403,9 +403,8 @@ impl SweepState {
 
 struct Filesystem {
     /// Admits one sweep at a time, at most once per interval from dispatch less
-    /// `SCRAPE_TOLERANCE`,
-    /// and warns once about a sweep still running after `STUCK_INTERVALS`
-    /// intervals: most likely parked in a path lookup.
+    /// `SCRAPE_TOLERANCE`, and warns once about a sweep still running after
+    /// `STUCK_INTERVALS` intervals: most likely parked in a path lookup.
     worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
 }

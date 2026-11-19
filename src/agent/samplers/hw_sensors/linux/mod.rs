@@ -359,7 +359,12 @@ fn report_reads(last: &mut Option<ReadHealth>, current: ReadHealth) {
 
 fn sweep(state: &mut SweepState, sysfs: &Path, corsair_axi: bool) {
     let now = Instant::now();
-    if state.rediscovery.due(now, REDISCOVERY_INTERVAL) {
+    // Less the worker's tolerance, so that the sweep dispatched up to
+    // `SCRAPE_TOLERANCE` early at the 60s mark still rediscovers.
+    if state
+        .rediscovery
+        .due(now, REDISCOVERY_INTERVAL - SCRAPE_TOLERANCE)
+    {
         let started = Instant::now();
         let found = discovery::discover(sysfs, corsair_axi);
         let descriptor_count = found.descriptors.len();

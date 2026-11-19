@@ -306,9 +306,8 @@ impl Readers {
 
 struct HwSensors {
     /// Admits one read at a time, at most once per interval from dispatch less
-    /// `SCRAPE_TOLERANCE`,
-    /// and warns once about a read still running after `STUCK_INTERVALS`
-    /// intervals.
+    /// `SCRAPE_TOLERANCE`, and warns once about a read still running after
+    /// `STUCK_INTERVALS` intervals.
     worker: BlockingWorker,
     readers: Arc<Mutex<Readers>>,
 }
