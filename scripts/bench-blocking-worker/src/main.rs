@@ -31,7 +31,7 @@ fn main() {
         .unwrap();
     for (name, cadence) in [
         ("dispatch throttled", Cadence::FromDispatch),
-        ("completion throttled", Cadence::FromCompletion),
+        ("idle-after-overrun throttled", Cadence::IdleAfterOverrun),
     ] {
         let worker = BlockingWorker::new("bench", Duration::from_secs(60), cadence);
         // Complete actual work: dropping an unspawned permit consumes no interval.

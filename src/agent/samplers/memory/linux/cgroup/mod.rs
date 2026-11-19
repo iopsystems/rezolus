@@ -45,7 +45,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     );
     Ok(Some(Box::new(CgroupMemory {
         state: Arc::new(Mutex::new(State::default())),
-        worker: BlockingWorker::new(NAME, interval, Cadence::FromCompletion),
+        worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun),
     })))
 }
 

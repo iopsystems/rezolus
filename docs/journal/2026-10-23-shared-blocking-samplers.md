@@ -17,10 +17,13 @@ starts restores the previous cadence anchor, so no interval is consumed without
 a read. A task that has started cannot be cancelled through its join handle.
 
 Hardware sensors measure from dispatch. Cgroup memory and Linux/macOS drive
-health measure from completion. The review of `bf36bf2e` caught that preserving
+health use `Cadence::IdleAfterOverrun`: the next read is due one interval after
+the previous dispatch, or, when that read ran for a full interval or longer, one
+interval after it finished. The review of `bf36bf2e` caught that preserving
 drive health's nominal dispatch cadence would permit back-to-back device commands
-after an overrun. Completion-based spacing guarantees an idle interval: a 90s
-sweep with a 60s interval next becomes eligible at 150s. Rejected refreshes
+after an overrun; a 90s sweep with a 60s interval next becomes eligible at 150s.
+Until 2026-11-18 these samplers measured from completion after every read; see
+the last section. Rejected refreshes
 never advance either clock. Hardware sensors retain their warning once a sweep
 exceeds three intervals; it resets on the next admitted worker. Sensor rediscovery retains
 its independent 60-second throttle.
@@ -36,11 +39,11 @@ exercise the unwinding behavior under the test harness's panic hook.
 Metric reads, publication, acquisition windows and ordinary read-error handling
 remain in their samplers. There is no agent timer, added device read, changed
 default interval setting, or new overlapping writer (principles 10, 17 and 18).
-Drive health's spacing now includes the duration of the preceding sweep.
+Drive health's spacing includes the duration of a preceding sweep that overran.
 Admission racing the brief completion lock may skip a consumer tick instead of
 blocking; completion never holds that lock across device work.
 
-The remaining gates in filesystem, Intel GPU, slabinfo and XFS stats are deferred
+The remaining gates (see the 2026-11-18 section for the list) are deferred
 to a separate migration. This PR remains scoped to the three samplers named in
 the original review follow-up; their differing state and publication lifecycles
 need their own validation before adopting the helper.
@@ -54,7 +57,7 @@ worker and result. On this x86_64 Intel i5-13500H host, Rust 1.97.1:
 | Admission rejected because | ns per refresh |
 | --- | ---: |
 | Dispatch-based interval has not elapsed | 30.2–30.5 |
-| Completion-based interval has not elapsed | 30.2–30.3 |
+| Completion-based interval has not elapsed (before `IdleAfterOverrun`) | 30.2–30.3 |
 | Worker remains in flight | 30.3–30.6 |
 
 The harness and its dependency lockfile are checked in under
@@ -128,7 +131,21 @@ tests ignored); formatting clean; clippy only the existing
 onto main at `e7bc062d` (alpha.146), leaving out #1537's own commits, and the
 version moved to `6.0.0-alpha.147`. One conflict needed more than a text
 choice: main's hardware sensor sweep (#1694) takes a `corsair_axi` argument,
-which the worker closure now passes. Samplers added to main since the branch
-was cut that run their own `spawn_blocking` gate (`gpu_amd_sysfs`, `network_efa`
-and the macOS `filesystem` sampler) are not migrated here, along
-with the Linux filesystem, Intel GPU, slabinfo and XFS stats samplers.
+which the worker closure now passes. Samplers with their own blocking-read gate are not migrated here: the Linux
+and macOS `filesystem` samplers, Intel GPU, `gpu_amd_sysfs`, `network_efa`,
+slabinfo, XFS stats, and macOS `hw_sensors`, which copies the old Linux gate.
+`with_stuck_warning` is Linux-only, so the macOS samplers that warn on a stuck
+sweep need that cfg lifted first.
+
+The review of the merged head found that measuring from completion after every
+read halves the read rate for a consumer polling at the interval: with the 60s
+default, a 60s scrape got a drive health reading every 120s, where main's
+dispatch anchor gave one every 60s, and `memory_cgroup` already documented the
+same effect. `Cadence::FromCompletion` became `Cadence::IdleAfterOverrun`, which
+measures from dispatch unless the read ran for a full interval or longer. This
+is the change the #1537 review suggested. The idle interval after an overrun is
+kept; a read shorter than the interval is followed by a gap of the interval
+minus its duration. `docs/metrics.md`, `config/agent.toml` and the CHANGELOG
+describe the new rule. Tests cover a read just short of the interval, one of
+exactly the interval, and a spawned read that completes; each fails under a
+mutation of the rule it covers.

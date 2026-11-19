@@ -4,58 +4,75 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const INTERVAL: Duration = Duration::from_secs(60);
 
 #[test]
-fn cadence_and_in_flight_admission_are_independent() {
-    for cadence in [Cadence::FromDispatch, Cadence::FromCompletion] {
+fn a_read_shorter_than_the_interval_keeps_the_dispatch_anchor() {
+    for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
         let worker = BlockingWorker::new("test", INTERVAL, cadence);
         let start = Instant::now();
         let mut permit = worker.try_acquire_at(start).unwrap();
         permit.outcome = Some(Outcome::Ran);
         assert!(worker.try_acquire_at(start).is_none());
         assert_eq!(recover_lock("test", &worker.schedule).last, Some(start));
-        let finishing = start + Duration::from_secs(1);
-        permit.finish_at(finishing);
-        let last = recover_lock("test", &worker.schedule).last.unwrap();
-        match cadence {
-            Cadence::FromDispatch => assert_eq!(last, start),
-            Cadence::FromCompletion => assert_eq!(last, finishing),
-        }
+        // The longest read that does not overrun.
+        permit.finish_at(start + INTERVAL - Duration::from_nanos(1));
+        assert_eq!(recover_lock("test", &worker.schedule).last, Some(start));
         assert!(worker
-            .try_acquire_at(last + (INTERVAL - Duration::from_nanos(1)))
+            .try_acquire_at(start + (INTERVAL - Duration::from_nanos(1)))
             .is_none());
         // Rejected refreshes do not postpone the next admissible read.
-        assert_eq!(recover_lock("test", &worker.schedule).last, Some(last));
-        assert!(worker.try_acquire_at(last + INTERVAL).is_some());
+        assert_eq!(recover_lock("test", &worker.schedule).last, Some(start));
+        assert!(worker.try_acquire_at(start + INTERVAL).is_some());
     }
 }
 
 #[test]
-fn completion_cadence_keeps_an_idle_gap_after_an_overrunning_sweep() {
-    for cadence in [Cadence::FromDispatch, Cadence::FromCompletion] {
+fn idle_after_overrun_waits_a_full_interval_after_an_overrunning_read() {
+    for (cadence, overrun) in [
+        (Cadence::FromDispatch, Duration::from_secs(90)),
+        (Cadence::IdleAfterOverrun, Duration::from_secs(90)),
+        (Cadence::IdleAfterOverrun, INTERVAL),
+    ] {
         let worker = BlockingWorker::new("test", INTERVAL, cadence);
         let start = Instant::now();
         let mut permit = worker.try_acquire_at(start).unwrap();
         permit.outcome = Some(Outcome::Ran);
         assert!(worker.try_acquire_at(start + INTERVAL).is_none());
-        let finishing = start + Duration::from_secs(90);
+        let finishing = start + overrun;
         permit.finish_at(finishing);
         match cadence {
             Cadence::FromDispatch => assert!(worker.try_acquire_at(finishing).is_some()),
-            Cadence::FromCompletion => {
+            Cadence::IdleAfterOverrun => {
                 assert!(worker.try_acquire_at(finishing).is_none());
                 assert!(worker
-                    .try_acquire_at(start + Duration::from_secs(149))
+                    .try_acquire_at(finishing + (INTERVAL - Duration::from_nanos(1)))
                     .is_none());
-                assert!(worker
-                    .try_acquire_at(start + Duration::from_secs(150))
-                    .is_some());
+                assert!(worker.try_acquire_at(finishing + INTERVAL).is_some());
             }
         }
     }
 }
 
+#[tokio::test]
+async fn a_spawned_read_that_completes_consumes_its_interval() {
+    for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
+        let worker = BlockingWorker::new("test", INTERVAL, cadence);
+        let start = Instant::now();
+        worker
+            .try_acquire_at(start)
+            .unwrap()
+            .spawn(|| {})
+            .await
+            .unwrap();
+        let schedule = recover_lock("test", &worker.schedule);
+        assert_eq!(schedule.last, Some(start));
+        assert!(schedule.running_since.is_none());
+        drop(schedule);
+        assert!(worker.try_acquire().is_none());
+    }
+}
+
 #[test]
 fn an_unspawned_permit_preserves_the_previous_cadence_anchor() {
-    for cadence in [Cadence::FromDispatch, Cadence::FromCompletion] {
+    for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
         let worker = BlockingWorker::new("test", INTERVAL, cadence);
         let start = Instant::now();
         drop(worker.try_acquire_at(start).unwrap());
@@ -136,7 +153,7 @@ async fn a_blocking_read_does_not_block_the_async_worker_or_overlap() {
 
 #[tokio::test]
 async fn an_unwinding_read_recovers_state_and_waits_a_full_interval() {
-    for cadence in [Cadence::FromDispatch, Cadence::FromCompletion] {
+    for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
         let worker = BlockingWorker::new("test", INTERVAL, cadence);
         let state = Arc::new(Mutex::new(vec![1]));
         let damaged = state.clone();
@@ -177,7 +194,7 @@ fn cancelling_a_queued_task_releases_its_permit() {
         .max_blocking_threads(1)
         .build()
         .unwrap();
-    for cadence in [Cadence::FromDispatch, Cadence::FromCompletion] {
+    for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
         runtime.block_on(async {
             let (started_tx, started_rx) = tokio::sync::oneshot::channel();
             let (release_tx, release_rx) = std::sync::mpsc::channel();

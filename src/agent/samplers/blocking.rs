@@ -1,9 +1,10 @@
 //! Consumer-triggered, nonoverlapping workers for expensive sampler reads.
 //!
 //! Admission only tries a short scheduling lock; device/state locks belong on
-//! the blocking pool. A permit owns the in-flight slot from admission through
-//! completion, including queued-task cancellation and unwinding. Metric values,
-//! acquisition windows and ordinary read errors remain the sampler's concern.
+//! the blocking pool. A permit admits one read at a time: it is held from
+//! admission until the read finishes, is cancelled while queued, or unwinds.
+//! Metric values, acquisition windows and ordinary read errors are handled by
+//! the sampler. Each sampler has its own worker.
 //!
 //! Panic recovery applies only when the process unwinds. The binary's global
 //! panic hook exits the process, and this helper does not override that policy.
@@ -14,11 +15,19 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
+/// When the next read is due after a read that ran.
 #[derive(Clone, Copy)]
 pub(super) enum Cadence {
+    /// One interval after the previous read was dispatched. After a read that
+    /// ran for longer than the interval, the next one is due when it finishes.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     FromDispatch,
-    FromCompletion,
+    /// One interval after the previous read was dispatched, or, when that read
+    /// ran for a full interval or longer, one interval after it finished, so
+    /// an overrunning read is followed by a full interval with no read. A
+    /// consumer polling every `interval` gets a read on every poll unless a
+    /// read overruns.
+    IdleAfterOverrun,
 }
 
 #[derive(Default)]
@@ -104,9 +113,10 @@ impl BlockingWorker {
     }
 }
 
-/// Keep the permit in the queued closure, so even cancellation before execution
-/// releases it without consuming an interval. Dropping an unspawned permit has
-/// the same effect. Once work starts, its cadence applies even if reads fail.
+/// `spawn` moves the permit into the blocking closure, so a task cancelled
+/// before it runs drops the permit and restores the previous cadence anchor.
+/// Dropping an unspawned permit does the same. Once the closure starts, the
+/// sampler's cadence applies whether or not the read succeeds.
 pub(super) struct Permit {
     worker: BlockingWorker,
     previous_last: Option<Instant>,
@@ -148,7 +158,12 @@ impl Permit {
             // An unwinding panic always gets a full retry interval, including
             // a dispatch-based sampler whose sweep ran longer than its interval.
             Outcome::Panicked => schedule.last = Some(now),
-            Outcome::Ran if matches!(self.worker.cadence, Cadence::FromCompletion) => {
+            Outcome::Ran
+                if matches!(self.worker.cadence, Cadence::IdleAfterOverrun)
+                    && schedule.running_since.is_some_and(|dispatched| {
+                        now.saturating_duration_since(dispatched) >= self.worker.interval
+                    }) =>
+            {
                 schedule.last = Some(now);
             }
             Outcome::Ran => {}
@@ -163,8 +178,9 @@ impl Drop for Permit {
     }
 }
 
-/// Recover state on the blocking worker, retaining slot ownership after an
-/// unwind. Callers must tolerate partially updated state; this is not rollback.
+/// Lock `state`, clearing poison left by an unwound read and keeping what that
+/// read wrote (for example, `hw_sensors`' and `memory_cgroup`'s metric slot
+/// assignments). Partial writes are not rolled back.
 pub(super) fn recover_lock<'a, T>(name: &str, state: &'a Mutex<T>) -> MutexGuard<'a, T> {
     state.lock().unwrap_or_else(|e| {
         state.clear_poison();

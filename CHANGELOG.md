@@ -653,13 +653,14 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
-- `drivehealth` schedules each read one interval after the previous sweep
-  finished, on Linux and macOS, where before it was one interval after the
-  previous dispatch, so a sweep that overruns its interval is followed by a
-  full interval with no device commands. `drivehealth`, `memory_cgroup` and
-  the Linux `hw_sensors` sampler share one worker
-  (`src/agent/samplers/blocking.rs`) for admission, cadence and cancellation.
-  (#1542)
+- A `drivehealth` or `memory_cgroup` read that runs for its interval or
+  longer is followed by a full interval with no read, counted from its end;
+  otherwise the next read is due one interval after the previous one started.
+  A consumer polling every `interval` gets a reading on every poll unless a
+  read overruns. `drivehealth`,
+  `memory_cgroup` and the Linux `hw_sensors` sampler use the same admission
+  code (`BlockingWorker`, `src/agent/samplers/blocking.rs`) for cadence,
+  overlap and cancellation; each sampler has its own worker. (#1542)
 
 - **A Prometheus series is stored as the exporter serves it, with its
   unit** (metriken-recorder 0.15, metriken-storage 0.13, metriken-query

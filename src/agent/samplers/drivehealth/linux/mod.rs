@@ -238,7 +238,7 @@ impl DriveHealth {
         Self {
             drives: Arc::new(drives),
             // Device commands need an idle interval even when a sweep overruns.
-            worker: BlockingWorker::new(NAME, interval, Cadence::FromCompletion),
+            worker: BlockingWorker::new(NAME, interval, Cadence::IdleAfterOverrun),
         }
     }
 }
