@@ -42,8 +42,8 @@
 //! (`[samplers.gpu_intel_pmu] interval`, default 1s) and serves the cached values
 //! in between, with the read dispatched via `spawn_blocking` so a slow driver
 //! read cannot stall the async runtime (principle 17). `refresh()` itself pays a
-//! try-lock and a time check and, once per interval, a dispatch. The counters are cumulative, so a 1s cadence costs
-//! `rate()` nothing.
+//! try-lock and a time check and, once per interval, a dispatch. The counters
+//! are cumulative, so a 1s cadence costs `rate()` nothing.
 //!
 //! ## Windows
 //!
