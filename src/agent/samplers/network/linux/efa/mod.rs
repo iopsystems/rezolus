@@ -47,6 +47,7 @@ mod stats;
 
 use stats::*;
 
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
 use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
@@ -56,8 +57,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const SYSFS_INFINIBAND: &str = "/sys/class/infiniband";
 
@@ -157,9 +157,8 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
 
     Ok(Some(Box::new(Efa {
         efa: Arc::new(std::sync::Mutex::new(efa)),
-        interval,
-        last_read: std::sync::Mutex::new(None),
-        reading: Arc::new(AtomicBool::new(false)),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch)
+            .with_tolerance(SCRAPE_TOLERANCE),
     })))
 }
 
@@ -173,12 +172,9 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 struct Efa {
     /// Shared with the `spawn_blocking` task.
     efa: Arc<std::sync::Mutex<Discovered>>,
-    /// Minimum time between reads (principle 17).
-    interval: Duration,
-    /// When the last read was dispatched.
-    last_read: std::sync::Mutex<Option<Instant>>,
-    /// Guards against overlapping reads if one runs long.
-    reading: Arc<AtomicBool>,
+    /// Admits one read at a time, at most once per interval from dispatch
+    /// (principle 17), less `SCRAPE_TOLERANCE`.
+    worker: BlockingWorker,
 }
 
 #[async_trait]
@@ -188,29 +184,18 @@ impl Sampler for Efa {
     }
 
     async fn refresh(&self) {
-        {
-            let mut last = self.last_read.lock().unwrap();
-            let due = self.interval.saturating_sub(SCRAPE_TOLERANCE);
-            match *last {
-                Some(t) if t.elapsed() < due => return,
-                _ => *last = Some(Instant::now()),
-            }
-        }
-
-        if self.reading.swap(true, Ordering::AcqRel) {
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
+        };
 
         let efa = self.efa.clone();
-        let reading = self.reading.clone();
 
-        tokio::task::spawn_blocking(move || {
+        permit.spawn(move || {
             if let Ok(mut efa) = efa.lock() {
                 let efa = &mut *efa;
                 sweep(&mut efa.devices, &NETWORK_EFA_DEVICES_ACQ);
                 sweep(&mut efa.ports, &NETWORK_EFA_PORTS_ACQ);
             }
-            reading.store(false, Ordering::Release);
         });
     }
 }

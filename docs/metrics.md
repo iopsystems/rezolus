@@ -1171,7 +1171,7 @@ the snapshot-TTL rate would burn CPU for values that move on the order of
 seconds. Measured end to end on a host with two Intel GPUs (an Arc A770 and an
 integrated GPU, 11 engines and 4 frequency counters between them): 40-66 us per
 sweep in a release build. Reads are dispatched via `spawn_blocking`; the
-on-cycle cost is a time comparison.
+on-cycle cost is a try-lock and a time check.
 
 The read cadence admits a scrape arriving up to 50ms early. Without that
 tolerance, a consumer scraping at the same period as `interval` — the common

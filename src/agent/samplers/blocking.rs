@@ -20,7 +20,6 @@ use tokio::task::JoinHandle;
 pub(super) enum Cadence {
     /// One interval after the previous read was dispatched. After a read that
     /// ran for longer than the interval, the next one is due when it finishes.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     FromDispatch,
     /// One interval after the previous read was dispatched, or, when that read
     /// finished a full interval or more after its dispatch, one interval after
@@ -41,6 +40,7 @@ pub(super) struct BlockingWorker {
     name: &'static str,
     interval: Duration,
     cadence: Cadence,
+    tolerance: Duration,
     warn_after: Option<Duration>,
     schedule: Arc<Mutex<Schedule>>,
 }
@@ -51,12 +51,22 @@ impl BlockingWorker {
             name,
             interval,
             cadence,
+            tolerance: Duration::ZERO,
             warn_after: None,
             schedule: Arc::new(Mutex::new(Schedule::default())),
         }
     }
 
-    #[cfg(target_os = "linux")]
+    /// Admit a read up to `tolerance` before the interval has elapsed, so that
+    /// a consumer polling at the interval is not rejected by timer jitter.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(super) fn with_tolerance(mut self, tolerance: Duration) -> Self {
+        self.tolerance = tolerance;
+        self
+    }
+
+    /// Warn once when a read has been running for longer than `after`; the
+    /// warning resets when the next read is admitted.
     pub(super) fn with_stuck_warning(mut self, after: Duration) -> Self {
         self.warn_after = Some(after);
         self
@@ -68,7 +78,7 @@ impl BlockingWorker {
         self.try_acquire_at(Instant::now())
     }
 
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(super) fn is_running(&self) -> bool {
         recover_lock(self.name, &self.schedule)
             .running_since
@@ -89,16 +99,16 @@ impl BlockingWorker {
             if self.warn_after.is_some_and(|after| running > after) && !schedule.stuck_warned {
                 schedule.stuck_warned = true;
                 warn!(
-                    "{}: a blocking sweep has run for {running:?}; no second worker was dispatched",
+                    "{}: a sweep has been running for {running:?}; its values hold until it \
+                     returns, and no other sweep starts",
                     self.name
                 );
             }
             return None;
         }
-        if schedule
-            .last
-            .is_some_and(|last| now.saturating_duration_since(last) < self.interval)
-        {
+        if schedule.last.is_some_and(|last| {
+            now.saturating_duration_since(last) < self.interval.saturating_sub(self.tolerance)
+        }) {
             return None;
         }
         let previous_last = schedule.last.replace(now);

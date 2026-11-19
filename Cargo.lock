@@ -2538,9 +2538,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.27.0"
+version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f9b50fb7b28ddc7ff8df82109e85de970636e8f8e7f85c1e7c35d8aff3c97b3"
+checksum = "3ff56d9cae1a0035cbb8cb591fca39f9544d8ab06fb31ebd4265a2da572a4694"
 dependencies = [
  "bytes",
  "chrono",
@@ -3637,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.148"
+version = "6.0.0-alpha.151"
 dependencies = [
  "allan",
  "anyhow",
