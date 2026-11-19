@@ -22,8 +22,9 @@
 //! hundred lines), and the kernel takes the slab lock to generate it, so it is
 //! a principle 15 exception: read at most once per `interval` (60 s by
 //! default), off the scrape cycle on the blocking pool, following the
-//! `filesystem` and `drivehealth` samplers. The refresh path pays a time check
-//! and, once per interval, a dispatch. Each sweep logs at debug level
+//! `filesystem` and `drivehealth` samplers. The refresh path pays a try-lock
+//! and a time check and, once per interval, a dispatch. Each sweep logs at
+//! debug level
 //! `memory_slabinfo sweep: read <us> us (<bytes> bytes), parse and publish
 //! <us> us, <n> caches published, <n> over the cap`.
 //!
@@ -89,11 +90,11 @@ const NAME: &str = "memory_slabinfo";
 
 const SLABINFO: &str = "/proc/slabinfo";
 
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -142,9 +143,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     SLABINFO_ACQ.set_member_bound(0);
 
     Ok(Some(Box::new(Slabinfo {
-        interval,
-        last_read: Mutex::new(None),
-        reading: Arc::new(AtomicBool::new(false)),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch),
         state: Arc::new(Mutex::new(SweepState::new(all, page_size()))),
     })))
 }
@@ -165,12 +164,8 @@ fn page_size() -> u64 {
 }
 
 struct Slabinfo {
-    /// Minimum spacing between sweeps.
-    interval: Duration,
-    /// When the last sweep was dispatched; `None` until the first.
-    last_read: Mutex<Option<Instant>>,
-    /// True while a sweep is in flight, so sweeps never overlap.
-    reading: Arc<AtomicBool>,
+    /// Admits one sweep at a time, at most once per interval from dispatch.
+    worker: BlockingWorker,
     state: Arc<Mutex<SweepState>>,
 }
 
@@ -262,15 +257,6 @@ impl SweepState {
     }
 }
 
-/// Clears the in-flight latch when the sweep ends, by return or by unwind.
-struct InFlight(Arc<AtomicBool>);
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 /// The slot reads absent and carries no labels, ready for another cache.
 fn vacate(slot: usize) {
     for group in GROUPS {
@@ -303,29 +289,16 @@ impl Sampler for Slabinfo {
     }
 
     async fn refresh(&self) {
-        // Throttle: dispatch a sweep at most once per `interval`. Cheap time
-        // check on the scrape path.
-        {
-            let mut last = self.last_read.lock().unwrap();
-            match *last {
-                Some(t) if t.elapsed() < self.interval => return,
-                _ => *last = Some(Instant::now()),
-            }
-        }
-
-        // Never overlap sweeps.
-        if self.reading.swap(true, Ordering::AcqRel) {
+        // Cheap on the scrape path: a try-lock and a time check.
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
-
-        let reading = self.reading.clone();
+        };
         let state = self.state.clone();
 
         // Off the async worker: the read holds the slab lock in the kernel and
         // the parse walks a few hundred lines. This task is `SLABINFO_ACQ`'s
         // single writer (principle 18); `refresh()` only dispatches it.
-        tokio::task::spawn_blocking(move || {
-            let _in_flight = InFlight(reading);
+        permit.spawn(move || {
             sweep(&mut lock_state(&state), SLABINFO);
         });
     }
