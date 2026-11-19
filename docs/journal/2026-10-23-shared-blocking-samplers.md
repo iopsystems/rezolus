@@ -196,7 +196,7 @@ throttle now compares against 60 s less half the read interval (57.5 s at the
 default), so the twelfth sweep rediscovers whether sweeps start 5 s or 4.95 s
 apart. A consumer polling slower than the interval spaces sweeps by its own
 period, and rediscovery then comes on its first poll at least 57.5 s after
-the last one. At a configured read interval between 40 s and 60 s the
+the last one. At a configured read interval from 40 s to just under 60 s the
 threshold falls to the interval or below, so every sweep rediscovers, where
 before every second sweep did. No other worker sampler has a time gate of its
 own.
