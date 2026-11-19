@@ -13,11 +13,6 @@ pub(crate) const DEFAULT_STEP: f64 = 1.0;
 /// over the part of the window the recording covers.
 const MAX_POINTS: f64 = 1_000_000.0;
 
-/// How far past the window's end the engine reads, at least, so that a
-/// strided histogram function over a sampler whose rows are up to this far
-/// apart has its row after `end`. Capped at [`MAX_POINTS`] steps.
-const ROW_REACH: f64 = 120.0;
-
 /// Unix seconds past this are the year 2286: milliseconds or nanoseconds
 /// sent as seconds.
 const MAX_UNIX_SECONDS: f64 = 1e10;
@@ -30,26 +25,21 @@ pub(crate) struct Window {
     pub end: f64,
     pub step: f64,
     /// The range the engine is asked for: the part of `start..=end` the
-    /// recording covers, `read_start` to `covered_end`, with `read_end` past
-    /// it by [`ROW_REACH`] or two of the recording's finest row interval,
-    /// whichever is longer, at least one step and at most [`MAX_POINTS`]
-    /// steps (see [`query`]). The points kept are those from `start` to
-    /// `covered_end`, both included.
+    /// recording covers (see [`query`]). The points kept are those from
+    /// `start` to `covered_end`, both included.
     pub read_start: f64,
     pub covered_end: f64,
-    pub read_end: f64,
 }
 
 /// The window from the arguments given, with `start` and `end` defaulting
-/// to the span of the recording, `range`, whose finest rows are `gap`
-/// seconds apart. `step` defaults to [`DEFAULT_STEP`], or to the whole
-/// number of seconds that keeps the covered part of the window within
-/// [`MAX_POINTS`] points when that is coarser. Refuses a non-positive step, a window that does not overlap the
+/// to the span of the recording, `range`. `step` defaults to
+/// [`DEFAULT_STEP`], or to the whole number of seconds that keeps the
+/// covered part of the window within [`MAX_POINTS`] points when that is
+/// coarser. Refuses a non-positive step, a window that does not overlap the
 /// recording, a start after the end, and a given step that makes more than
 /// [`MAX_POINTS`] points.
 pub(crate) fn resolve(
     range: Option<(f64, f64)>,
-    gap: f64,
     start: Option<f64>,
     end: Option<f64>,
     step: Option<f64>,
@@ -77,15 +67,8 @@ pub(crate) fn resolve(
         Some(_) => (start.max(first), end.min(last)),
         None => (start, end),
     };
-    let gap = if gap.is_finite() && gap > 0.0 {
-        gap
-    } else {
-        0.0
-    };
     let step =
         step.unwrap_or_else(|| DEFAULT_STEP.max(((covered_end - read_start) / MAX_POINTS).ceil()));
-    let reach = (2.0 * gap).max(ROW_REACH).min(MAX_POINTS * step);
-    let read_end = covered_end + step.max(reach);
     if (covered_end - read_start) / step > MAX_POINTS {
         return Err(format!(
             "{start} to {end} at a step of {step} s is more than {MAX_POINTS} points; \
@@ -98,27 +81,25 @@ pub(crate) fn resolve(
         step,
         read_start,
         covered_end,
-        read_end,
     })
 }
 
 /// Run `query` over `window`. Points are at multiples of `step` (counted from
 /// the Unix epoch) from `start` to `end`, except for a query that combines
 /// samplers of different cadence, which metriken-query evaluates at the
-/// slower one's rows. A grid `rate`/`irate` reads each series' first row
-/// after the end it is given (metriken-query 0.50.2), but the strided
+/// slower one's rows. The engine is asked for the part of the window the
+/// recording covers, `read_start` to `covered_end` (from the grid point at
+/// or before `read_start` when the two are equal), and the points before
+/// `start` or after `covered_end` are dropped. The engine reads the rows
+/// after `covered_end` that a point at it needs (metriken-query 0.50.3):
+/// each series' next row for a grid `rate`/`irate`, and for the strided
 /// histogram functions (`histogram_quantiles([q], h, STEP)`, and
 /// `histogram_mean`, `histogram_count`, `histogram_sum` and
-/// `histogram_heatmap` with a `STEP`) read no row after it, and their point
-/// at a step needs the row after that step. So the engine is asked for
-/// `read_end`, [`ROW_REACH`] or more past the end of the covered part
-/// (`covered_end`), and the points before `start` or after `covered_end` are
-/// dropped. A strided histogram over a sampler whose rows are further apart
-/// than that, or than a million steps when that is shorter, can still miss
-/// its points near `end`, its last point then at the sampler's last row read,
-/// off the step grid. The read past `end` evaluates up to that many more
-/// points per series, so a one-point window at a 10 us step costs as much as
-/// a million-point one.
+/// `histogram_heatmap` with a `STEP`) the rows until the windows at the end
+/// are closed, except in the cases metriken-query's crate docs list (a
+/// bucket or scale change after the end, every series going two of its row
+/// intervals without a row across it, and a process group's series whose
+/// next row is more than 16 of the metric's row intervals after the end).
 ///
 /// An unstrided histogram function (`histogram_quantile(q, h)` and the
 /// others metriken-query lists) gives one point per row wherever the step
@@ -129,7 +110,15 @@ pub(crate) fn query(
     query: &str,
     window: &Window,
 ) -> Result<QueryResult, metriken_query::QueryError> {
-    let mut result = reader.query_range(query, window.read_start, window.read_end, window.step)?;
+    // A range of one instant is evaluated where it is asked, not on the step
+    // grid: start it at the grid point at or before, and `trim` keeps the
+    // point only when that is the instant itself.
+    let from = if window.covered_end > window.read_start {
+        window.read_start
+    } else {
+        (window.read_start / window.step).floor() * window.step
+    };
+    let mut result = reader.query_range(query, from, window.covered_end, window.step)?;
     trim(&mut result, window);
     Ok(result)
 }
@@ -142,9 +131,8 @@ fn trim(result: &mut QueryResult, window: &Window) {
     // spacing there is about 0.24 us); a quarter step keeps a finer step's
     // neighbouring point out.
     let tolerance = (window.step / 4.0).min(1e-6);
-    // Up to the end of the part the recording covers: past its last row, a
-    // gauge would be held or averaged over rows the read past the end
-    // reached, which the window does not cover.
+    // Up to the end of the part the recording covers, the end the engine
+    // is asked for.
     let keep = |t: f64| t >= window.start - tolerance && t <= window.covered_end + tolerance;
     fn retain_by<T>(v: &mut Vec<T>, kept: &[bool]) {
         let mut i = 0;
@@ -401,14 +389,10 @@ mod tests {
 
     #[test]
     fn the_window_defaults_to_the_recording_at_one_second() {
-        let w = resolve(Some((100.0, 200.0)), 1.0, None, None, None).unwrap();
+        let w = resolve(Some((100.0, 200.0)), None, None, None).unwrap();
         assert_eq!((w.start, w.end, w.step), (100.0, 200.0, 1.0));
-        // Read ROW_REACH past the end, to reach the row after it.
-        assert_eq!((w.read_start, w.read_end), (100.0, 200.0 + ROW_REACH));
-        // Two of a coarse recording's row interval when that is longer.
-        let w = resolve(Some((100.0, 2000.0)), 300.0, None, None, Some(60.0)).unwrap();
-        assert_eq!(w.read_end, 2600.0);
-        let w = resolve(Some((100.0, 200.0)), 1.0, Some(150.0), None, Some(10.0)).unwrap();
+        assert_eq!((w.read_start, w.covered_end), (100.0, 200.0));
+        let w = resolve(Some((100.0, 200.0)), Some(150.0), None, Some(10.0)).unwrap();
         assert_eq!((w.start, w.end, w.step), (150.0, 200.0, 10.0));
     }
 
@@ -425,7 +409,7 @@ mod tests {
             (Some(300.0), None, None, "does not overlap"),
             (None, Some(50.0), None, "does not overlap"),
         ] {
-            let err = resolve(range, 1.0, start, end, step).unwrap_err();
+            let err = resolve(range, start, end, step).unwrap_err();
             assert!(err.contains(want), "{start:?} {end:?} {step:?}: {err}");
         }
     }
@@ -433,39 +417,33 @@ mod tests {
     #[test]
     fn the_default_step_keeps_a_long_recording_within_the_point_limit() {
         let day = 86_400.0;
-        let w = resolve(Some((0.0, 30.0 * day)), 1.0, None, None, None).unwrap();
+        let w = resolve(Some((0.0, 30.0 * day)), None, None, None).unwrap();
         assert_eq!(w.step, 3.0);
         assert!((w.end - w.start) / w.step <= MAX_POINTS);
-        // The limit is over the window, not the read past its end: the
-        // default step of any recording is accepted, and a window of exactly
-        // a million points is too.
+        // The default step of any recording is accepted, and a window of
+        // exactly a million points is too.
         for last in [999_999.0, 1_000_000.0, 2_999_998.0, 2_999_999.0] {
-            let w = resolve(Some((0.0, last)), 1.0, None, None, None).unwrap();
+            let w = resolve(Some((0.0, last)), None, None, None).unwrap();
             assert_eq!(w.step, (last / MAX_POINTS).ceil().max(1.0), "{last}");
         }
-        assert!(resolve(Some((0.0, 3e6)), 1.0, Some(0.0), Some(1e6), Some(1.0)).is_ok());
+        assert!(resolve(Some((0.0, 3e6)), Some(0.0), Some(1e6), Some(1.0)).is_ok());
         // A step that is given is kept, and refused when too fine.
-        assert!(resolve(Some((0.0, 30.0 * day)), 1.0, None, None, Some(1.0)).is_err());
+        assert!(resolve(Some((0.0, 30.0 * day)), None, None, Some(1.0)).is_err());
         assert_eq!(
-            resolve(Some((0.0, day)), 1.0, None, None, None)
-                .unwrap()
-                .step,
+            resolve(Some((0.0, day)), None, None, None).unwrap().step,
             1.0
         );
     }
 
     /// The read is the part of the window the recording covers, and the
     /// default step is sized from it: an end long after the recording
-    /// neither coarsens the step nor reads further than ROW_REACH past the
-    /// recording's last row.
+    /// neither coarsens the step nor moves the read past the recording's
+    /// last row.
     #[test]
     fn the_read_is_the_part_of_the_window_the_recording_covers() {
-        let w = resolve(Some((100.0, 115.0)), 1.0, Some(50.0), Some(5e6), None).unwrap();
+        let w = resolve(Some((100.0, 115.0)), Some(50.0), Some(5e6), None).unwrap();
         assert_eq!((w.start, w.end, w.step), (50.0, 5e6, 1.0));
-        assert_eq!((w.read_start, w.read_end), (100.0, 115.0 + ROW_REACH));
-        // The reach is at most a million steps.
-        let w = resolve(Some((100.0, 115.0)), 1.0, None, Some(110.0), Some(1e-5)).unwrap();
-        assert_eq!(w.read_end, 110.0 + 1e6 * 1e-5);
+        assert_eq!((w.read_start, w.covered_end), (100.0, 115.0));
     }
 
     #[test]
@@ -551,7 +529,6 @@ mod tests {
         };
         let w = resolve(
             Some((t0, t0 + 2.0)),
-            1.0,
             Some(t0 + 0.3),
             Some(t0 + 0.8),
             Some(step),
@@ -582,7 +559,6 @@ mod tests {
         };
         let w = resolve(
             Some((t0, t0 + 200.0)),
-            1.0,
             Some(t0 + 10.0),
             Some(t0 + 120.0),
             Some(60.0),
@@ -608,7 +584,7 @@ mod tests {
             )],
             notices: Vec::new(),
         };
-        let w = resolve(Some((100.0, 104.5)), 1.0, None, Some(500.0), None).unwrap();
+        let w = resolve(Some((100.0, 104.5)), None, Some(500.0), None).unwrap();
         trim(&mut result, &w);
         let QueryResult::Matrix { result, .. } = result else {
             unreachable!()
@@ -632,7 +608,7 @@ mod tests {
             },
             notices: Vec::new(),
         };
-        let w = resolve(Some((10.0, 13.0)), 1.0, Some(11.0), Some(12.0), Some(1.0)).unwrap();
+        let w = resolve(Some((10.0, 13.0)), Some(11.0), Some(12.0), Some(1.0)).unwrap();
         trim(&mut result, &w);
         let QueryResult::HistogramHeatmap { result, .. } = result else {
             unreachable!()
@@ -652,7 +628,7 @@ mod tests {
             )],
             notices: Vec::new(),
         };
-        let w = resolve(Some((1.0, 2.0)), 1.0, None, None, None).unwrap();
+        let w = resolve(Some((1.0, 2.0)), None, None, None).unwrap();
         let s = summary_json(&result, &w, None).unwrap();
         assert_eq!(s["resultType"], "summary");
         assert_eq!(s["result"][0]["max"], "+Inf");

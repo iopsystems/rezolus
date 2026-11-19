@@ -217,7 +217,7 @@ fn read_tools() -> Vec<Value> {
                     },
                     "end": {
                         "type": ["string", "number"],
-                        "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned. Over a sampler whose rows are further apart than 120 s (or two of the recording's finest row interval, when that is longer; or a million steps, when that is shorter), the points of the strided histogram functions (histogram_quantiles([q], h, STEP), and histogram_mean, histogram_count, histogram_sum and histogram_heatmap with a STEP) near end can be missing, and the last one can fall at that sampler's last row read, off the step grid, with only the part of a step before that row."
+                        "description": "End of the window, included, in the same forms as start. Defaults to the recording's end; no point after the recording's last row is returned."
                     },
                     "step": {
                         "type": ["string", "number"],
@@ -1147,8 +1147,7 @@ impl Server {
 
         let selector = Self::selector_of(arguments)?;
         let reader = self.get_reader_selected(parquet_file, &selector).await?;
-        let window =
-            super::window::resolve(reader.time_range(), reader.interval(), start, end, step)?;
+        let window = super::window::resolve(reader.time_range(), start, end, step)?;
         let result = super::window::query(reader.as_ref(), query, &window)?;
 
         if summarize {
@@ -2633,10 +2632,9 @@ mod tests {
         );
     }
 
-    /// A rate over a sampler whose rows are further apart than the read past
-    /// the window's end (`window::ROW_REACH`) has at the window's end the
-    /// value a wider window has there: the engine reads its row after the
-    /// end.
+    /// A rate over a sampler whose rows are 300 s apart has at the window's
+    /// end the value a wider window has there: the engine reads its row
+    /// after the end.
     #[tokio::test]
     async fn a_very_slow_samplers_rate_at_a_windows_end_is_that_of_a_wider_window() {
         let dir = tempfile::tempdir().unwrap();
@@ -2680,6 +2678,42 @@ mod tests {
                     .find(|(t, _)| (t - last.0).abs() < 1e-6)
                     .map(|(_, v)| *v);
                 assert_eq!(Some(last.1), want, "{query} at end t0 + {end}");
+            }
+        }
+    }
+
+    /// A window of one instant gives a point only on the step grid: at a
+    /// 1 s step, one between two grid points gives none, and one on a grid
+    /// point the point there.
+    #[tokio::test]
+    async fn a_window_of_one_instant_keeps_to_the_step_grid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("very-slow.dendro");
+        fast_and_very_slow(&path);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let t0 = ::rez::fixtures::ANCHOR as f64 / 1e9;
+        for query in ["sum(rate(fast[60s]))", "sum(irate(fast[60s]))"] {
+            for (at, want) in [(t0 + 1200.5, 0), (t0 + 1200.0, 1)] {
+                let out: Value = serde_json::from_str(
+                    &server
+                        .execute_query(&json!({
+                            "parquet_file": file, "query": query,
+                            "start": at, "end": at, "step": 1,
+                        }))
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                let points: Vec<f64> = out["result"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|s| s["values"].as_array().unwrap().clone())
+                    .map(|p| p[0].as_f64().unwrap())
+                    .collect();
+                assert_eq!(points.len(), want, "{query} at {at}: {points:?}");
+                assert!(points.iter().all(|t| (t - at).abs() < 1e-6), "{points:?}");
             }
         }
     }
@@ -2735,8 +2769,8 @@ mod tests {
     }
 
     /// A strided histogram function over a sampler slower than the step has
-    /// at a window's end the points a wider window has there: the read past
-    /// the end (`window::ROW_REACH`) reaches the row after them.
+    /// at a window's end the points a wider window has there: the engine
+    /// reads the rows after the end until the windows at the end are closed.
     #[tokio::test]
     async fn a_strided_histograms_points_at_a_windows_end_are_those_of_a_wider_window() {
         let dir = tempfile::tempdir().unwrap();
