@@ -187,12 +187,16 @@ documentation still said reads were anchored on the previous sweep's finish,
 left over from #1542's first cadence; it now points at the cadence paragraph.
 Linux `hw_sensors` has a second time gate, the 60 s rediscovery throttle,
 checked inside the sweep. When refreshes arrive faster than the read
-interval, every sweep is admitted up to 50 ms early, so twelve sweeps at the
-5 s default can span as little as 59.4 s and a 60 s throttle would wait for
-the thirteenth. Subtracting `SCRAPE_TOLERANCE` from the threshold covers only
-a consumer polling at the interval, where the early admissions do not add up;
-the review of the first fix found that. The throttle now compares against
-60 s less half the read interval (57.5 s at the default), so the twelfth
-sweep rediscovers whether sweeps start 5 s or 4.95 s apart. A consumer
-polling slower than the interval spaces sweeps by its own period, and
-rediscovery then comes on its first poll at least 57.5 s after the last one. No other worker sampler has a time gate of its own.
+interval, every sweep is admitted up to 50 ms early, so the twelfth sweep
+after a discovery can start 59.4 s after it at the 5 s default, and a 60 s
+throttle would wait for the thirteenth. Subtracting `SCRAPE_TOLERANCE` from
+the threshold covers only a consumer polling at the interval, where the early
+admissions do not add up; the review of the first fix found that. The
+throttle now compares against 60 s less half the read interval (57.5 s at the
+default), so the twelfth sweep rediscovers whether sweeps start 5 s or 4.95 s
+apart. A consumer polling slower than the interval spaces sweeps by its own
+period, and rediscovery then comes on its first poll at least 57.5 s after
+the last one. At a configured read interval between 40 s and 60 s the
+threshold falls to the interval or below, so every sweep rediscovers, where
+before every second sweep did. No other worker sampler has a time gate of its
+own.

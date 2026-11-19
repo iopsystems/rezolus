@@ -293,8 +293,8 @@ impl SweepState {
 
 /// How long after a discovery the sweep that rediscovers may start. Sweeps
 /// are admitted up to `SCRAPE_TOLERANCE` early, and when refreshes arrive
-/// faster than the read interval each sweep starts that early, so twelve
-/// sweeps at a 5s interval can span 59.4s. With the threshold at
+/// faster than the read interval each sweep starts that early, so the twelfth
+/// sweep after a discovery can start 59.4s after it at a 5s interval. With the threshold at
 /// `REDISCOVERY_INTERVAL` less half the read interval, the twelfth sweep
 /// rediscovers whether sweeps start one interval apart or `SCRAPE_TOLERANCE`
 /// less.
