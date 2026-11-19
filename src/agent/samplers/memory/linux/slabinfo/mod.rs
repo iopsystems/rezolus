@@ -22,8 +22,9 @@
 //! hundred lines), and the kernel takes the slab lock to generate it, so it is
 //! a principle 15 exception: read at most once per `interval` (60 s by
 //! default), off the scrape cycle on the blocking pool, following the
-//! `filesystem` and `drivehealth` samplers. The refresh path pays a time check
-//! and, once per interval, a dispatch. Each sweep logs at debug level
+//! `filesystem` and `drivehealth` samplers. The refresh path pays a try-lock
+//! and a time check and, once per interval, a dispatch. Each sweep logs at
+//! debug level
 //! `memory_slabinfo sweep: read <us> us (<bytes> bytes), parse and publish
 //! <us> us, <n> caches published, <n> over the cap`.
 //!

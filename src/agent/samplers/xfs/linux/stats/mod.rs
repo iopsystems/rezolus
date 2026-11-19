@@ -28,8 +28,9 @@
 //! One read of the file costs about 159 µs on the probe guest, a refresh
 //! budget on its own, so the sweep runs on the blocking pool at most once per
 //! `interval` (1 s by default: these are counters, and rates want a cadence
-//! finer than `filesystem`'s 60 s occupancy sweep). `refresh()` pays a time
-//! check and, once per interval, a dispatch. Sweeps never overlap.
+//! finer than `filesystem`'s 60 s occupancy sweep). `refresh()` pays a
+//! try-lock and a time check and, once per interval, a dispatch. Sweeps never
+//! overlap.
 //!
 //! # Per mount
 //!
