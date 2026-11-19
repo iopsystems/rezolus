@@ -36,8 +36,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   argument of a `*_over_time` function. Unlike Prometheus, `increase` is
   not extrapolated: for a series that starts inside the window it is the
   increase since the series' first row. `increase` carries the rate's
-  acquisition band times the window, except a point summed over a process
-  group's members, which has none. A `bool` comparison gives 1 or 0 with
+  acquisition band times the window, except a grid point summed over
+  several sources of one recording (an agent restart, or a copy read with
+  its original), which has none. A `bool` comparison gives 1 or 0 with
   a band: `[1, 1]` or `[0, 0]` where the operands' bands decide it, and
   `[0, 1]` where they leave it undecided (for example a rate whose band
   contains the threshold).
@@ -222,8 +223,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 - **A scalar operation on a histogram function scales its uncertainty band
   with its value** (for example `histogram_quantile(0.99, x) / 1e6`), in the
-  viewer and `recording check`. With metriken-query 0.50.3 the band kept the
-  unscaled magnitude. (metriken-query 0.51.0)
+  viewer and in the MCP `query` tool's JSON `bands`. With metriken-query
+  0.50.3, `bands` kept the unscaled magnitude while `intervals` was scaled.
+  (metriken-query 0.51.0)
 
 - **A grid `irate` no longer misses the range's first point when its
   `[range]` is shorter than the step plus four counter intervals.** With
