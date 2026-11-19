@@ -41,8 +41,8 @@
 //! So this sampler reads on its **own bounded cadence**
 //! (`[samplers.gpu_intel_pmu] interval`, default 1s) and serves the cached values
 //! in between, with the read dispatched via `spawn_blocking` so a slow driver
-//! read cannot stall the async runtime (principle 17). `refresh()` itself only
-//! does a time comparison. The counters are cumulative, so a 1s cadence costs
+//! read cannot stall the async runtime (principle 17). `refresh()` itself pays a
+//! try-lock and a time check and, once per interval, a dispatch. The counters are cumulative, so a 1s cadence costs
 //! `rate()` nothing.
 //!
 //! ## Windows
@@ -320,11 +320,10 @@ impl Sampler for IntelPmu {
         // jitter. Without the tolerance a strict check rejects roughly every
         // other scrape, and because these are cumulative counters the exported
         // series alternates between an unchanged value and one that jumped two
-        // intervals' worth. Measured on
-        // an Arc A770 at a steady 2400 MHz, the recorded `actual-frequency`
-        // deltas read `0, 4799, 0, 4800, ...`, which differentiates to a
-        // plausible-looking 4800 MHz — double the truth, with no gap to hint
-        // that a sample was dropped.
+        // intervals' worth. Measured on an Arc A770 at a steady 2400 MHz, the
+        // recorded `actual-frequency` deltas read `0, 4799, 0, 4800, ...`,
+        // which differentiates to a plausible-looking 4800 MHz, double the
+        // true frequency, with no gap to show that a sample was dropped.
         //
         // Admitting a read that is within `SCRAPE_TOLERANCE` of due costs at
         // most that much extra driver traffic and keeps one reading per scrape.

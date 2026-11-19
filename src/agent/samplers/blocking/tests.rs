@@ -238,3 +238,22 @@ fn tolerance_admits_a_read_that_early_and_no_earlier() {
         assert!(worker.try_acquire_at(due).is_some());
     }
 }
+
+#[test]
+fn an_unwound_read_anchors_on_the_unwind_not_the_dispatch() {
+    for cadence in [Cadence::FromDispatch, Cadence::IdleAfterOverrun] {
+        let worker = BlockingWorker::new("test", INTERVAL, cadence);
+        let start = Instant::now();
+        let mut permit = worker.try_acquire_at(start).unwrap();
+        permit.outcome = Some(Outcome::Panicked);
+        // Shorter than the interval, so neither cadence would anchor on the
+        // finish of a read that returned.
+        let unwound = start + Duration::from_secs(30);
+        permit.finish_at(unwound);
+        assert_eq!(recover_lock("test", &worker.schedule).last, Some(unwound));
+        assert!(worker
+            .try_acquire_at(unwound + (INTERVAL - Duration::from_nanos(1)))
+            .is_none());
+        assert!(worker.try_acquire_at(unwound + INTERVAL).is_some());
+    }
+}

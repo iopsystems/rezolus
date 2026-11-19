@@ -153,18 +153,21 @@ mutation of the rule it covers.
 
 ## The remaining gates migrated (2026-11-19)
 
-The seven samplers listed above moved onto `BlockingWorker` in three PRs:
+The eight samplers listed above moved onto `BlockingWorker` in three PRs:
 #1709 (`memory_slabinfo`, `xfs_stats`), #1710 (Linux and macOS
 `filesystem`, macOS `hw_sensors`; `with_stuck_warning` became available on
-macOS) and this one (`gpu_intel_pmu`, `gpu_amd_sysfs`, `network_efa`). All
-seven use `Cadence::FromDispatch`, as before. The three 1 s samplers admitted
-a scrape up to 50 ms early so that a consumer scraping at the interval was not
-rejected by timer jitter; `with_tolerance` carries that rule. Each sampler's
-lock handling stayed as it was, apart from those that took a poisoned guard
-silently, which now use `recover_lock`. No sampler under
-`src/agent/samplers` has its own blocking-read gate now.
+macOS) and #1711 (`gpu_intel_pmu`, `gpu_amd_sysfs`, `network_efa`). All eight
+use `Cadence::FromDispatch`, as before. `gpu_intel_pmu`, `gpu_amd_sysfs` and
+`network_efa` admitted a scrape up to 50 ms early so that a consumer scraping
+at the interval was not rejected by timer jitter; `with_tolerance` carries that
+rule. Each sampler's lock handling stayed as it was, apart from those that took
+a poisoned guard silently, which now use `recover_lock`. No sampler under
+`src/agent/samplers` has its own blocking-read gate now. `gpu_nvidia` and
+`gpu_amd_smi` read inline in `refresh`, with no gate.
 
-`drivehealth` and `memory_cgroup` still have no tolerance, so a consumer
-polling at exactly their interval misses some readings to jitter, as
-`docs/metrics.md` says. `with_tolerance` would fix that; it is not applied
-here.
+Every other sampler on the worker (`drivehealth`, `memory_cgroup`,
+`xfs_stats`, `memory_slabinfo`, `filesystem`, `hw_sensors`) has no tolerance,
+so a consumer polling at exactly its interval misses some readings to jitter;
+`docs/metrics.md` says so for `memory_cgroup`. `xfs_stats` is 1 s with
+cumulative counters, the case `gpu_intel_pmu`'s comment describes.
+`with_tolerance` would fix it; it is not applied here.
