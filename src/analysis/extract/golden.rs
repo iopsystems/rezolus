@@ -183,8 +183,13 @@ fn build_fixture_with_histogram() -> (tempfile::TempDir, std::path::PathBuf) {
 /// metric that ships unlabeled.
 ///
 /// Sampler attribution then has only the metric NAME to go on, which is
-/// exactly the inference `Provenance` decides whether to trust.
-fn build_unlabeled_fixture(source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+/// exactly the inference `Provenance` decides whether to trust. With
+/// `self_telemetry`, the recording also holds the agent's `rezolus_rusage`
+/// counter, as an agent's recording does.
+fn build_unlabeled_fixture(
+    source: &str,
+    self_telemetry: bool,
+) -> (tempfile::TempDir, std::path::PathBuf) {
     let metadata: BTreeMap<String, String> = [
         ("source".to_string(), source.to_string()),
         ("sampling_interval_ms".to_string(), "1000".to_string()),
@@ -198,21 +203,21 @@ fn build_unlabeled_fixture(source: &str) -> (tempfile::TempDir, std::path::PathB
     for i in 0..121u64 {
         let ts = NS * (i + 1);
         let window = Some(Window::new(ts - 50_000_000, ts));
-        rows.push((
-            snap(
-                ts,
-                vec![Counter::new(
-                    "cpu_cycles".to_string(),
-                    i * 1_000_000,
-                    [("metric".to_string(), "cpu_cycles".to_string())]
-                        .into_iter()
-                        .collect::<HashMap<_, _>>(),
-                )
-                .with_window(window)],
-                vec![],
-            ),
-            ts,
-        ));
+        let unlabeled = |name: &str, value: u64| {
+            Counter::new(
+                name.to_string(),
+                value,
+                [("metric".to_string(), name.to_string())]
+                    .into_iter()
+                    .collect::<HashMap<_, _>>(),
+            )
+            .with_window(window)
+        };
+        let mut counters = vec![unlabeled("cpu_cycles", i * 1_000_000)];
+        if self_telemetry {
+            counters.push(unlabeled("rezolus_rusage", i));
+        }
+        rows.push((snap(ts, counters, vec![]), ts));
     }
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("unlabeled.dendro");
@@ -242,7 +247,7 @@ mod tests {
     /// `unattributed`, degrading a path that used to be refused outright.
     #[test]
     fn a_rez_arm_named_by_the_user_still_infers_samplers() {
-        let (_dir, path) = build_unlabeled_fixture("redis");
+        let (_dir, path) = build_unlabeled_fixture("redis", false);
         let reader = crate::mcp::open_source(&path).expect("open");
 
         let native = crate::analysis::extract::extract(
@@ -271,6 +276,71 @@ mod tests {
                 .get("sampler")
                 .map(String::as_str),
             Some("unattributed")
+        );
+        // Coverage follows the same trust: the agent's own recording lists
+        // the samplers it lacks, and the foreign-source reading lists none.
+        assert!(native.context.coverage.absence_known);
+        assert!(native
+            .context
+            .coverage
+            .subsystems_absent
+            .contains(&"blockio".to_string()));
+        assert!(!by_metadata.context.coverage.absence_known);
+        assert_eq!(
+            by_metadata.context.coverage.subsystems_absent,
+            Vec::<String>::new()
+        );
+    }
+
+    /// Extract a recording as `rezolus mcp extract-features` does: through
+    /// the labeled open, whose `rezolus_native` picks the provenance.
+    fn extract_as_the_cli_does(
+        path: &std::path::Path,
+    ) -> (bool, crate::analysis::record::OverviewRecord) {
+        let opened = crate::mcp::open_selected_labeled(
+            path,
+            &crate::parquet_tools::select::RecordingSelector::default(),
+            crate::parquet_tools::select::SelectorSyntax::Flag("--recording"),
+            false,
+        )
+        .expect("open");
+        let record = crate::analysis::extract::extract(opened.reader.as_ref(), opened.provenance())
+            .expect("extract");
+        (opened.rezolus_native, record)
+    }
+
+    /// A recording that is not an agent's lists no absent subsystems: its
+    /// metric names are not trusted for attribution, so absence cannot be
+    /// judged.
+    #[test]
+    fn a_foreign_recording_judges_no_absence_through_the_cli_open() {
+        let (_dir, path) = build_unlabeled_fixture("cachecannon", false);
+        let (native, record) = extract_as_the_cli_does(&path);
+        assert!(!native);
+        assert!(!record.context.coverage.absence_known);
+        assert_eq!(
+            record.context.coverage.subsystems_absent,
+            Vec::<String>::new()
+        );
+    }
+
+    /// An agent's recording under a user-chosen `source` is still the
+    /// agent's: its self-telemetry says so, and absence is judged.
+    #[test]
+    fn an_agent_recording_with_a_chosen_source_judges_absence_through_the_cli_open() {
+        let (_dir, path) = build_unlabeled_fixture("redis", true);
+        let (native, record) = extract_as_the_cli_does(&path);
+        assert!(native);
+        assert!(record.context.coverage.absence_known);
+        assert!(record
+            .context
+            .coverage
+            .subsystems_absent
+            .contains(&"blockio".to_string()));
+        assert_eq!(
+            record.metrics[0].labels.get("sampler").map(String::as_str),
+            Some("cpu_perf"),
+            "names are trusted, so cpu_cycles is attributed"
         );
     }
 
@@ -453,7 +523,7 @@ mod tests {
     /// means engine behavior changed — re-review the new capture before
     /// re-pasting; don't just make the test pass.
     const GOLDEN: &str = r#"{
-  "schema_version": 5,
+  "schema_version": 6,
   "context": {
     "source": "rezolus",
     "duration_s": 120.0,
@@ -507,7 +577,8 @@ mod tests {
         "thermal_pressure",
         "xfs_log",
         "xfs_stats"
-      ]
+      ],
+      "absence_known": true
     }
   },
   "metrics": [

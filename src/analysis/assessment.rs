@@ -546,6 +546,7 @@ mod tests {
                 coverage: Coverage {
                     subsystems_present: vec![],
                     subsystems_absent: vec![],
+                    absence_known: true,
                 },
             },
             metrics,

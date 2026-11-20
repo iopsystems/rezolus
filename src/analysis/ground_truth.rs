@@ -269,6 +269,7 @@ mod tests {
                         "scheduler_runqueue".to_string(),
                     ],
                     subsystems_absent: vec![],
+                    absence_known: true,
                 },
             },
             metrics,

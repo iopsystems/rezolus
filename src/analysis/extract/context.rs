@@ -27,17 +27,16 @@
 //! When nothing disambiguates, the metric is `unattributed`, and
 //! `extract()` credits its uncertainty at the tightest granularity it can:
 //! a name in [`AMBIGUOUS_METRICS`] contributes its exact *candidate sampler
-//! set* to `uncertain_samplers`; anything else (inference untrusted, or a
-//! genuinely unknown name) contributes its *domain* ([`domain_of`]) to
+//! set* to `uncertain_samplers`; anything else contributes its *domain*
+//! ([`domain_of`]) to
 //! `uncertain_domains`. `build_coverage` excludes both — every sampler in
 //! an uncertain domain, and every sampler in `uncertain_samplers` — from
 //! `subsystems_absent`, since their true presence/absence can't be known.
 //! Nothing in either set is added to `subsystems_present` either — we
 //! refuse to claim absence we can't know, and we don't fabricate presence
-//! we can't confirm. This is all defense-in-depth for foreign sources,
-//! ambiguous vocabulary, and future metrics, not the primary resolution
-//! mechanism now that [`METRIC_SAMPLERS`] covers the known non-prefixing
-//! cases on trusted (rezolus-sourced) recordings.
+//! we can't confirm. This covers ambiguous vocabulary and metric names newer
+//! than this build's tables on a rezolus recording; a recording without name
+//! inference gets an empty `subsystems_absent` instead (`build_coverage`).
 
 use std::collections::BTreeSet;
 
@@ -631,8 +630,10 @@ pub(crate) struct Uncertainty<'a> {
 
 /// present = the distinct `sampler` label values observed in the recording;
 /// callers insert the synthetic `unattributed` for metrics lacking the
-/// label (this function does not add it). absent = the static universe
-/// minus present, minus any sampler whose domain is in
+/// label (this function does not add it). With `infer` false, absent is
+/// empty and `absence_known` is false: without name inference, unlabeled
+/// metrics cannot rule a sampler in or out. Otherwise absent = the static
+/// universe minus present, minus any sampler whose domain is in
 /// `uncertainty.domains` (its true presence/absence can't be known, so we
 /// exclude it from `subsystems_absent` rather than assert a false absence),
 /// minus any sampler named directly in `uncertainty.samplers` (the exact
@@ -640,10 +641,16 @@ pub(crate) struct Uncertainty<'a> {
 /// constant's doc for why this is tighter than domain pruning). Neither set
 /// is added to present either, since we don't fabricate presence we can't
 /// confirm. Both output lists sorted (BTreeSet iteration order).
-pub(crate) fn build_coverage(present: &BTreeSet<String>, uncertainty: &Uncertainty) -> Coverage {
-    Coverage {
-        subsystems_present: present.iter().cloned().collect(),
-        subsystems_absent: EXPECTED_SUBSYSTEMS
+pub(crate) fn build_coverage(
+    present: &BTreeSet<String>,
+    uncertainty: &Uncertainty,
+    infer: bool,
+) -> Coverage {
+    // Without trusted names, only labeled metrics are attributed, and a
+    // foreign source's names share no domain with most samplers, so the
+    // pruning below would list nearly every sampler as absent.
+    let subsystems_absent = if infer {
+        EXPECTED_SUBSYSTEMS
             .iter()
             .filter(|&&s| {
                 !present.contains(s)
@@ -651,7 +658,14 @@ pub(crate) fn build_coverage(present: &BTreeSet<String>, uncertainty: &Uncertain
                     && !uncertainty.samplers.contains(s)
             })
             .map(|s| s.to_string())
-            .collect(),
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Coverage {
+        subsystems_present: present.iter().cloned().collect(),
+        subsystems_absent,
+        absence_known: infer,
     }
 }
 
@@ -666,8 +680,7 @@ pub(crate) fn build_context(
     duration_s: f64,
     sampling_interval_s: f64,
     systeminfo_raw: Option<String>,
-    present: &BTreeSet<String>,
-    uncertainty: &Uncertainty,
+    coverage: Coverage,
 ) -> Context {
     Context {
         source,
@@ -679,7 +692,7 @@ pub(crate) fn build_context(
         duration_s,
         sampling_interval_s,
         systeminfo: systeminfo_raw.and_then(|raw| serde_json::from_str(&raw).ok()),
-        coverage: build_coverage(present, uncertainty),
+        coverage,
     }
 }
 
@@ -726,6 +739,7 @@ mod tests {
                 domains: &BTreeSet::new(),
                 samplers: &BTreeSet::new(),
             },
+            true,
         );
         assert_eq!(
             c.subsystems_present,
@@ -756,6 +770,7 @@ mod tests {
                 domains: &uncertain,
                 samplers: &BTreeSet::new(),
             },
+            true,
         );
         // pruned domains' samplers are excluded from absent...
         assert!(!c.subsystems_absent.contains(&"scheduler".to_string()));
@@ -780,6 +795,7 @@ mod tests {
                 domains: &uncertain,
                 samplers: &BTreeSet::new(),
             },
+            true,
         );
         assert!(!c.subsystems_absent.contains(&"drivehealth".to_string()));
         // every gpu_* sampler is pruned, not just the pmu one.
@@ -825,6 +841,7 @@ mod tests {
                 domains: &BTreeSet::new(),
                 samplers: &uncertain_samplers,
             },
+            true,
         );
         assert!(!c.subsystems_absent.contains(&"cpu_cores".to_string()));
         assert!(!c.subsystems_absent.contains(&"cpu_usage".to_string()));
@@ -850,6 +867,7 @@ mod tests {
                 domains: &BTreeSet::new(),
                 samplers: &uncertain_samplers,
             },
+            true,
         );
         for sampler in BPF_SAMPLERS {
             assert!(
@@ -875,8 +893,7 @@ mod tests {
             120.0,
             1.0,
             Some(r#"{"os":"linux"}"#.to_string()),
-            &BTreeSet::new(),
-            &empty_uncertainty,
+            build_coverage(&BTreeSet::new(), &empty_uncertainty, true),
         );
         assert_eq!(ctx.agent_version, None);
         assert_eq!(ctx.duration_s, 120.0);
@@ -887,8 +904,7 @@ mod tests {
             10.0,
             1.0,
             Some("not json".into()),
-            &BTreeSet::new(),
-            &empty_uncertainty,
+            build_coverage(&BTreeSet::new(), &empty_uncertainty, true),
         );
         assert_eq!(bad.agent_version.as_deref(), Some("1.2.3"));
         assert_eq!(bad.systeminfo, None);

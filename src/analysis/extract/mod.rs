@@ -562,11 +562,14 @@ pub fn extract(
         duration_s,
         data.interval(),
         data.metadata_get("systeminfo"),
-        &present_subsystems,
-        &context::Uncertainty {
-            domains: &uncertain_domains,
-            samplers: &uncertain_samplers,
-        },
+        context::build_coverage(
+            &present_subsystems,
+            &context::Uncertainty {
+                domains: &uncertain_domains,
+                samplers: &uncertain_samplers,
+            },
+            infer,
+        ),
     );
 
     let record = assemble(
@@ -830,6 +833,7 @@ mod tests {
             coverage: Coverage {
                 subsystems_present: vec![],
                 subsystems_absent: vec![],
+                absence_known: true,
             },
         }
     }
