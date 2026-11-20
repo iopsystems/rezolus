@@ -221,6 +221,20 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **`scheduler_offcpu`, `cpu_migrations` and their per-cgroup series no
+  longer count a sample a new task inherits from an exited task with the
+  same pid.** An exiting task's last switch left its off-CPU stamp and its
+  last CPU in the per-pid maps, so when the pid was reused the new task's
+  first run counted the time since the old task exited as off-CPU time, and
+  a migration whenever it started on another CPU. Both are cleared when a
+  new task is first woken (`sched_wakeup_new`). Affected: any host whose pid
+  counter wrapped `pid_max` while the agent ran. From then on each new task
+  could add one off-CPU sample as long as the time since its pid's previous
+  holder exited, and one migration. On a 16-vCPU guest with
+  `kernel.pid_max=4096` and continuous fork/exec, migrations per context
+  switch read 2.8x and the mean off-CPU time 2x what the same agent read at
+  the default `pid_max`; with the fix both match it. (#1192)
+
 - **The metrics of an acquisition group with a member bound publish the same
   members within one V3 snapshot or stream frame.** The builder read a
   group's member bound once per metric, so a sampler that revises its bound

@@ -7,13 +7,15 @@
 // Rezolus.
 
 // One program per scheduler hook for the `scheduler` sampler. The wakeups
-// stamp a task's enqueue, and `sched_switch` measures runqueue latency,
-// running time, off-cpu time and context switches (the part `runqueue`) and
-// counts CPU migrations (the part `migrations`). Each part is switched by
-// read-only data written before load, so a part that is off is not in the
-// loaded program. Before this `scheduler_runqueue` and `cpu_migrations` were
-// two samplers with a program each on `sched_switch`, and each program on a
-// hook pays its own dispatch (docs/journal/2026-10-03-one-program-per-hook.md).
+// stamp a task's enqueue (sched_wakeup_new also clears the per-pid state a
+// new task's pid may carry from an exited task), and `sched_switch`
+// measures runqueue latency, running time, off-cpu time and context
+// switches (the part `runqueue`) and counts CPU migrations (the part
+// `migrations`). Each part is switched by read-only data written before
+// load, so a part that is off is not in the loaded program. Before this
+// `scheduler_runqueue` and `cpu_migrations` were two samplers with a program
+// each on `sched_switch`, and each program on a hook pays its own dispatch
+// (docs/journal/2026-10-03-one-program-per-hook.md).
 
 #include <vmlinux.h>
 #include "../../../agent/bpf/btf_read.h"
@@ -50,7 +52,8 @@
 const volatile __u8 cgroup_attribution = 0;
 
 // The sampler's parts, the config options `runqueue` and `migrations` (both on
-// by default). With `runqueue` off the wakeup programs are not loaded.
+// by default). With `runqueue` off the sched_wakeup programs are not loaded;
+// sched_wakeup_new stays, to clear a new task's `last_cpu` slot.
 const volatile __u8 runqueue = 0;
 const volatile __u8 migrations = 0;
 
@@ -288,11 +291,31 @@ static __always_inline int account__sched_wakeup(u64* ctx, bool btf) {
     return trace_enqueue(BTF_READ(btf, p, pid), true);
 }
 
+// A new task, woken for the first time. Its pid may have belonged to a task
+// that exited: an exiting task's last switch stamps its offcpu_at slot, and
+// its last_cpu slot keeps the CPU it last ran on, and nothing clears either
+// when it exits. Without clearing them here, the new task's first switch-in
+// would count the time since the old task's exit as off-CPU time, and a
+// migration whenever it starts on another CPU. The kernel places a new task
+// with __set_task_cpu(), which it does not count as a migration either.
 static __always_inline int account__sched_wakeup_new(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* p = (void*)ctx[0];
+    u32 pid = BTF_READ(btf, p, pid);
 
-    return trace_enqueue(BTF_READ(btf, p, pid), false);
+    if (pid) {
+        u32 slot = pid_slot(pid);
+        if (runqueue) {
+            u64 zero = 0;
+            bpf_map_update_elem(&offcpu_at, &slot, &zero, 0);
+        }
+        if (migrations) {
+            u32 zero = 0;
+            bpf_map_update_elem(&last_cpu, &slot, &zero, 0);
+        }
+    }
+
+    return trace_enqueue(pid, false);
 }
 
 // The cgroup id of `task`, or MAX_CGROUPS when it has none to count against.
