@@ -349,10 +349,10 @@ impl Sampler for IntelPmu {
 ///
 /// A GPU whose perf read fails keeps its stale values. The engine and device
 /// groups always finish, even when every perf read failed: principle 18's
-/// device-sweep trade. The VRAM ioctl is
-/// the only read behind the memory group, so when `sweep` returns false (no
-/// GPU's VRAM read succeeded) the memory group is discarded: stamping it
-/// would present the old gauges as fresh.
+/// device-sweep trade. The VRAM ioctl is the only read behind the memory
+/// group, so when `sweep` returns false (no GPU's VRAM read succeeded) the
+/// memory group is discarded: stamping it would present the old gauges as
+/// fresh.
 fn bracketed(
     engines: &AcquisitionGroup,
     devices: &AcquisitionGroup,
