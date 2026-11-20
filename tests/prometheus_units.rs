@@ -137,12 +137,25 @@ fn recording() -> &'static std::path::Path {
     })
 }
 
-/// Each check: a query by the exporter's name, and what every value of it
-/// reads in the exporter's unit.
+/// Each check: a query by the exporter's name, and what its values read in
+/// the exporter's unit.
 struct Check {
     query: &'static str,
     want: fn(f64) -> bool,
     what: &'static str,
+    of: Of,
+}
+
+/// Which of a check's values `want` holds for.
+#[derive(Clone, Copy, PartialEq)]
+enum Of {
+    /// Every value.
+    Every,
+    /// The typical value: the median of a viewer's points, the mean `mcp
+    /// query` prints. Used for a rate whose rows are stamped when the
+    /// recorder's tick fires, where one late or skipped tick moves several
+    /// points.
+    Typical,
 }
 
 const CHECKS: &[Check] = &[
@@ -150,35 +163,52 @@ const CHECKS: &[Check] = &[
         query: "queue_wait_ms",
         want: |v| v == QUEUE_WAIT_MS,
         what: "2.5 ms",
+        of: Of::Every,
     },
     Check {
         query: "sum(irate(cpu_busy_seconds_total[1s])) / sum(irate(requests_total[1s]))",
         want: |v| (v - BUSY_PER_REQUEST_S).abs() < 1e-9,
         what: "0.5 s per request",
+        of: Of::Every,
     },
     Check {
         query: "sum(irate(rpc_latency_seconds_sum[1s])) / \
                 sum(irate(rpc_latency_seconds_count[1s]))",
         want: |v| (v - MEAN_LATENCY_S).abs() < 1e-12,
         what: "a 4 ms mean, in seconds",
+        of: Of::Every,
     },
     Check {
         query: "histogram_quantile(0.5, rpc_latency_seconds)",
         want: |v| (LATENCY_BUCKET_S..LATENCY_BUCKET_S * 1.01).contains(&v),
         what: "the end of the 10 ms bucket, in seconds",
+        of: Of::Every,
     },
     // The form a KPI percentile chart queries.
     Check {
         query: "histogram_quantiles([0.5], rpc_latency_seconds)",
         want: |v| (LATENCY_BUCKET_S..LATENCY_BUCKET_S * 1.01).contains(&v),
         what: "the end of the 10 ms bucket, in seconds",
+        of: Of::Every,
+    },
+    // Both endpoints' `jobs_total` at every point, so the typical value
+    // below cannot hide an endpoint whose series starts late or ends early.
+    Check {
+        query: "count(irate(jobs_total[1s]))",
+        want: |v| v == 2.0,
+        what: "both endpoints",
+        of: Of::Every,
     },
     // Both endpoints' `jobs_total`, one per 200 ms scrape each, summed as
-    // served. The rate is over the scrapes' real spacing, so it varies.
+    // served: about 10 per second, where one endpoint alone is about 5. The
+    // recorder stamps each row when its tick fires, so a tick that fires late
+    // moves the points around it outside 8 to 12, and a delay of more than
+    // an interval skips the next tick, leaving one scrape fewer.
     Check {
         query: "sum(irate(jobs_total[1s]))",
         want: |v| (8.0..12.0).contains(&v),
         what: "about 10 per second",
+        of: Of::Typical,
     },
 ];
 
@@ -280,6 +310,9 @@ fn served_series_read_back_through_mcp() {
         let values = printed_values(&stdout);
         assert_eq!(values.len(), 5, "{}:\n{stdout}", check.query);
         for (key, v) in &values {
+            if check.of == Of::Typical && key != "Mean:" {
+                continue;
+            }
             assert!(
                 (check.want)(*v),
                 "{key} of {} is {v}, not {}",
@@ -293,9 +326,12 @@ fn served_series_read_back_through_mcp() {
     let by_alias = mcp(&["query", file, "sum(irate(jobs_total{alias=\"other\"}[1s]))"]);
     let values = printed_values(&by_alias);
     assert_eq!(values.len(), 5, "{by_alias}");
-    for (key, v) in &values {
-        assert!((4.0..6.0).contains(v), "{key} by alias is {v}:\n{by_alias}");
-    }
+    // Its mean only, as for `Of::Typical`.
+    let (_, mean) = values.iter().find(|(key, _)| key == "Mean:").unwrap();
+    assert!(
+        (4.0..6.0).contains(mean),
+        "mean by alias is {mean}:\n{by_alias}"
+    );
 
     // detect-anomalies wraps a bare exporter name by its kind.
     for (name, query) in [
@@ -507,6 +543,14 @@ fn range_values(result: &serde_json::Value) -> Vec<f64> {
         .collect()
 }
 
+/// The median of `values`, the upper one of an even count.
+fn median(values: &[f64]) -> f64 {
+    assert!(!values.is_empty(), "no values to take the median of");
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted[sorted.len() / 2]
+}
+
 /// Every check and the served series, through one viewer's range query:
 /// `range(q)` is its response body.
 fn check_viewer(range: impl Fn(&str) -> serde_json::Value, who: &str) {
@@ -514,11 +558,14 @@ fn check_viewer(range: impl Fn(&str) -> serde_json::Value, who: &str) {
         let body = range(check.query);
         assert_eq!(body["status"], "success", "{who}: {}: {body}", check.query);
         let values = range_values(&body["data"]["result"]);
+        let holds = match check.of {
+            Of::Every => values.iter().all(|v| (check.want)(*v)),
+            Of::Typical => (check.want)(median(&values)),
+        };
         assert!(
-            values.iter().all(|v| (check.want)(*v)),
+            holds,
             "{who}: {} is {values:?}, not {}",
-            check.query,
-            check.what
+            check.query, check.what
         );
     }
     check_served_series(&range("queue_wait_ms")["data"]["result"], who);
