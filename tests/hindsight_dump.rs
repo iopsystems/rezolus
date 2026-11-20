@@ -672,14 +672,14 @@ impl Hindsight {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 struct Status {
     ticks_recorded: u64,
     rows: u64,
     tables: Vec<TableStatus>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize)]
 struct TableStatus {
     sampler: String,
     rows: u64,
@@ -1059,32 +1059,56 @@ fn sealing_continues_through(
     const MIN_ROWS: u64 = 8;
     let committed = |s: &Status| s.table(TABLE).rows;
     let sealed = |s: &Status| s.table(TABLE).rows - s.table(TABLE).live_wal_rows;
-    // Distinct committed-row counts, oldest first, starting from `before`.
-    let mut readings = vec![committed(&before)];
+    // Distinct committed-row counts, oldest first, starting from `before`,
+    // and the reply the last of them came from.
+    let polled = Mutex::new((vec![committed(&before)], before.clone()));
     let two_back = |r: &[u64]| r[r.len().saturating_sub(3)];
     let window = Duration::from_secs(1);
     let deadline = Instant::now() + Duration::from_secs(60);
+    let stop = std::sync::atomic::AtomicBool::new(false);
     let started = Instant::now();
     let mut dumps = 0u32;
     let mut busy = Duration::ZERO;
-    let mut after = h.status();
-    while (started.elapsed() < window || two_back(&readings) - readings[0] < MIN_ROWS)
-        && Instant::now() < deadline
-    {
-        busy += dump(&h);
-        dumps += 1;
-        // Only once the window is up: before then the loop continues whatever
-        // the row count, and a /status request is time no dump occupies,
-        // which the coverage check below counts against the fixture. CI saw
-        // dumps cover 913 ms of a 1,430 ms window when every iteration made one.
-        if started.elapsed() >= window {
-            after = h.status();
-            if committed(&after) > *readings.last().unwrap() {
-                readings.push(committed(&after));
+    let elapsed = std::thread::scope(|scope| {
+        // /status is read on its own thread, once a tick, so the dump loop
+        // below runs back to back: a /status request made between dumps is
+        // time no dump occupies, which the coverage check below counts
+        // against the fixture. CI saw dumps cover 4.7 s of a 7.6 s window
+        // when each iteration after the first second made one.
+        let poller = scope.spawn(|| {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(s) = h.try_status() {
+                    let mut p = polled.lock().unwrap();
+                    if committed(&s) > *p.0.last().unwrap() {
+                        p.0.push(committed(&s));
+                        p.1 = s;
+                    }
+                }
+                std::thread::sleep(INTERVAL);
+            }
+        });
+        // Stops the polling thread however the loop ends: the scope joins it
+        // before re-raising a panicking dump, and it polls until `stop` is set.
+        struct StopOnDrop<'a>(&'a std::sync::atomic::AtomicBool);
+        impl Drop for StopOnDrop<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
-    }
-    let elapsed = started.elapsed();
+        let _stop = StopOnDrop(&stop);
+        while (started.elapsed() < window || {
+            let p = polled.lock().unwrap();
+            two_back(&p.0) - p.0[0] < MIN_ROWS
+        }) && Instant::now() < deadline
+            && !poller.is_finished()
+        {
+            busy += dump(&h);
+            dumps += 1;
+        }
+        // Before the scope waits for the polling thread's last sleep.
+        started.elapsed()
+    });
+    let (readings, after) = polled.into_inner().unwrap();
     let ticks = after.ticks_recorded - before.ticks_recorded;
     let due = two_back(&readings);
 
@@ -1116,16 +1140,9 @@ fn sealing_continues_through(
         busy / dumps
     );
 
-    assert!(
-        sealed(&after) >= due,
-        "sealing fell behind the commits during the {trigger} dumps: {} rows \
-         sealed at the end, against {due} committed two readings earlier \
-         (committed-row readings {readings:?}; {dumps} dumps, {busy:?} spent \
-         inside one, over {elapsed:?})\n{}",
-        sealed(&after),
-        h.log_text()
-    );
-    // And the loop kept running while the dumps did. The window above is held
+    // The loop kept running while the dumps did. Checked before sealing: with
+    // no reading above `before`, `after` is `before`, and the sealing check
+    // would report a stall as sealing falling behind. The window above is held
     // open until this many rows are committed, so falling short means they
     // stopped arriving entirely — which, given the fixture established that
     // dumps covered most of the window, is a loop that stopped for its dumps.
@@ -1135,6 +1152,16 @@ fn sealing_continues_through(
         "the scrape loop stalled during the {trigger} dumps: only {rows} rows \
          committed in {elapsed:?} at a {INTERVAL:?} interval ({ticks} ticks, \
          {dumps} dumps, {busy:?} spent inside one)"
+    );
+
+    assert!(
+        sealed(&after) >= due,
+        "sealing fell behind the commits during the {trigger} dumps: {} rows \
+         sealed at the end, against {due} committed two readings earlier \
+         (committed-row readings {readings:?}; {dumps} dumps, {busy:?} spent \
+         inside one, over {elapsed:?})\n{}",
+        sealed(&after),
+        h.log_text()
     );
 }
 
