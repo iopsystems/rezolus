@@ -312,11 +312,12 @@ pub fn check_service_extensions(
 ) -> Vec<UnavailableKpi> {
     use metriken_query::QueryResult;
     let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
+    let step = probe_step(start, end);
     let mut failed = Vec::new();
     for (_source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
             let query = kpi.effective_query();
-            kpi.available = match data.query_range(&query, start, end, 1.0) {
+            kpi.available = match data.query_range(&query, start, end, step) {
                 Ok(QueryResult::Vector { result, .. }) => !result.is_empty(),
                 Ok(QueryResult::Matrix { result, .. }) => !result.is_empty(),
                 Ok(QueryResult::Scalar { .. }) => true,
@@ -332,6 +333,20 @@ pub fn check_service_extensions(
         }
     }
     failed
+}
+
+/// The step [`check_service_extensions`] evaluates each KPI at: 1 s, or a
+/// twentieth of the span when that is shorter. The points of a range query
+/// are on multiples of the step, and an `irate` point needs the counter one
+/// step before it, so at 1 s a series has a point only where its rows cover
+/// a whole second; a recording shorter than 2 s may have none.
+fn probe_step(start: f64, end: f64) -> f64 {
+    let span = end - start;
+    if span > 0.0 {
+        (span / 20.0).min(1.0)
+    } else {
+        1.0
+    }
 }
 
 /// A KPI whose query failed, found by [`check_service_extensions`].
@@ -1055,6 +1070,37 @@ mod tests {
     }
 
     use super::*;
+
+    /// A KPI over a recording shorter than two seconds is available when its
+    /// query has points at a step under a second. Rows every 100 ms from
+    /// 0.3 s to 1.8 s past a whole second hold no whole second, so a probe at
+    /// a 1 s step, whose points are on whole seconds and whose irate needs
+    /// the counter one step earlier, finds no point.
+    #[test]
+    fn a_short_recordings_kpi_is_available() {
+        let store = metriken_query::MemoryStore::builder().source("svc").build();
+        let base = 1_700_000_000_000_000_000u64;
+        let ts: Vec<u64> = (3..=18).map(|i| base + i * 100_000_000).collect();
+        let values: Vec<u64> = (0..ts.len() as u64).map(|i| i * 10).collect();
+        store
+            .insert_counter_series(
+                "svc_requests_total",
+                BTreeMap::<String, String>::new(),
+                ts,
+                values,
+                None,
+            )
+            .unwrap();
+        let ext: ServiceExtension = serde_json::from_str(
+            r#"{"service_name": "svc", "kpis": [{"role": "throughput",
+                "title": "Requests", "type": "delta_counter",
+                "query": "sum(irate(svc_requests_total[1s]))"}]}"#,
+        )
+        .unwrap();
+        let mut exts = vec![("svc".to_string(), ext)];
+        assert_eq!(check_service_extensions(&store, &mut exts), Vec::new());
+        assert!(exts[0].1.kpis[0].available);
+    }
 
     /// An agent is known by its source, whichever samplers it ran; another
     /// source by the agent's `cpu_usage` among its metrics.
