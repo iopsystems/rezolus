@@ -221,6 +221,14 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **The metrics of an acquisition group with a member bound publish the same
+  members within one V3 snapshot or stream frame.** The builder read a
+  group's member bound once per metric, so a sampler that revises its bound
+  each sweep (`filesystem`, `hw_sensors` on Linux, `slabinfo`, `xfs`) could
+  publish, for example,
+  `filesystem_total` with 5 members and `filesystem_readonly` with 3 in the
+  same tick. The bound is now read once per build. (#1207)
+
 - **A scalar operation on a histogram function scales its uncertainty band
   with its value** (for example `histogram_quantile(0.99, x) / 1e6`), in the
   viewer and in the MCP `query` tool's JSON `bands`. With metriken-query

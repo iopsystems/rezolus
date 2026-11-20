@@ -94,7 +94,9 @@ pub(super) fn group_registry() -> &'static GroupRegistry {
 /// - slotted group ([`AcquisitionGroup::is_slotted`], `CgroupCounters`): the
 ///   slots with metadata, as above, with the window its sampler stamped;
 /// - declared group with a member set: exactly those slots;
-/// - declared group with a member bound: the first `bound` slots;
+/// - declared group with a member bound: the first `bound` slots, with the
+///   bound read once per build ([`RezolusRouter::begin_build`]), so every
+///   metric of the group and every route call of one build use one value;
 /// - any other declared group: every slot of the backing array;
 /// - default group: membership follows values ([`Membership::Present`]), the
 ///   V2 sentinel rule, so an undeclared per-CPU or per-device array does not
@@ -118,7 +120,17 @@ pub(crate) struct RezolusRouter {
     /// twice a pass; a module path's sampler never changes, since sampler
     /// modules are registered at link time.
     attribution: Mutex<HashMap<String, &'static str, foldhash::fast::RandomState>>,
+    /// Each declared group's member bound as first read in the current
+    /// build. A sampler may revise its bound while a build is running
+    /// (`filesystem`, `hw_sensors` on Linux, `slabinfo` and `xfs`
+    /// do each sweep); reading it per metric would give two metrics of one group
+    /// different memberships, or the identity pass and the walk different
+    /// ones.
+    bounds: Mutex<GroupBounds>,
 }
+
+type GroupBounds =
+    HashMap<(&'static str, &'static str), Option<usize>, foldhash::fast::RandomState>;
 
 impl RezolusRouter {
     pub(crate) fn new() -> Self {
@@ -127,7 +139,27 @@ impl RezolusRouter {
             sampler_mods: crate::agent::samplers::sampler_modules(),
             groups: group_registry(),
             attribution: Mutex::new(HashMap::default()),
+            bounds: Mutex::new(HashMap::default()),
         }
+    }
+
+    /// Forget the bounds read by the previous build. Called before each
+    /// build; `clear` keeps the map's capacity, so a steady-state build
+    /// does not allocate here.
+    pub(super) fn begin_build(&self) {
+        self.bounds
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
+    fn member_bound(&self, ag: &'static AcquisitionGroup) -> Option<usize> {
+        *self
+            .bounds
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry((ag.sampler, ag.name))
+            .or_insert_with(|| ag.member_bound())
     }
 
     pub(super) fn sampler(&self, metric: &MetricEntry) -> &'static str {
@@ -192,7 +224,7 @@ impl Router for RezolusRouter {
             Membership::Slots
         } else if let Some(set) = ag.member_set() {
             Membership::Set(set)
-        } else if let Some(bound) = ag.member_bound() {
+        } else if let Some(bound) = self.member_bound(ag) {
             Membership::Prefix(bound)
         } else {
             Membership::All

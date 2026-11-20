@@ -687,11 +687,14 @@ enforces, and that reviewers must protect:
   set `set_member_bound` once at init from a boot-fixed population. A
   sampler whose population changes while it runs — the `filesystem` sweep,
   as mounts come and go — may store a new bound each read, from the group's
-  single writer, before stamping the window. Accepted cost: the snapshot
-  builder reads the bound, values and labels per metric family without
-  locking out that writer, so a read landing mid-snapshot can publish a new
-  member in some families and not others for that one snapshot, and each
-  membership change is a schema change in recordings. Never a fixed bound at
+  single writer, before stamping the window. The snapshot builder reads the
+  bound once per build, so every family of the group has the same members
+  in one snapshot: those of the bound it read, which can be one sweep older
+  than the window. Accepted cost: it reads values and labels per family
+  without locking out that writer, so a read landing mid-snapshot can
+  publish a member's new reading in some families and its old one in
+  others for that one snapshot, and each membership change is a
+  schema change in recordings. Never a fixed bound at
   array capacity (empty rows in every snapshot), and never a bound frozen at
   the startup count (later members invisible).
 - **Reader-stamped groups: the acquisition is the exposition read.** A

@@ -292,7 +292,10 @@ impl AcquisitionGroup {
     /// This atomic store does not synchronize a snapshot's value or metadata reads;
     /// stamp-last ordering alone does not make a changing population coherent.
     /// Principle 18 allows revising the bound each read for a changing
-    /// population and accepts that one-snapshot incoherence.
+    /// population and accepts that one-snapshot incoherence. The V3 builder
+    /// reads the bound once per build, before the window, so every metric of
+    /// the group has the same members within one snapshot, possibly those of
+    /// the sweep before the window's.
     pub(crate) fn set_member_bound(&self, n: usize) {
         self.member_bound.store(n, Ordering::Relaxed);
     }

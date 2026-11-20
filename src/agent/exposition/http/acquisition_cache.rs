@@ -106,6 +106,7 @@ impl V3Builder {
         metadata: HashMap<String, String>,
     ) -> SnapshotV3 {
         let mut plan = plan(&self.wide);
+        self.inner.router().begin_build();
         *self.inner.router().skipped.lock().unwrap() = std::mem::take(&mut plan.skip);
         let mut snapshot = self.inner.snapshot(stamp, duration, extra, metadata);
         plan.skip = std::mem::take(&mut *self.inner.router().skipped.lock().unwrap());
@@ -119,6 +120,7 @@ impl V3Builder {
 
     pub(crate) fn build_stream(&mut self, extra: Vec<ExtraGroup>) -> Vec<StreamGroup> {
         let mut plan = plan(&self.long);
+        self.inner.router().begin_build();
         *self.inner.router().skipped.lock().unwrap() = std::mem::take(&mut plan.skip);
         let mut groups = self.inner.build_stream(extra);
         plan.skip = std::mem::take(&mut *self.inner.router().skipped.lock().unwrap());
