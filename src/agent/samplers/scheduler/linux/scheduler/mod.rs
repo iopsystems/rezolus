@@ -135,8 +135,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
         }
     );
 
-    // One of each tp_btf/raw_tp twin, and no wakeup programs without the
-    // runqueue part.
+    // One of each tp_btf/raw_tp twin, and no sched_wakeup program without
+    // the runqueue part. sched_wakeup_new stays for the migrations part
+    // alone: it clears a new task's last_cpu slot, which a task that exited
+    // with the same pid left behind.
     let mut disabled: Vec<&'static str> = if kernel_has_btf() {
         vec![
             "handle__sched_wakeup_raw",
@@ -151,12 +153,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ]
     };
     if !runqueue {
-        disabled.extend([
-            "handle__sched_wakeup_btf",
-            "handle__sched_wakeup_raw",
-            "handle__sched_wakeup_new_btf",
-            "handle__sched_wakeup_new_raw",
-        ]);
+        disabled.extend(["handle__sched_wakeup_btf", "handle__sched_wakeup_raw"]);
     }
 
     let mut builder = BpfBuilder::new(
