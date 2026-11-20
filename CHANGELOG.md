@@ -221,6 +221,20 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **A metric name whose series have different descriptions keeps every
+  one.** `/metrics/descriptions`, and so a recording's `descriptions`
+  metadata, kept one description per name, as did the table `mcp
+  describe-metrics` reads. 72 names in the source have more than one, and
+  all but one of each name's series showed another series' text: every
+  `ext4_journal_commit_latency` phase read as one phase's, every
+  `writeback_runs` reason as one reason's. Such a name's description now
+  lists each label value with its own text, for example `One series per
+  phase. phase=flushing: ... phase=locked: ...`. Recordings made earlier
+  keep the description they stored; `mcp describe-metrics` shows the new
+  text for them too, because it reads this build's table, not the
+  recording. That table also no longer cuts a description short at an
+  escaped quote (`xfs_log_wait_time`, `memory_slab_cache_bytes`). (#1454)
+
 - **`scheduler_offcpu`, `cpu_migrations` and their per-cgroup series no
   longer count a sample a new task inherits from an exited task with the
   same pid.** An exiting task's last switch left its off-CPU stamp and its

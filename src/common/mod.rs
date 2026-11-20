@@ -1,3 +1,4 @@
+pub mod description_merge;
 mod logging;
 mod soc;
 pub use logging::{configure_logging, verbosity_to_level, Level, LogConfig, LogDrain};
@@ -22,14 +23,34 @@ pub fn metric_descriptions() -> std::collections::HashMap<String, String> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     // Overlay runtime descriptions (may add metrics not in stats.rs files)
-    for metric in metriken::metrics().iter() {
-        if let Some(description) = metric.description() {
-            descriptions
-                .entry(metric.name().to_string())
-                .or_insert_with(|| description.to_string());
-        }
+    for (name, description) in registry_descriptions() {
+        descriptions.entry(name).or_insert(description);
     }
     descriptions
+}
+
+/// Each registered metric name's description, merged across the series that
+/// share the name ([`description_merge::merge`]).
+pub fn registry_descriptions() -> std::collections::HashMap<String, String> {
+    let mut by_name: std::collections::BTreeMap<String, Vec<description_merge::Series>> =
+        std::collections::BTreeMap::new();
+    for metric in metriken::metrics().iter() {
+        if let Some(description) = metric.description() {
+            let labels = metric
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            by_name
+                .entry(metric.name().to_string())
+                .or_default()
+                .push((labels, description.to_string()));
+        }
+    }
+    by_name
+        .into_iter()
+        .filter_map(|(name, series)| description_merge::merge(&series).map(|d| (name, d)))
+        .collect()
 }
 
 // Time units with base unit as nanoseconds
@@ -132,4 +153,57 @@ pub fn is_virt() -> bool {
             | "VMware, Inc."
             | "Xen"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    /// #1454: a name whose series describe different things carries every
+    /// series' description, from the registry (what `/metrics/descriptions`
+    /// serves) and from the build-time table alike. `ext4_journal_commit_latency`
+    /// is registered on every platform (its `stats.rs` is included off Linux).
+    #[test]
+    fn a_name_with_several_descriptions_keeps_each_one() {
+        let registry = super::registry_descriptions();
+        let from_registry = registry
+            .get("ext4_journal_commit_latency")
+            .expect("ext4_journal_commit_latency is registered");
+        for phase in ["flushing", "locked", "logging", "running"] {
+            assert!(
+                from_registry.contains(&format!("phase={phase}: ")),
+                "{phase} missing from {from_registry}"
+            );
+        }
+        let from_table = super::static_metric_descriptions()
+            .iter()
+            .find(|(name, _)| *name == "ext4_journal_commit_latency")
+            .map(|(_, d)| *d)
+            .expect("in the build-time table");
+        assert_eq!(from_table, from_registry, "build.rs and the registry agree");
+    }
+
+    /// Every description a registered series carries appears whole in the
+    /// build-time table's entry for its name. The table also holds other
+    /// platforms' series, so it can hold more than the registry, never less.
+    #[test]
+    fn the_build_time_table_carries_every_registered_description() {
+        let table: std::collections::HashMap<&str, &str> = super::static_metric_descriptions()
+            .iter()
+            .copied()
+            .collect();
+        let mut checked = 0;
+        for metric in metriken::metrics().iter() {
+            let (Some(description), Some(entry)) = (metric.description(), table.get(metric.name()))
+            else {
+                continue;
+            };
+            let description = description.trim_end().trim_end_matches('.');
+            assert!(
+                entry.contains(description),
+                "{}: the table's entry {entry:?} lacks {description:?}",
+                metric.name()
+            );
+            checked += 1;
+        }
+        assert!(checked > 100, "checked {checked} series");
+    }
 }

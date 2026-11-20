@@ -383,15 +383,7 @@ async fn root() -> String {
 }
 
 async fn descriptions() -> axum::response::Json<std::collections::HashMap<String, String>> {
-    let mut result = std::collections::HashMap::new();
-    for metric in metriken::metrics().iter() {
-        if let Some(description) = metric.description() {
-            result
-                .entry(metric.name().to_string())
-                .or_insert_with(|| description.to_string());
-        }
-    }
-    axum::response::Json(result)
+    axum::response::Json(crate::common::registry_descriptions())
 }
 
 async fn samplers() -> axum::response::Json<Vec<crate::agent::sampler_status::SamplerStatus>> {

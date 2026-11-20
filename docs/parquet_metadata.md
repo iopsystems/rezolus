@@ -341,14 +341,17 @@ The value is validated as JSON before being written.
 
 ### `descriptions`
 
-JSON map of metric name → help text, used by `mcp describe-metrics` and the
-viewer tooltip layer. In combined files this is union-merged across all
+JSON map of metric name → help text, read by the viewer. `mcp
+describe-metrics` does not read it; it shows the descriptions built into the
+running binary. In combined files this is union-merged across all
 inputs (first writer wins on conflicts).
 
 **Set at record time** by the recorder: for a Rezolus agent, fetched from
-`/metrics/descriptions`; for a Prometheus endpoint, the scrape's `# HELP`
-lines, first seen wins, written once a scrape brings a metric name not seen
-before. Not user-editable.
+`/metrics/descriptions`, which has one entry per metric name (a name
+whose series have different descriptions lists each label value with its
+own, `One series per phase. phase=flushing: ...`); for a Prometheus
+endpoint, the scrape's `# HELP` lines, first seen wins, written once a
+scrape brings a metric name not seen before. Not user-editable.
 
 ### `selection`
 
