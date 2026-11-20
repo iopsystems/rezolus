@@ -27,6 +27,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **`gpu_nvidia` logs, once at startup, the NVML queries each GPU does not
+  support.** For example `gpu_nvidia: GPU 0 does not support: gpm` on an
+  RTX 4090, which has no GPM. A metric with no value is either unsupported on
+  that GPU or has failed or not been read yet; this line names the ones NVML
+  reported as unsupported when the agent started. (#1196)
+
 - **More PromQL in the viewer and MCP `query`.** With metriken-query 0.51.0:
   `increase(x[r])`; the comparison operators `==`, `!=`, `>`, `<`, `>=` and
   `<=`, with and without `bool`; `min_over_time`, `max_over_time`,

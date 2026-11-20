@@ -73,6 +73,83 @@ impl Sampler for Nvidia {
     }
 }
 
+/// The queries `refresh_nvml` makes that `device` answers with
+/// `NotSupported`, by name. GPM is reported separately. The PCIe queries
+/// are left out on a Tegra SoC, where the refresh does not make them.
+fn unsupported_queries(device: &nvml_wrapper::Device<'_>, tegra_soc: bool) -> Vec<&'static str> {
+    fn check<T>(name: &'static str, result: Result<T, NvmlError>, out: &mut Vec<&'static str>) {
+        if matches!(result, Err(NvmlError::NotSupported)) {
+            out.push(name);
+        }
+    }
+    let mut out = Vec::new();
+    check(
+        "total_energy_consumption",
+        device.total_energy_consumption(),
+        &mut out,
+    );
+    check("power_usage", device.power_usage(), &mut out);
+    check(
+        "temperature(gpu)",
+        device.temperature(TemperatureSensor::Gpu),
+        &mut out,
+    );
+    if !tegra_soc {
+        check(
+            "pcie_throughput(receive)",
+            device.pcie_throughput(PcieUtilCounter::Receive),
+            &mut out,
+        );
+        check(
+            "pcie_throughput(send)",
+            device.pcie_throughput(PcieUtilCounter::Send),
+            &mut out,
+        );
+        check(
+            "current_pcie_link_width",
+            device.current_pcie_link_width(),
+            &mut out,
+        );
+        check(
+            "current_pcie_link_gen",
+            device.current_pcie_link_gen(),
+            &mut out,
+        );
+    }
+    check("memory_info", device.memory_info(), &mut out);
+    check(
+        "clock_info(graphics)",
+        device.clock_info(Clock::Graphics),
+        &mut out,
+    );
+    check("clock_info(sm)", device.clock_info(Clock::SM), &mut out);
+    check(
+        "clock_info(memory)",
+        device.clock_info(Clock::Memory),
+        &mut out,
+    );
+    check(
+        "clock_info(video)",
+        device.clock_info(Clock::Video),
+        &mut out,
+    );
+    check("utilization_rates", device.utilization_rates(), &mut out);
+    out
+}
+
+/// The startup line for GPU `id`, or `None` when it supports every query
+/// and GPM.
+fn unsupported_summary(id: usize, unsupported: &[&str], gpm_unsupported: bool) -> Option<String> {
+    let mut names: Vec<&str> = unsupported.to_vec();
+    if gpm_unsupported {
+        names.push("gpm");
+    }
+    if names.is_empty() {
+        return None;
+    }
+    Some(format!("GPU {id} does not support: {}", names.join(", ")))
+}
+
 struct NvidiaInner {
     // SAFETY: gpm_samples must be declared before nvml so that samples are
     // dropped before the Nvml instance they reference. Rust drops struct
@@ -113,6 +190,28 @@ impl NvidiaInner {
         let gpm_samples = (0..devices).map(|_| None).collect();
 
         let tegra_soc = crate::common::is_tegra_soc();
+
+        // Name, once, the queries each device reports as NOT_SUPPORTED. The
+        // refresh skips a failed query, so its metric has no value either
+        // way; this line names the ones NVML reported as unsupported when the
+        // agent started. A GPM support query that fails for another reason
+        // (a driver older than the GPM API has no symbol for it) is logged as
+        // that error, not as unsupported.
+        for id in 0..devices {
+            if let Ok(device) = nvml.device_by_index(id as _) {
+                let unsupported = unsupported_queries(&device, tegra_soc);
+                let gpm = device.gpm_support();
+                let gpm_unsupported = matches!(gpm, Ok(false) | Err(NvmlError::NotSupported));
+                if let Err(e) = &gpm {
+                    if !matches!(e, NvmlError::NotSupported) {
+                        info!("{NAME}: GPU {id}: the GPM support query failed: {e}");
+                    }
+                }
+                if let Some(line) = unsupported_summary(id, &unsupported, gpm_unsupported) {
+                    info!("{NAME}: {line}");
+                }
+            }
+        }
 
         Ok(Self {
             gpm_samples,
@@ -349,5 +448,23 @@ impl NvidiaInner {
         }
 
         guard.finish();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unsupported_summary;
+
+    #[test]
+    fn the_startup_line_names_each_unsupported_query_and_gpm() {
+        assert_eq!(
+            unsupported_summary(0, &["memory_info", "clock_info(video)"], true).as_deref(),
+            Some("GPU 0 does not support: memory_info, clock_info(video), gpm")
+        );
+        assert_eq!(
+            unsupported_summary(1, &[], true).as_deref(),
+            Some("GPU 1 does not support: gpm")
+        );
+        assert_eq!(unsupported_summary(2, &[], false), None);
     }
 }
