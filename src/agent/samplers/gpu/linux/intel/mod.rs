@@ -248,21 +248,14 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // failure leaves a survivor whose id exceeds `gpus.len()`. Bounding by the
     // count then drops that GPU's series entirely and declares a phantom
     // all-zero member at index 0 for a device that does not exist.
-    let mut engine_members: Vec<usize> = Vec::new();
-    let mut device_members: Vec<usize> = Vec::new();
-
-    for gpu in gpus.iter() {
-        device_members.push(gpu.id);
-        for offset in 0..gpu.engines.len() {
-            let index = engine_index(gpu.id, offset);
-            if gpu.live_indices.contains(&index) {
-                engine_members.push(index);
-            }
-        }
-    }
-
-    engine_members.sort_unstable();
-    device_members.sort_unstable();
+    let (engine_members, device_members) = member_sets(gpus.iter().map(|gpu| {
+        (
+            gpu.id,
+            gpu.engines.len(),
+            &gpu.live_engine_indices,
+            gpu.device_live,
+        )
+    }));
     GPU_INTEL_PMU_ENGINE_ACQ.set_member_set(&engine_members);
     GPU_INTEL_PMU_DEVICE_ACQ.set_member_set(&device_members);
 
@@ -384,10 +377,15 @@ struct Gpu {
     members: Vec<TrackedCounter>,
     /// Engine names in index order, for diagnostics.
     engines: Vec<String>,
-    /// Metric indices whose perf counter actually opened. The member sets are
-    /// built from these rather than from what sysfs advertised, so a rejected
-    /// or unopenable event never becomes a declared, permanently-null member.
-    live_indices: std::collections::BTreeSet<usize>,
+    /// The [`engine_index`] of each engine whose counter opened. The engine
+    /// member set is built from these rather than from what sysfs
+    /// advertised, so a rejected or unopenable event never becomes a
+    /// declared, permanently-null member. The frequency counters are not in
+    /// it: they publish at the GPU id, which for GPU 0 is engine 0's index.
+    live_engine_indices: std::collections::BTreeSet<usize>,
+    /// Whether any of [`GLOBAL_EVENTS`] opened, which is what makes this GPU
+    /// a member of the device group.
+    device_live: bool,
     /// Global event names opened for this GPU, for diagnostics.
     globals: Vec<String>,
     /// DRM render node for VRAM accounting. `None` when the GPU has no
@@ -487,9 +485,10 @@ impl Gpu {
         // members that can never be written — a permanently-null series for an
         // event the unit check rejected or `build_with_group` refused — which
         // is the same phantom the two-group split exists to prevent.
-        let mut live_indices: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-        live_indices.insert(leader_index);
-        live_indices.extend(members.iter().map(|m| m.index));
+        let (live_engine_indices, device_live) = opened_entries(
+            std::iter::once((leader_metric, leader_index))
+                .chain(members.iter().map(|m| (m.metric, m.index))),
+        );
 
         let label = pmu.device_label();
 
@@ -505,7 +504,7 @@ impl Gpu {
         // device and engine they belong to, not just an opaque index.
         for (offset, engine) in engines.iter().enumerate() {
             let metric_index = engine_index(id, offset);
-            if !live_indices.contains(&metric_index) {
+            if !live_engine_indices.contains(&metric_index) {
                 continue;
             }
             ENGINE_IDENTITY.assign(
@@ -522,16 +521,21 @@ impl Gpu {
             );
         }
 
-        DEVICE_IDENTITY.assign(
-            id,
-            [
-                ("id".to_string(), id.to_string()),
-                ("device".to_string(), label.clone()),
-                ("type".to_string(), gpu_type.to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        );
+        // The device group's identity, under the same rule. It is one
+        // identity for both frequency counters, so a GPU on which only one of
+        // them opened is a member, and the other counter has no value.
+        if device_live {
+            DEVICE_IDENTITY.assign(
+                id,
+                [
+                    ("id".to_string(), id.to_string()),
+                    ("device".to_string(), label.clone()),
+                    ("type".to_string(), gpu_type.to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            );
+        }
 
         // VRAM comes from the DRM query ioctl, not the PMU. Only a GPU with a
         // device-local memory region reports it, so probe once here and keep the
@@ -577,7 +581,8 @@ impl Gpu {
             engines,
             globals,
             drm,
-            live_indices,
+            live_engine_indices,
+            device_live,
         })
     }
 
@@ -620,6 +625,50 @@ impl Gpu {
             }
         }
     }
+}
+
+/// From the (metric, index) of a GPU's leader and of each member that
+/// opened: the engine indices that opened, and whether any of
+/// [`GLOBAL_EVENTS`] opened, which makes the GPU a device member.
+fn opened_entries<'a>(
+    opened: impl Iterator<Item = (&'a metriken::CounterGroup, usize)>,
+) -> (std::collections::BTreeSet<usize>, bool) {
+    let mut indices = std::collections::BTreeSet::new();
+    let mut device_live = false;
+    for (metric, index) in opened {
+        let global = GLOBAL_EVENTS
+            .iter()
+            .any(|(_, global, _)| std::ptr::eq(*global, metric));
+        if global {
+            device_live = true;
+        } else {
+            indices.insert(index);
+        }
+    }
+    (indices, device_live)
+}
+
+/// The engine and device member sets, sorted, from each kept GPU's
+/// `(id, engine count, live_engine_indices, device_live)`.
+fn member_sets<'a>(
+    gpus: impl Iterator<Item = (usize, usize, &'a std::collections::BTreeSet<usize>, bool)>,
+) -> (Vec<usize>, Vec<usize>) {
+    let mut engine_members = Vec::new();
+    let mut device_members = Vec::new();
+    for (id, engines, live_engine_indices, device_live) in gpus {
+        if device_live {
+            device_members.push(id);
+        }
+        for offset in 0..engines {
+            let index = engine_index(id, offset);
+            if live_engine_indices.contains(&index) {
+                engine_members.push(index);
+            }
+        }
+    }
+    engine_members.sort_unstable();
+    device_members.sort_unstable();
+    (engine_members, device_members)
 }
 
 /// True when `event_name` exists on this PMU and reports the unit we expect.
@@ -709,6 +758,60 @@ fn engine_class_rank(engine: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gpu_is_a_device_member_only_when_a_frequency_counter_opened() {
+        // #1227. GPU 0 with only its first engine open: that engine's index
+        // is 0, the same as the GPU's id, and the GPU is still not a device
+        // member.
+        let (gpu0, gpu0_live) =
+            opened_entries([(&GPU_ENGINE_BUSY, engine_index(0, 0))].into_iter());
+        assert_eq!(gpu0, [0].into());
+        assert!(!gpu0_live);
+
+        // GPU 2 kept alone (0 and 1 failed), with one frequency counter and
+        // one engine.
+        let (gpu2, gpu2_live) = opened_entries(
+            [
+                (&GPU_FREQUENCY_ACTUAL, 2),
+                (&GPU_ENGINE_BUSY, engine_index(2, 0)),
+            ]
+            .into_iter(),
+        );
+        assert!(gpu2_live);
+
+        // A GPU whose leader is a frequency counter and which has no engine.
+        let (gpu3, gpu3_live) = opened_entries([(&GPU_FREQUENCY_REQUESTED, 3)].into_iter());
+        assert!(gpu3_live);
+
+        let (engines, devices) = member_sets(
+            [
+                (0, 1, &gpu0, gpu0_live),
+                (2, 1, &gpu2, gpu2_live),
+                (3, 0, &gpu3, gpu3_live),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(devices, vec![2, 3]);
+        assert_eq!(engines, vec![engine_index(0, 0), engine_index(2, 0)]);
+    }
+
+    #[test]
+    fn gpu_0s_frequency_counter_does_not_mark_its_first_engine_opened() {
+        // GPU 0 lists two engines; the first one's counter did not open, the
+        // second's and `actual-frequency` (published at index 0) did.
+        let (opened, device_live) = opened_entries(
+            [
+                (&GPU_ENGINE_BUSY, engine_index(0, 1)),
+                (&GPU_FREQUENCY_ACTUAL, 0),
+            ]
+            .into_iter(),
+        );
+        assert!(device_live);
+        let (engines, devices) = member_sets([(0, 2, &opened, device_live)].into_iter());
+        assert_eq!(engines, vec![engine_index(0, 1)]);
+        assert_eq!(devices, vec![0]);
+    }
 
     #[test]
     fn maps_engine_classes() {

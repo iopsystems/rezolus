@@ -221,6 +221,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **An Intel GPU is a member of `gpu_intel_pmu`'s device group, with identity
+  metadata on `gpu_frequency_sample` (`frequency="actual"` and
+  `"requested"`), only when one of its frequency counters opened.** A GPU
+  whose engine counters opened and whose frequency counters did not was
+  listed as an occupant of `gpu_intel_pmu_devices`, with `id`, `device` and
+  `type` labels, though `gpu_frequency_sample` had no series for it. On GPU
+  0, an opened frequency counter no longer lists the first engine as an
+  occupant of `gpu_intel_pmu_engines` when that engine's own counter did not
+  open. (#1227)
+
 - **A metric name whose series have different descriptions keeps every
   one.** `/metrics/descriptions`, and so a recording's `descriptions`
   metadata, kept one description per name, as did the table `mcp
