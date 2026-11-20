@@ -49,9 +49,10 @@
 //!
 //! The per-GPU sweep is one read section (principle 18): the grouped perf read
 //! and the VRAM ioctl for a device are reached together through that device's
-//! own fds. It is bracketed by two acquisition groups rather than one, because
-//! the metrics it fills live in two index spaces — see the groups' doc comment
-//! in [`stats`] for why one shared group published phantom series.
+//! own fds. It is bracketed by three acquisition groups rather than one,
+//! because the metrics it fills have three member sets: engine indices, GPU
+//! ids, and the ids of the GPUs with VRAM. See the groups' doc comments in
+//! [`stats`] for why one shared group published phantom series.
 //!
 //! ## Permissions
 //!
@@ -75,6 +76,7 @@
 const NAME: &str = "gpu_intel_pmu";
 
 use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
+use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
 use perf_event::events::Event;
@@ -164,14 +166,15 @@ static MEMORY_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] =
     &[&[&GPU_MEMORY_USED, &GPU_MEMORY_FREE]];
 
 fn init(config: Arc<Config>) -> SamplerResult {
-    // Zero FIRST, so every exit below leaves the group empty rather than at
-    // backing capacity. An unset bound falls back to this sampler's backing
-    // arrays (`ENGINE_ENTRIES` = 128), and the snapshot walk would then declare
-    // that many members — phantom, all-null, and indistinguishable to a reader
-    // from a real engine that simply had no reading. `Gpu::new` raises it to
-    // the real engine set on success.
+    // Bound the three groups to zero before any return, so every exit below
+    // leaves them empty. A declared group with no bound and no set publishes
+    // every slot of its backing arrays as a null member: 128
+    // (`ENGINE_ENTRIES`) for the engine group, 8 (`MAX_GPUS`) for the device
+    // and memory groups. On success the member sets set below take precedence
+    // over these bounds.
     GPU_INTEL_PMU_ENGINE_ACQ.set_member_bound(0);
     GPU_INTEL_PMU_DEVICE_ACQ.set_member_bound(0);
+    GPU_INTEL_PMU_MEMORY_ACQ.set_member_bound(0);
 
     if !config.enabled(NAME) {
         return Ok(None);
@@ -237,27 +240,28 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    // Real membership, and one set per index space (see the groups' doc
-    // comment in `stats`). Both are explicit sets built from the entries whose
-    // counters actually opened.
+    // Real membership, one set per group (see the groups' doc comments in
+    // `stats`). The engine and device sets are built from the entries whose
+    // counters opened, the memory set from the GPUs whose VRAM query answered
+    // in `Gpu::new`.
     //
-    // A prefix bound would be wrong for either. Engine entries are sparse:
+    // A prefix bound would be wrong for any of the three. Engine entries are sparse:
     // each GPU owns a `MAX_ENGINES`-wide block and uses only the leading part.
     // And GPU ids are NOT dense — `id` comes from enumerating every discovered
     // PMU, while only the GPUs whose `Gpu::new` succeeded are kept, so one
     // failure leaves a survivor whose id exceeds `gpus.len()`. Bounding by the
     // count then drops that GPU's series entirely and declares a phantom
     // all-zero member at index 0 for a device that does not exist.
-    let (engine_members, device_members) = member_sets(gpus.iter().map(|gpu| {
-        (
-            gpu.id,
-            gpu.engines.len(),
-            &gpu.live_engine_indices,
-            gpu.device_live,
-        )
+    let members = member_sets(gpus.iter().map(|gpu| GpuEntries {
+        id: gpu.id,
+        engines: gpu.engines.len(),
+        live_engine_indices: &gpu.live_engine_indices,
+        device_live: gpu.device_live,
+        has_vram: gpu.drm.is_some(),
     }));
-    GPU_INTEL_PMU_ENGINE_ACQ.set_member_set(&engine_members);
-    GPU_INTEL_PMU_DEVICE_ACQ.set_member_set(&device_members);
+    GPU_INTEL_PMU_ENGINE_ACQ.set_member_set(&members.engines);
+    GPU_INTEL_PMU_DEVICE_ACQ.set_member_set(&members.devices);
+    GPU_INTEL_PMU_MEMORY_ACQ.set_member_set(&members.memory);
 
     let interval = config
         .sampler_interval(NAME)
@@ -323,23 +327,50 @@ impl Sampler for IntelPmu {
 
         permit.spawn(move || {
             if let Ok(mut gpus) = gpus.lock() {
-                // Acquisition-group bracket (principle 18): ONE group for the
-                // whole device sweep, not one per GPU or per metric family.
-                // An individual GPU's read can fail without invalidating the
-                // section — that GPU keeps its stale values — so the group
-                // always finishes once the sweep completes; there is no bulk
-                // "read all failed" signal here that would warrant a discard.
-                let engines = GPU_INTEL_PMU_ENGINE_ACQ.acquire();
-                let devices = GPU_INTEL_PMU_DEVICE_ACQ.acquire();
-
-                for gpu in gpus.iter_mut() {
-                    gpu.refresh();
-                }
-
-                engines.finish();
-                devices.finish();
+                bracketed(
+                    &GPU_INTEL_PMU_ENGINE_ACQ,
+                    &GPU_INTEL_PMU_DEVICE_ACQ,
+                    &GPU_INTEL_PMU_MEMORY_ACQ,
+                    || {
+                        let mut vram_read = false;
+                        for gpu in gpus.iter_mut() {
+                            vram_read |= gpu.refresh();
+                        }
+                        vram_read
+                    },
+                );
             }
         });
+    }
+}
+
+/// Run `sweep` inside one acquisition bracket for the three groups
+/// (principle 18): one bracket for the whole device sweep, not one per GPU.
+///
+/// A GPU whose perf read fails keeps its stale values and does not
+/// invalidate the section; the other calls in the sweep still freshen the
+/// window, so the engine and device groups always finish. The VRAM ioctl is
+/// the only read behind the memory group, so when `sweep` returns false (no
+/// GPU's VRAM read succeeded) the memory group is discarded: stamping it
+/// would present the old gauges as fresh.
+fn bracketed(
+    engines: &AcquisitionGroup,
+    devices: &AcquisitionGroup,
+    memory: &AcquisitionGroup,
+    sweep: impl FnOnce() -> bool,
+) {
+    let engines = engines.acquire();
+    let devices = devices.acquire();
+    let memory = memory.acquire();
+
+    let vram_read = sweep();
+
+    engines.finish();
+    devices.finish();
+    if vram_read {
+        memory.finish();
+    } else {
+        memory.discard();
     }
 }
 
@@ -590,7 +621,8 @@ impl Gpu {
     ///
     /// Values are set plain; the window is stamped once by the caller's
     /// acquisition bracket after every GPU has been visited (principle 18).
-    fn refresh(&mut self) {
+    /// Returns whether the VRAM gauges were written.
+    fn refresh(&mut self) -> bool {
         let group = match self.leader.read_group() {
             Ok(group) => group,
             Err(e) => {
@@ -599,7 +631,7 @@ impl Gpu {
                 // partial-telemetry case, not a failure of the read section, so
                 // the caller still finishes the group.
                 debug!("{NAME}: GPU {} ({}) read failed: {e}", self.id, self.label);
-                return;
+                return false;
             }
         };
 
@@ -618,12 +650,12 @@ impl Gpu {
 
         // VRAM is a separate ioctl on the DRM node, and unlike the PMU counters
         // it is an instantaneous gauge in bytes.
-        if let Some(drm) = self.drm.as_mut() {
-            if let Some(vram) = drm.vram() {
-                let _ = GPU_MEMORY_USED.set(self.id, vram.used_bytes() as i64);
-                let _ = GPU_MEMORY_FREE.set(self.id, vram.free_bytes as i64);
-            }
+        if let Some(vram) = self.drm.as_mut().and_then(|drm| drm.vram()) {
+            let _ = GPU_MEMORY_USED.set(self.id, vram.used_bytes() as i64);
+            let _ = GPU_MEMORY_FREE.set(self.id, vram.free_bytes as i64);
+            return true;
         }
+        false
     }
 }
 
@@ -648,27 +680,53 @@ fn opened_entries<'a>(
     (indices, device_live)
 }
 
-/// The engine and device member sets, sorted, from each kept GPU's
-/// `(id, engine count, live_engine_indices, device_live)`.
-fn member_sets<'a>(
-    gpus: impl Iterator<Item = (usize, usize, &'a std::collections::BTreeSet<usize>, bool)>,
-) -> (Vec<usize>, Vec<usize>) {
-    let mut engine_members = Vec::new();
-    let mut device_members = Vec::new();
-    for (id, engines, live_engine_indices, device_live) in gpus {
-        if device_live {
-            device_members.push(id);
+/// What one kept GPU contributes to the member sets.
+struct GpuEntries<'a> {
+    id: usize,
+    /// Number of engines the GPU lists.
+    engines: usize,
+    /// Engine indices whose counter opened.
+    live_engine_indices: &'a std::collections::BTreeSet<usize>,
+    /// Whether any of [`GLOBAL_EVENTS`] opened.
+    device_live: bool,
+    /// Whether the GPU kept a DRM node, which `Gpu::new` does only when its
+    /// VRAM query answered.
+    has_vram: bool,
+}
+
+/// The member set of each of the sampler's three groups, sorted.
+#[derive(Debug, PartialEq)]
+struct MemberSets {
+    engines: Vec<usize>,
+    devices: Vec<usize>,
+    memory: Vec<usize>,
+}
+
+/// The member sets from each kept GPU's entries.
+fn member_sets<'a>(gpus: impl Iterator<Item = GpuEntries<'a>>) -> MemberSets {
+    let mut sets = MemberSets {
+        engines: Vec::new(),
+        devices: Vec::new(),
+        memory: Vec::new(),
+    };
+    for gpu in gpus {
+        if gpu.device_live {
+            sets.devices.push(gpu.id);
         }
-        for offset in 0..engines {
-            let index = engine_index(id, offset);
-            if live_engine_indices.contains(&index) {
-                engine_members.push(index);
+        if gpu.has_vram {
+            sets.memory.push(gpu.id);
+        }
+        for offset in 0..gpu.engines {
+            let index = engine_index(gpu.id, offset);
+            if gpu.live_engine_indices.contains(&index) {
+                sets.engines.push(index);
             }
         }
     }
-    engine_members.sort_unstable();
-    device_members.sort_unstable();
-    (engine_members, device_members)
+    sets.engines.sort_unstable();
+    sets.devices.sort_unstable();
+    sets.memory.sort_unstable();
+    sets
 }
 
 /// True when `event_name` exists on this PMU and reports the unit we expect.
@@ -784,16 +842,25 @@ mod tests {
         let (gpu3, gpu3_live) = opened_entries([(&GPU_FREQUENCY_REQUESTED, 3)].into_iter());
         assert!(gpu3_live);
 
-        let (engines, devices) = member_sets(
+        // Only GPU 2 has VRAM.
+        let entries = |id, engines, live_engine_indices, device_live, has_vram| GpuEntries {
+            id,
+            engines,
+            live_engine_indices,
+            device_live,
+            has_vram,
+        };
+        let sets = member_sets(
             [
-                (0, 1, &gpu0, gpu0_live),
-                (2, 1, &gpu2, gpu2_live),
-                (3, 0, &gpu3, gpu3_live),
+                entries(0, 1, &gpu0, gpu0_live, false),
+                entries(2, 1, &gpu2, gpu2_live, true),
+                entries(3, 0, &gpu3, gpu3_live, false),
             ]
             .into_iter(),
         );
-        assert_eq!(devices, vec![2, 3]);
-        assert_eq!(engines, vec![engine_index(0, 0), engine_index(2, 0)]);
+        assert_eq!(sets.devices, vec![2, 3]);
+        assert_eq!(sets.engines, vec![engine_index(0, 0), engine_index(2, 0)]);
+        assert_eq!(sets.memory, vec![2]);
     }
 
     #[test]
@@ -808,9 +875,42 @@ mod tests {
             .into_iter(),
         );
         assert!(device_live);
-        let (engines, devices) = member_sets([(0, 2, &opened, device_live)].into_iter());
-        assert_eq!(engines, vec![engine_index(0, 1)]);
-        assert_eq!(devices, vec![0]);
+        let sets = member_sets(
+            [GpuEntries {
+                id: 0,
+                engines: 2,
+                live_engine_indices: &opened,
+                device_live,
+                has_vram: false,
+            }]
+            .into_iter(),
+        );
+        assert_eq!(sets.engines, vec![engine_index(0, 1)]);
+        assert_eq!(sets.devices, vec![0]);
+        assert!(sets.memory.is_empty());
+    }
+
+    #[test]
+    fn a_sweep_stamps_every_group_and_memory_only_after_a_vram_read() {
+        let engines = AcquisitionGroup::new("test_sampler", "intel_bracket_engines");
+        let devices = AcquisitionGroup::new("test_sampler", "intel_bracket_devices");
+        let memory = AcquisitionGroup::new("test_sampler", "intel_bracket_memory");
+
+        bracketed(&engines, &devices, &memory, || false);
+        assert!(engines.window().is_some());
+        assert!(devices.window().is_some());
+        assert!(memory.window().is_none());
+
+        bracketed(&engines, &devices, &memory, || true);
+        let window = memory.window();
+        assert!(window.is_some());
+        assert_eq!(engines.window(), window);
+        assert_eq!(devices.window(), window);
+
+        // A later sweep with no VRAM read leaves the memory window where it
+        // was.
+        bracketed(&engines, &devices, &memory, || false);
+        assert_eq!(memory.window(), window);
     }
 
     #[test]

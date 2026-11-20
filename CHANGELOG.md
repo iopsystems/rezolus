@@ -227,6 +227,14 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **`gpu_memory` from `gpu_intel_pmu` carries an acquisition window, and its
+  group `gpu_intel_pmu_memory` lists only the GPUs that report VRAM.** In
+  5.21.0 through 5.32.0 and the 6.0 prereleases, the sampler never bracketed
+  that group or gave it members, so on a host whose Intel GPU counters opened,
+  the VRAM gauges were published with no window and the group's membership was
+  all 8 slots rather than the GPUs with VRAM. A sweep in which no GPU's VRAM
+  read succeeds now leaves the window unchanged. Found by reading the code; not
+  reproduced on a host with an Intel GPU (#1721).
 - **An Intel GPU is a member of `gpu_intel_pmu`'s device group, with identity
   metadata on `gpu_frequency_sample` (`frequency="actual"` and
   `"requested"`), only when one of its frequency counters opened.** A GPU

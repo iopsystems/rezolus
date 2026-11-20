@@ -1190,14 +1190,17 @@ to double the true rate with no gap to indicate a dropped sample: an A770 held
 at a steady 2400 MHz recorded as 4800. Measured before the fix, two thirds of
 samples in a 155-second capture were stale repeats.
 
-The sweep is bracketed by two acquisition groups rather than one
-(`gpu_intel_pmu_engines` and `gpu_intel_pmu_devices`). It is a single read
-section, but its metrics live in two index spaces — per-engine entries are
-indexed by a GPU-major engine index, per-device entries by plain GPU id — and a
-group's member set applies to every metric tagged with it. Sharing one group
-made engine indices look like GPU ids and published phantom all-zero
-`gpu_frequency_sample{id="2"}` series on a two-GPU host. Both groups are stamped
-from the same bracket, so the two windows are identical.
+The sweep is bracketed by three acquisition groups rather than one
+(`gpu_intel_pmu_engines`, `gpu_intel_pmu_devices` and `gpu_intel_pmu_memory`).
+It is a single read section, but a group's member set applies to every metric
+tagged with it, and these metrics have three member sets: per-engine entries
+are indexed by a GPU-major engine index, frequency entries by GPU id, and
+`gpu_memory` entries by the ids of the GPUs that report VRAM. One shared group
+would declare each engine index as a GPU id as well, publishing all-zero
+`gpu_frequency_sample` series for GPU ids that do not exist. All three groups
+are stamped from the same bracket, so their windows are identical, except that
+a sweep in which no GPU's VRAM read succeeded leaves `gpu_intel_pmu_memory`'s
+window where it was.
 
 Note that this PMU reports engine **occupancy, not efficiency** — a busy engine
 had work queued, which does not mean its execution units were saturated. Pair
