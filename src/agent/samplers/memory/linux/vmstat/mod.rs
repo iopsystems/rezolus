@@ -296,6 +296,7 @@ thp_split_page 2
 
     #[test]
     fn counters_sums_and_gauges_parse() {
+        let _registry = crate::agent::exposition::http::test_registry();
         let tables = Tables::new(4096);
         parse(SAMPLE, &tables);
         assert_eq!(MEMORY_PAGES_WRITTEN.value(), 189349);
@@ -344,6 +345,7 @@ thp_split_page 2
     /// a plain counter is left alone when its line is missing.
     #[test]
     fn missing_lines_leave_metrics_untouched() {
+        let _registry = crate::agent::exposition::http::test_registry();
         let tables = Tables::new(4096);
         MEMORY_ALLOCATION_STALLS.set(41);
         MEMORY_OOM_KILLS.set(3);
