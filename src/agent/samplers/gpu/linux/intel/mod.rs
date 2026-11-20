@@ -347,9 +347,9 @@ impl Sampler for IntelPmu {
 /// Run `sweep` inside one acquisition bracket for the three groups
 /// (principle 18): one bracket for the whole device sweep, not one per GPU.
 ///
-/// A GPU whose perf read fails keeps its stale values and does not
-/// invalidate the section; the other calls in the sweep still freshen the
-/// window, so the engine and device groups always finish. The VRAM ioctl is
+/// A GPU whose perf read fails keeps its stale values. The engine and device
+/// groups always finish, even when every perf read failed: principle 18's
+/// device-sweep trade. The VRAM ioctl is
 /// the only read behind the memory group, so when `sweep` returns false (no
 /// GPU's VRAM read succeeded) the memory group is discarded: stamping it
 /// would present the old gauges as fresh.
@@ -629,7 +629,9 @@ impl Gpu {
                 // A failed read on one GPU leaves that GPU's values stale and
                 // the rest of the sweep intact — this is the normal
                 // partial-telemetry case, not a failure of the read section, so
-                // the caller still finishes the group.
+                // the caller still finishes the engine and device groups. The
+                // VRAM read is skipped, so this GPU reports no VRAM read for
+                // the memory group.
                 debug!("{NAME}: GPU {} ({}) read failed: {e}", self.id, self.label);
                 return false;
             }
@@ -903,9 +905,13 @@ mod tests {
 
         bracketed(&engines, &devices, &memory, || true);
         let window = memory.window();
-        assert!(window.is_some());
-        assert_eq!(engines.window(), window);
-        assert_eq!(devices.window(), window);
+        // Each group has its own bracket around the same sweep, so the
+        // memory window begins inside the engine and device windows.
+        let m = window.expect("memory stamped after a VRAM read");
+        for other in [&engines, &devices] {
+            let o = other.window().expect("stamped");
+            assert!(m.begin_ns >= o.begin_ns && m.begin_ns <= o.end_ns);
+        }
 
         // A later sweep with no VRAM read leaves the memory window where it
         // was.

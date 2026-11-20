@@ -1197,10 +1197,9 @@ tagged with it, and these metrics have three member sets: per-engine entries
 are indexed by a GPU-major engine index, frequency entries by GPU id, and
 `gpu_memory` entries by the ids of the GPUs that report VRAM. One shared group
 would declare each engine index as a GPU id as well, publishing all-zero
-`gpu_frequency_sample` series for GPU ids that do not exist. All three groups
-are stamped from the same bracket, so their windows are identical, except that
-a sweep in which no GPU's VRAM read succeeded leaves `gpu_intel_pmu_memory`'s
-window where it was.
+`gpu_frequency_sample` series for GPU ids that do not exist. Each group's
+window covers the whole sweep. A sweep in which no GPU's VRAM read succeeded
+leaves `gpu_intel_pmu_memory`'s window where it was.
 
 Note that this PMU reports engine **occupancy, not efficiency** — a busy engine
 had work queued, which does not mean its execution units were saturated. Pair

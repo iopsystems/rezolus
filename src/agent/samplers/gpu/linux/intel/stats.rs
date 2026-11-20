@@ -50,8 +50,9 @@ use super::MAX_GPUS;
 // only real entries carry — which is exactly what the member-set mechanism
 // exists to prevent. Caught on hardware, not in review.
 //
-// All three are stamped from the same bracket, so their windows are identical
-// and nothing is over-stated by the split.
+// The three brackets are opened one after another before the sweep and closed
+// after it, so each window covers the whole sweep; they differ by the
+// nanoseconds between consecutive `acquire()` calls.
 //
 // Single writer for all three: the `spawn_blocking` task dispatched from
 // `Sampler::refresh`, which is guarded against overlapping itself.
