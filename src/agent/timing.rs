@@ -785,14 +785,17 @@ mod tests {
         });
 
         barrier.wait();
-        // Read at least MIN_READS times — that floor is the tear detection and
-        // must not shrink — then keep going until the writer has demonstrably
-        // moved. The writer's progress is a scheduling outcome, not a property
-        // of the lock: on a loaded machine it gets starved, and CI has seen 88
-        // distinct stamps across the 5M reads, which says nothing about
-        // tearing. Bounded, so a genuinely stuck writer still fails the
-        // non-vacuity check below rather than spinning forever.
+        // Read at least MIN_READS times, then keep going until at least
+        // MIN_OBSERVED of the reads have returned a stamp and the writer has
+        // made more than MIN_ADVANCES distinct stamps. None of the three
+        // floors may shrink. A read that returns no stamp detects no tear.
+        // The writer's progress depends on scheduling, not on the lock: on a
+        // loaded machine the writer gets starved. CI has seen 88 distinct
+        // stamps across 5M reads, and 104 reads out of 5M that returned a
+        // stamp. The loop stops at MAX_READS, so a writer that never runs
+        // fails the checks below instead of looping forever.
         const MIN_READS: u64 = 5_000_000;
+        const MIN_OBSERVED: u64 = 1_000_000;
         const MIN_ADVANCES: u64 = 100;
         const MAX_READS: u64 = 100_000_000;
 
@@ -800,7 +803,9 @@ mod tests {
         let mut observed = 0u64; // Some(_) loads: contention actually exercised
         let mut advanced = 0u64; // distinct begin_ns values: writer made progress
         let mut last_begin = None;
-        while reads < MAX_READS && (reads < MIN_READS || advanced <= MIN_ADVANCES) {
+        while reads < MAX_READS
+            && (reads < MIN_READS || observed < MIN_OBSERVED || advanced <= MIN_ADVANCES)
+        {
             reads += 1;
             if let Some(w) = slot.load() {
                 assert_eq!(w.end_ns, w.begin_ns + 1, "torn read: {w:?}");
@@ -815,8 +820,8 @@ mod tests {
         writer.join().unwrap();
 
         assert!(
-            observed > 1_000_000,
-            "reader saw too few stamps ({observed}) — not exercising contention"
+            observed >= MIN_OBSERVED,
+            "reader saw too few stamps ({observed}) in {reads} reads — not exercising contention"
         );
         assert!(
             advanced > MIN_ADVANCES,
