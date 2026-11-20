@@ -2804,6 +2804,141 @@ mod tests {
         );
     }
 
+    // Two groups of two metrics each, one per test below, since tests run
+    // in parallel and each revises its group's bound. The router test
+    // revises it between the routing of the two metrics; the snapshot test
+    // between builds.
+    static V3_ROUTED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "routed_bound_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_ROUTED_GROUP_ENTRY: &'static AcquisitionGroup = &V3_ROUTED_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_routed_a",
+        metadata = { acq_group = "routed_bound_probe" }
+    )]
+    static V3_ROUTED_A: metriken::CounterGroup = metriken::CounterGroup::new(8);
+
+    #[metric(
+        name = "snapshot_v3_routed_b",
+        metadata = { acq_group = "routed_bound_probe" }
+    )]
+    static V3_ROUTED_B: metriken::CounterGroup = metriken::CounterGroup::new(8);
+
+    static V3_REVISED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "revised_bound_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_REVISED_GROUP_ENTRY: &'static AcquisitionGroup = &V3_REVISED_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_revised_a",
+        metadata = { acq_group = "revised_bound_probe" }
+    )]
+    static V3_REVISED_A: metriken::CounterGroup = metriken::CounterGroup::new(8);
+
+    #[metric(
+        name = "snapshot_v3_revised_b",
+        metadata = { acq_group = "revised_bound_probe" }
+    )]
+    static V3_REVISED_B: metriken::CounterGroup = metriken::CounterGroup::new(8);
+
+    fn routed_prefix(router: &super::super::router::RezolusRouter, name: &str) -> Option<usize> {
+        use metriken_exposition::group_builder::{Membership, Router};
+        let metrics = metriken::metrics();
+        let metric = metrics
+            .iter()
+            .find(|m| m.name() == name)
+            .expect("probe metric registered");
+        match router
+            .route(metric)
+            .expect("probe metric routed")
+            .membership
+        {
+            Membership::Prefix(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// #1207: a bound revised while a build is running must not give the
+    /// group's metrics different memberships. The router reads it once per
+    /// build, and the next build reads the new value.
+    #[test]
+    fn a_bound_revised_mid_build_applies_from_the_next_build() {
+        let router = super::super::router::RezolusRouter::new();
+        V3_ROUTED_GROUP.set_member_bound(4);
+        router.begin_build();
+        assert_eq!(routed_prefix(&router, "snapshot_v3_routed_a"), Some(4));
+        V3_ROUTED_GROUP.set_member_bound(1);
+        assert_eq!(
+            routed_prefix(&router, "snapshot_v3_routed_b"),
+            Some(4),
+            "the second metric of the group keeps the bound the first was routed with"
+        );
+        assert_eq!(routed_prefix(&router, "snapshot_v3_routed_a"), Some(4));
+        router.begin_build();
+        assert_eq!(routed_prefix(&router, "snapshot_v3_routed_b"), Some(1));
+    }
+
+    /// Wide snapshots and stream builds share one `V3Builder`, as the
+    /// agent's `SnapshotBuilder` does. Each build must read the bound again:
+    /// a builder that stopped starting a new build would keep publishing the
+    /// bound of whichever build ran first.
+    #[test]
+    fn each_snapshot_and_stream_build_reads_the_current_bound() {
+        for idx in 0..8 {
+            V3_REVISED_A.add(idx, 1);
+            V3_REVISED_B.add(idx, 1);
+        }
+        let mut cache = v3_builder();
+        let mut members = |bound: usize| {
+            V3_REVISED_GROUP.set_member_bound(bound);
+            V3_REVISED_GROUP.acquire().finish();
+            let Snapshot::V3(s) = create_v3(Duration::from_secs(1), vec![], &mut cache, (0, 0))
+            else {
+                panic!("expected V3")
+            };
+            let group = s
+                .groups
+                .iter()
+                .find(|g| g.name == "unattributed/revised_bound_probe")
+                .expect("revised group present");
+            assert_eq!(group.validate(), Ok(()));
+            group
+                .schema
+                .as_ref()
+                .expect("schema present")
+                .counters
+                .len()
+        };
+        assert_eq!(members(2), 4, "two metrics, two members each");
+        assert_eq!(members(3), 6, "two metrics, three members each");
+
+        let mut occupants = |bound: usize| {
+            use metriken_exposition::group_builder::StreamGroup;
+            V3_REVISED_GROUP.set_member_bound(bound);
+            V3_REVISED_GROUP.acquire().finish();
+            // `create_v3` takes this itself; a direct `build_stream` must,
+            // or it can overlap another test's build (see BUILDER_TEST_LOCK).
+            let _serialize = BUILDER_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache
+                .build_stream(vec![])
+                .into_iter()
+                .find_map(|g| match g {
+                    StreamGroup::Long(g) if g.name == "unattributed/revised_bound_probe" => Some(g),
+                    _ => None,
+                })
+                .expect("revised group present in the stream")
+                .occupants
+                .len()
+        };
+        assert_eq!(occupants(4), 4, "the stream build after a wide one");
+        assert_eq!(occupants(1), 1, "the stream build after a stream one");
+    }
+
     // Dedicated group + metric: 8 backing entries, member_bound set to 3.
     // Distinct from `V3_DECLARED_COUNTER_GROUP` above (entries=2, no bound
     // — that test is this one's "unbounded behaves as today" control).
