@@ -96,6 +96,54 @@
               "query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
             }
           ]
+        },
+        {
+          "when": {
+            "any": [
+              {
+                "present": "network_transmit_complete"
+              },
+              {
+                "present": "network_transmit_busy"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "Driver Transmit",
+              "description": "Packets handed to a network device's transmit function, counted on every interface including virtual ones (loopback, veth, bridges): accepted, and refused with a non-zero return such as a full device queue. A sustained refused rate means the transmit path is backed up. Linux only.",
+              "plots": [
+                {
+                  "when": {
+                    "present": "network_transmit_complete"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Transmits Accepted",
+                      "id": "transmit-complete",
+                      "unit": "rate",
+                      "query": "sum(irate(network_transmit_complete[5m]))"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "network_transmit_busy"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Transmits Refused",
+                      "id": "transmit-busy",
+                      "unit": "rate",
+                      "query": "sum(irate(network_transmit_busy[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -229,6 +277,132 @@
                   "unit": "bitrate",
                   "query": "sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8",
                   "unit_system": "bitrate"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "any": [
+              {
+                "present": "tcp_packets"
+              },
+              {
+                "present": "tcp_size"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "Socket Calls",
+              "description": "Send calls on TCP sockets and reads that copied data out of them, and the bytes each moved. These count socket calls, not segments: one send can become many segments, and one read can return several. Linux only.",
+              "plots": [
+                {
+                  "when": {
+                    "present": "tcp_packets"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Send Calls",
+                      "id": "tcp-send-calls",
+                      "unit": "rate",
+                      "query": "sum(irate(tcp_packets{direction=\"transmit\"}[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "Read Calls",
+                      "id": "tcp-read-calls",
+                      "unit": "rate",
+                      "query": "sum(irate(tcp_packets{direction=\"receive\"}[5m]))"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "tcp_size"
+                  },
+                  "then": [
+                    {
+                      "kind": "histogram",
+                      "title": "Send Size",
+                      "id": "tcp-send-size",
+                      "unit": "bytes",
+                      "query": "tcp_size{direction=\"transmit\"}",
+                      "subtype": "percentiles",
+                      "log_scale": true
+                    },
+                    {
+                      "kind": "histogram",
+                      "title": "Read Size",
+                      "id": "tcp-read-size",
+                      "unit": "bytes",
+                      "query": "tcp_size{direction=\"receive\"}",
+                      "subtype": "percentiles",
+                      "log_scale": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "tcp_srtt"
+          },
+          "then": [
+            {
+              "name": "Round-Trip Time",
+              "description": "The kernel's smoothed round-trip time estimate for a connection, sampled each time an established connection processes an incoming segment, so connections receiving more segments weigh more.",
+              "plots": [
+                {
+                  "rate_mean": {
+                    "title": "Smoothed RTT",
+                    "id": "tcp-srtt",
+                    "selector": "tcp_srtt",
+                    "mean_unit": "time"
+                  }
+                },
+                {
+                  "kind": "latency",
+                  "title": "Smoothed RTT",
+                  "id": "tcp-srtt",
+                  "query": "tcp_srtt",
+                  "width": "full",
+                  "axis_label": "Time",
+                  "unit_system": "time"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "tcp_jitter"
+          },
+          "then": [
+            {
+              "name": "RTT Variation",
+              "description": "The kernel's mean deviation of a connection's round-trip time (mdev), sampled each time an established connection processes an incoming segment.",
+              "plots": [
+                {
+                  "rate_mean": {
+                    "title": "RTT Variation",
+                    "id": "tcp-jitter",
+                    "selector": "tcp_jitter",
+                    "mean_unit": "time"
+                  }
+                },
+                {
+                  "kind": "latency",
+                  "title": "RTT Variation",
+                  "id": "tcp-jitter",
+                  "query": "tcp_jitter",
+                  "width": "full",
+                  "axis_label": "Time",
+                  "unit_system": "time"
                 }
               ]
             }

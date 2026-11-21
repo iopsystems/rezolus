@@ -27,6 +27,19 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **The Network section plots the TCP and driver metrics it left out.** The
+  TCP group gains Socket Calls (`tcp_packets` and `tcp_size` by direction,
+  which on Linux count send calls and reads, not segments), Round-Trip Time
+  (`tcp_srtt`) and RTT Variation (`tcp_jitter`), each drawn when the
+  recording has the metric. Traffic gains Driver Transmit:
+  `network_transmit_complete` and `network_transmit_busy`, packets a device's
+  transmit function accepted or refused, on every interface including virtual
+  ones. Those two metrics' descriptions now say that; the old one for
+  `network_transmit_complete` named a `network_transmit_packets` metric that
+  does not exist. A recording made by a 6.0.0-alpha.62 through alpha.162
+  agent carries that agent's section template, so `rezolus view` shows these
+  plots for it only with `--registry-templates`. (#1185)
+
 - **`rezolus status` shows a sampler that degrades while running.**
   `/status` and `/samplers` give each such sampler `runtime_degraded`, a list
   of `{condition, reason}`, and health `degraded`, so `rezolus status` exits 1

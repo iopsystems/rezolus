@@ -81,6 +81,30 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
     );
 
+    let transmit_complete = has_metric(data, "network_transmit_complete");
+    let transmit_busy = has_metric(data, "network_transmit_busy");
+    if transmit_complete || transmit_busy {
+        let driver = traffic.subgroup("Driver Transmit");
+        driver.describe(
+            "Packets handed to a network device's transmit function, counted on every \
+             interface including virtual ones (loopback, veth, bridges): accepted, and refused \
+             with a non-zero return such as a full device queue. A sustained refused rate means \
+             the transmit path is backed up. Linux only.",
+        );
+        if transmit_complete {
+            driver.plot_promql(
+                Plot::counter("Transmits Accepted", "transmit-complete", Unit::Rate),
+                "sum(irate(network_transmit_complete[5m]))".to_string(),
+            );
+        }
+        if transmit_busy {
+            driver.plot_promql(
+                Plot::counter("Transmits Refused", "transmit-busy", Unit::Rate),
+                "sum(irate(network_transmit_busy[5m]))".to_string(),
+            );
+        }
+    }
+
     view.group(traffic);
 
     // Each chart is drawn only when the recording has its metric: a macOS
@@ -174,6 +198,71 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 .with_unit_system(Unit::Bitrate),
             "sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         );
+    }
+
+    let calls = has_metric(data, "tcp_packets");
+    let sizes = has_metric(data, "tcp_size");
+    if calls || sizes {
+        let socket = tcp.subgroup("Socket Calls");
+        socket.describe(
+            "Send calls on TCP sockets and reads that copied data out of them, and the bytes \
+             each moved. These count socket calls, not segments: one send can become many \
+             segments, and one read can return several. Linux only.",
+        );
+        if calls {
+            socket.plot_promql(
+                Plot::counter("Send Calls", "tcp-send-calls", Unit::Rate),
+                "sum(irate(tcp_packets{direction=\"transmit\"}[5m]))".to_string(),
+            );
+            socket.plot_promql(
+                Plot::counter("Read Calls", "tcp-read-calls", Unit::Rate),
+                "sum(irate(tcp_packets{direction=\"receive\"}[5m]))".to_string(),
+            );
+        }
+        if sizes {
+            for (title, id, direction) in [
+                ("Send Size", "tcp-send-size", "transmit"),
+                ("Read Size", "tcp-read-size", "receive"),
+            ] {
+                socket.plot_promql(
+                    Plot::histogram(title, id, Unit::Bytes, HistogramView::Percentiles)
+                        .with_log_scale(true),
+                    format!("tcp_size{{direction=\"{direction}\"}}"),
+                );
+            }
+        }
+    }
+
+    for (name, title, id, metric, description) in [
+        (
+            "Round-Trip Time",
+            "Smoothed RTT",
+            "tcp-srtt",
+            "tcp_srtt",
+            "The kernel's smoothed round-trip time estimate for a connection, sampled each time \
+             an established connection processes an incoming segment, so connections receiving \
+             more segments weigh more.",
+        ),
+        (
+            "RTT Variation",
+            "RTT Variation",
+            "tcp-jitter",
+            "tcp_jitter",
+            "The kernel's mean deviation of a connection's round-trip time (mdev), sampled each \
+             time an established connection processes an incoming segment.",
+        ),
+    ] {
+        if has_metric(data, metric) {
+            let rtt = tcp.subgroup(name);
+            rtt.describe(description);
+            rtt.histogram_rate_mean(title, id, metric, RateSource::FromHistogram, Unit::Time);
+            rtt.plot_promql_full(
+                Plot::histogram_latency(title, id)
+                    .with_axis_label("Time")
+                    .with_unit_system(Unit::Time),
+                metric.to_string(),
+            );
+        }
     }
 
     if has_metric(data, "tcp_packet_latency") {
