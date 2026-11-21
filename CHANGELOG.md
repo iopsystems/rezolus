@@ -27,12 +27,12 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
-- `cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of online
-  CPUs in `/sys/devices/system/cpu/isolated` (`isolcpus=`, `domain` flag).
-  The load balancer places no work on them, yet `cpu_cores` counts them, so on
-  a host with `isolcpus=0-23,28-55,60-63` and 64 CPUs a workload saturating
-  the 8 it can use read as 12.5% busy. `cpu_cores - cpu_isolated` is the
-  number it can use. The dashboards still divide by `cpu_cores`. (#1043)
+- **`cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of
+  online CPUs in `/sys/devices/system/cpu/isolated`** (`isolcpus=`, `domain`
+  flag). The load balancer places no work on them, yet `cpu_cores` counts
+  them, so on a host with `isolcpus=0-23,28-55,60-63` and 64 CPUs a workload
+  saturating the 8 it can use read as 12.5% busy. `cpu_cores - cpu_isolated`
+  is the number it can use. The dashboards still divide by `cpu_cores`. (#1043)
 
 - **`gpu_nvidia` logs, once at startup, the NVML queries each GPU does not
   support.** For example `gpu_nvidia: GPU 0 does not support: gpm` on an
@@ -236,7 +236,7 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 - **The `cpu_cores` sampler no longer exits the agent on a read error from
   `/sys/devices/system/cpu/online` or a line it cannot parse.** It skips that
-  refresh. Every release since 4.0.0 panicked there. (#1043)
+  refresh. Releases from 4.0.0 on exit with status 101 on that error. (#1043)
 - **`rezolus mcp extract-features` (and the MCP server's `extract_features`)
   no longer lists every Rezolus sampler as absent for a recording that is not
   a Rezolus agent's.** Every recording opened was treated as an agent's, so a
