@@ -43,6 +43,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   its section template (6.0.0-alpha.62 on) shows these plots only with
   `rezolus view --registry-templates`. (#1185)
 
+- **`cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of
+  online CPUs in `/sys/devices/system/cpu/isolated`** (`isolcpus=`, `domain`
+  flag). The load balancer places no work on them, yet `cpu_cores` counts
+  them, so on a host with `isolcpus=0-23,28-55,60-63` and 64 CPUs a workload
+  saturating the 8 it can use read as 12.5% busy. `cpu_cores - cpu_isolated`
+  is the number it can use. The dashboards still divide by `cpu_cores`. (#1043)
+
 - **`rezolus status` shows a sampler that degrades while running.**
   `/status` and `/samplers` give each such sampler `runtime_degraded`, a list
   of `{condition, reason}`, and health `degraded`, so `rezolus status` exits 1
@@ -256,6 +263,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **The `cpu_cores` sampler no longer exits the agent on a read error from
+  `/sys/devices/system/cpu/online` or a line it cannot parse.** It skips that
+  refresh. Releases from 4.0.0 on exit with status 101 on that error. (#1043)
 - **`rezolus mcp extract-features` (and the MCP server's `extract_features`)
   no longer lists every Rezolus sampler as absent for a recording that is not
   a Rezolus agent's.** Every recording opened was treated as an agent's, so a
