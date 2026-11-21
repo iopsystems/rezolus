@@ -377,9 +377,8 @@ pub enum Provenance {
     /// without layers a `source` of `rezolus` or the agent's self-telemetry
     /// metrics), whatever its `source` says.
     RezolusAgent,
-    /// Provenance unknown: the names are the agent's own when the identity
-    /// layers name `rezolus` as producer or, without layers, the `source`
-    /// metadata is `"rezolus"`.
+    /// Provenance unknown: the names are the agent's own when the `source`
+    /// is `"rezolus"` or the identity layers name `rezolus` as producer.
     FromMetadata,
 }
 
