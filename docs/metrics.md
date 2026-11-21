@@ -1350,6 +1350,9 @@ must be available; Rezolus does not enable controllers or change limits.
 | `cgroup_memory_usage` | Gauge | bytes | `memory.current`: all memory charged to the cgroup and its descendants, including page cache, kernel and socket memory |
 | `cgroup_memory_swap_usage` | Gauge | bytes | `memory.swap.current`: swap usage, including descendants |
 | `cgroup_memory_stat` | Gauge | bytes | Byte-valued `memory.stat` fields, distinguished by `kind` |
+| `cgroup_memory_max` | Gauge | bytes | `memory.max`: the hard limit, or -1 when it is `max` (no limit) |
+| `cgroup_memory_high` | Gauge | bytes | `memory.high`: the throttling threshold, or -1 when it is `max` (no threshold) |
+| `cgroup_memory_events` | Counter | events | `memory.events` fields, distinguished by `kind`, including descendants |
 
 All series carry `name`, the same display name used by BPF cgroup metrics:
 up to the last three path components, prefixed with `.../` for deeper paths.
@@ -1384,6 +1387,23 @@ The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `inactive_anon`, `active_file`, `inactive_file`, `unevictable`, `swapcached`,
 `zswap`, `zswapped`, and `hugetlb`, when exposed by the running kernel.
 Page counts and event counters in `memory.stat` are excluded.
+
+`cgroup_memory_events` has `kind` `low`, `high`, `max`, `oom`, `oom_kill` and
+`oom_group_kill`, when exposed by the running kernel. They count events in the
+cgroup and its descendants (`memory.events`, not `memory.events.local`). As the
+kernel's cgroup v2 documentation defines them: `low` counts reclaims of the
+cgroup under high memory pressure while its usage was below `memory.low`;
+`high` counts times its processes were throttled into direct reclaim because
+usage passed `memory.high`; `max` counts times usage was about to pass
+`memory.max`; `oom` counts times usage reached the limit and an allocation was
+about to fail; `oom_kill` counts processes in the cgroup killed by any kind of
+OOM killer; `oom_group_kill` counts group OOMs.
+A limit of -1 must be filtered before dividing by it, for example usage
+against the limit for cgroups that have one:
+
+```promql
+cgroup_memory_usage / (cgroup_memory_max > 0)
+```
 
 These are overlapping views, not additive buckets: `file` includes shared
 memory/tmpfs (`shmem`), `kernel` includes slab/page tables/stacks, and dirty,

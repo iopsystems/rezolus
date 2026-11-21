@@ -27,6 +27,15 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **`memory_cgroup` reads each cgroup's limits and memory events.**
+  `cgroup_memory_max` and `cgroup_memory_high` are `memory.max` and
+  `memory.high` in bytes, -1 when the file says `max`.
+  `cgroup_memory_events{kind}` counts `memory.events`: `low`, `high`, `max`,
+  `oom`, `oom_kill` and `oom_group_kill`, including descendants. They are read
+  in the same sweep and carry the same `name`, `path` and `id` labels, so
+  usage against the limit is `cgroup_memory_usage / (cgroup_memory_max > 0)`.
+  The sampler stays opt-in. (#1290)
+
 - **`cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of
   online CPUs in `/sys/devices/system/cpu/isolated`** (`isolcpus=`, `domain`
   flag). The load balancer places no work on them, yet `cpu_cores` counts
