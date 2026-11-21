@@ -17,8 +17,10 @@ pub struct SamplerStatus {
     pub health: Option<SamplerHealth>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub programs: Vec<ProgramStatus>,
-    /// Conditions the running sampler reports, sorted by condition name. Any
-    /// entry makes `health` `degraded` in [`snapshot`], unless it is `failed`.
+    /// Conditions the running sampler reports, sorted by condition name. On a
+    /// running sampler (`active` or `pmu_limited`), any entry makes `health`
+    /// `degraded` in [`snapshot`] unless it is `failed`. On a sampler in
+    /// another state the entries are attached and `health` is unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_degraded: Vec<RuntimeCondition>,
 }
@@ -182,9 +184,10 @@ fn runtime() -> &'static Mutex<RuntimeConditions> {
 
 /// Report that running sampler `name` is degraded by `condition`, with the
 /// reason. Setting a condition already set replaces its reason. While any
-/// condition is set, `/samplers` and `/status` report the sampler's health as
-/// `degraded` (unless it is `failed`) and `rezolus status` exits 1. The caller
-/// logs the condition; this records it.
+/// condition is set on a running sampler (`active` or `pmu_limited`),
+/// `/samplers` and `/status` report its health as `degraded` (unless it is
+/// `failed`) and `rezolus status` exits 1. The caller logs the condition; this
+/// records it.
 pub fn set_runtime_degraded(name: &'static str, condition: &'static str, reason: String) {
     runtime()
         .lock()
