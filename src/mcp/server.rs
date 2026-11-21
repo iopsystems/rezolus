@@ -90,11 +90,8 @@ struct CachedReader {
     identity: std::collections::BTreeMap<String, String>,
     source: Arc<dyn metriken_query::MetricsSource>,
     /// What the analysis layer may trust this recording's metric names to
-    /// mean, as the OPEN determined it. Cached alongside the reader because
-    /// the reader cannot be asked afterwards: a recording selected out of a
-    /// `.rez` reports the endpoint name the caller chose as its `source`, so
-    /// re-deriving provenance from the reader would answer "foreign" for data
-    /// that is unambiguously the agent's.
+    /// mean, as `mcp::is_rezolus_recording` judged it at open. For a combined
+    /// reader, whether every joined recording is an agent's.
     provenance: crate::analysis::extract::Provenance,
     /// Whether `source` joins several recordings of one run
     /// (`Opened::combined`), which `extract_features` does not read.

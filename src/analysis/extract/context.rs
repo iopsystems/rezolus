@@ -4,14 +4,13 @@
 //! Subsystem attribution (see `extract::subsystem_of`) has one prerequisite
 //! and three tiers. The prerequisite: a `sampler` label is always trusted
 //! (agents >= 5.17.1 stamp it), but *inference from the metric name* is
-//! trusted only when the recording's `source` metadata is exactly
-//! `"rezolus"` (`extract()` computes this once as `infer` and threads it
+//! trusted only for a recording known to be a Rezolus agent's: the caller's
+//! `Provenance`, or failing that its identity layers' producer or a `source`
+//! of `rezolus` (`extract()` computes this once as `infer` and threads it
 //! through). A name like `cpu_usage` or `memory_free` proves nothing about
 //! a Prometheus-scraped or otherwise foreign recording — the name is just a
-//! string some other exporter happened to also use — so a missing, empty,
-//! or non-`"rezolus"` source disables inference entirely and every
-//! unlabeled metric is `unattributed`. rezolus-agent recordings (parquet
-//! and `.rez`, every agent version) always carry `source = "rezolus"`.
+//! string some other exporter happened to also use — so any other recording
+//! has inference disabled and every unlabeled metric is `unattributed`.
 //!
 //! When inference is trusted, the three tiers, tried in order, are: the
 //! `sampler` label (still checked first, redundantly with the

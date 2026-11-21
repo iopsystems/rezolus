@@ -185,20 +185,36 @@ fn build_fixture_with_histogram() -> (tempfile::TempDir, std::path::PathBuf) {
 /// Sampler attribution then has only the metric NAME to go on, which is
 /// exactly the inference `Provenance` decides whether to trust. With
 /// `self_telemetry`, the recording also holds the agent's `rezolus_rusage`
-/// counter, as an agent's recording does.
+/// counter, as an agent's recording does. With `producer`, it carries
+/// identity layers whose recorder entry names that producer, as
+/// metriken-recorder 0.6 and later write them.
 fn build_unlabeled_fixture(
     source: &str,
     self_telemetry: bool,
+    producer: Option<&str>,
 ) -> (tempfile::TempDir, std::path::PathBuf) {
-    let metadata: BTreeMap<String, String> = [
+    let mut metadata: BTreeMap<String, String> = [
         ("source".to_string(), source.to_string()),
         ("sampling_interval_ms".to_string(), "1000".to_string()),
     ]
     .into_iter()
     .collect::<BTreeMap<_, _>>();
-    let source_labels: BTreeMap<String, String> = [("source".to_string(), source.to_string())]
+    let mut source_labels: BTreeMap<String, String> = [("source".to_string(), source.to_string())]
         .into_iter()
         .collect::<BTreeMap<_, _>>();
+    if let Some(producer) = producer {
+        let mut entry = metriken_storage::layers::Entry::new("e0", "recorder");
+        entry.metadata = BTreeMap::from([("producer_name".to_string(), producer.to_string())]);
+        metriken_storage::layers::append(
+            &mut source_labels,
+            &mut metadata,
+            None,
+            &metriken_storage::layers::LegacyEvidence::default(),
+            metriken_storage::layers::Layer::Recorder,
+            entry,
+        )
+        .expect("append layer");
+    }
     let mut rows = Vec::new();
     for i in 0..121u64 {
         let ts = NS * (i + 1);
@@ -236,18 +252,11 @@ mod tests {
     use super::*;
     use crate::analysis::record::{AnalysisStatus, DetailTier, RECORD_SCHEMA_VERSION};
 
-    /// A `.rez` arm named by the user must still get sampler inference.
-    ///
-    /// `extract` decided whether to trust metric names by reading the
-    /// recording's `source` metadata, but for a recording inside a `.rez`
-    /// that field is the endpoint name the CALLER chose (`--endpoint
-    /// url,source=redis`), not a statement about who produced the data — a
-    /// `.rez` can only be written from a rezolus/msgpack endpoint. So
-    /// selecting such an arm silently attributed every unlabeled metric to
-    /// `unattributed`, degrading a path that used to be refused outright.
+    /// Given the same unlabeled recording, `RezolusAgent` trusts names and
+    /// `FromMetadata` with a foreign `source` does not.
     #[test]
-    fn a_rez_arm_named_by_the_user_still_infers_samplers() {
-        let (_dir, path) = build_unlabeled_fixture("redis", false);
+    fn provenance_alone_decides_name_trust() {
+        let (_dir, path) = build_unlabeled_fixture("redis", false, None);
         let reader = crate::mcp::open_source(&path).expect("open");
 
         let native = crate::analysis::extract::extract(
@@ -258,7 +267,7 @@ mod tests {
         assert_eq!(
             native.metrics[0].labels.get("sampler").map(String::as_str),
             Some("cpu_perf"),
-            "a .rez is a rezolus recording whatever the arm is called"
+            "RezolusAgent trusts the name whatever the source says"
         );
 
         // And the metadata-derived rule really does say otherwise here, so
@@ -314,7 +323,7 @@ mod tests {
     /// judged.
     #[test]
     fn a_foreign_recording_judges_no_absence_through_the_cli_open() {
-        let (_dir, path) = build_unlabeled_fixture("cachecannon", false);
+        let (_dir, path) = build_unlabeled_fixture("cachecannon", false, None);
         let (native, record) = extract_as_the_cli_does(&path);
         assert!(!native);
         assert!(!record.context.coverage.absence_known);
@@ -328,7 +337,7 @@ mod tests {
     /// agent's: its self-telemetry says so, and absence is judged.
     #[test]
     fn an_agent_recording_with_a_chosen_source_judges_absence_through_the_cli_open() {
-        let (_dir, path) = build_unlabeled_fixture("redis", true);
+        let (_dir, path) = build_unlabeled_fixture("redis", true, None);
         let (native, record) = extract_as_the_cli_does(&path);
         assert!(native);
         assert!(record.context.coverage.absence_known);
@@ -342,6 +351,16 @@ mod tests {
             Some("cpu_perf"),
             "names are trusted, so cpu_cycles is attributed"
         );
+    }
+
+    /// A 6.x agent recording named by the user: its identity layers name the
+    /// agent as producer, with no self-telemetry to go on.
+    #[test]
+    fn a_layered_agent_recording_judges_absence_through_the_cli_open() {
+        let (_dir, path) = build_unlabeled_fixture("redis", false, Some("rezolus"));
+        let (native, record) = extract_as_the_cli_does(&path);
+        assert!(native);
+        assert!(record.context.coverage.absence_known);
     }
 
     #[test]

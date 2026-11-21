@@ -63,7 +63,8 @@ pub(crate) struct Opened {
 /// (`REZOLUS_SELF_ANCHORS`), which a recording made with a user-chosen
 /// `source` (`record --endpoint url,source=redis` before identity layers)
 /// still carries. A Prometheus scrape, another producer's stream and an
-/// upgraded foreign parquet are none of these.
+/// upgraded foreign parquet are none of these. The viewers' template step is
+/// left out: no recording is classed as a service here.
 fn is_rezolus_recording(reader: &dyn metriken_query::MetricsSource) -> bool {
     let metadata: serde_json::Map<String, serde_json::Value> = reader
         .file_metadata()

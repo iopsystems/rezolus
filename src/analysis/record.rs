@@ -70,15 +70,13 @@ pub struct Context {
 ///
 /// Extraction attributes each metric to a subsystem via `extract::
 /// subsystem_of`. A `sampler` label (agents >= 5.17.1) is always
-/// authoritative. Absent a label, *name inference* only runs at all when
-/// the recording's `source` metadata is exactly `"rezolus"` (computed once
-/// per recording as `infer`): a metric named e.g. `cpu_usage` in a
+/// authoritative. Absent a label, *name inference* only runs for a recording
+/// known to be a Rezolus agent's (computed once per recording as `infer`;
+/// see `extract::Provenance`): a metric named e.g. `cpu_usage` in a
 /// Prometheus-scraped or otherwise foreign recording proves nothing about
 /// which sampler produced it — the name is just a string some unrelated
-/// exporter happened to reuse — so a missing, empty, or non-`"rezolus"`
-/// source disables inference and every unlabeled metric is `unattributed`.
-/// rezolus-agent recordings (parquet and `.rez`, every agent version)
-/// always carry `source = "rezolus"`.
+/// exporter happened to reuse — so for any other recording every unlabeled
+/// metric is `unattributed`.
 ///
 /// When inference is trusted, in order: a name in `extract::context::
 /// AMBIGUOUS_METRICS` (declared identically by more than one sampler, e.g.
