@@ -34,9 +34,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   also plots CPU Quota (Cores), `cpu.max` quota over period, for cgroups that
   have a quota. The Scheduler section plots `scheduler_discarded_samples` when
   the recording has it, with the plots that leave those samples out named in
-  its description. A recording made by an earlier 6.0 prerelease agent carries
-  that agent's section template, so the viewer shows these plots for it only
-  with `--registry-templates`. (#1186)
+  its description. A recording made by a 6.0.0-alpha.62 through alpha.162
+  agent carries that agent's section template, so `rezolus view` shows these
+  plots for it only with `--registry-templates`. (#1186)
 
 - **`gpu_nvidia` logs, once at startup, the NVML queries each GPU does not
   support.** For example `gpu_nvidia: GPU 0 does not support: gpm` on an

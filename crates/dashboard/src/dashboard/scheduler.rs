@@ -138,9 +138,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         discarded.describe(
             "Scheduler timing samples discarded because their two timestamps arrived out of \
              order across CPUs. While this is above zero, the Runqueue Latency, Running, Off CPU \
-             and Uninterruptible distributions, the Runqueue Wait and Uninterruptible Tasks \
-             plots, and the per-cgroup Runqueue Wait, Off-CPU Time and Uninterruptible Tasks \
-             plots leave those samples out.",
+             and Uninterruptible distributions, the Runqueue Wait plots and the Uninterruptible \
+             Sleep Tasks plot, and the per-cgroup Runqueue Wait, Off-CPU Time and \
+             Uninterruptible Tasks plots leave those samples out.",
         );
         discarded.plot_promql_full(
             Plot::counter(
