@@ -27,15 +27,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
-- **The Cgroups section plots scheduling and CPU bandwidth per cgroup.** Both
+- **The Cgroups section plots scheduling and CPU quota per cgroup.** Both
   sides gain Runqueue Wait (`cgroup_scheduler_runqueue_wait`), Off-CPU Time
-  (`cgroup_scheduler_offcpu`), Involuntary Context Switches
-  (`cgroup_scheduler_context_switch{kind="involuntary"}`) and Throttled
-  Periods %, the fraction of CFS bandwidth periods that were throttled. The
-  individual side also plots CPU Quota (Cores), `cpu.max` quota over period,
-  for cgroups that have a quota, beside Total CPU Cores. The Scheduler section
-  plots `scheduler_discarded_samples` when the recording has it: samples left
-  out of the latency distributions above it. (#1186)
+  (`cgroup_scheduler_offcpu`) and Involuntary Context Switches
+  (`cgroup_scheduler_context_switch{kind="involuntary"}`). The individual side
+  also plots CPU Quota (Cores), `cpu.max` quota over period, for cgroups that
+  have a quota. The Scheduler section plots `scheduler_discarded_samples` when
+  the recording has it, with the plots that leave those samples out named in
+  its description. A recording made by an earlier 6.0 prerelease agent carries
+  that agent's section template, so the viewer shows these plots for it only
+  with `--registry-templates`. (#1186)
 
 - **`gpu_nvidia` logs, once at startup, the NVML queries each GPU does not
   support.** For example `gpu_nvidia: GPU 0 does not support: gpm` on an

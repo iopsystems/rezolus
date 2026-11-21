@@ -68,14 +68,6 @@
             },
             {
               "kind": "counter",
-              "title": "Throttled Periods %",
-              "id": "aggregate-throttled-periods-pct",
-              "unit": "percentage",
-              "query": "sum(irate(cgroup_cpu_bandwidth_throttled_periods{name!~\"__SELECTED_CGROUPS__\"}[5m])) / sum(irate(cgroup_cpu_bandwidth_periods{name!~\"__SELECTED_CGROUPS__\"}[5m]))",
-              "percentage_range": true
-            },
-            {
-              "kind": "counter",
               "title": "Runqueue Wait",
               "id": "aggregate-runqueue-wait",
               "unit": "time",
@@ -515,15 +507,6 @@
               "style": "multi",
               "unit": "time",
               "query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
-            },
-            {
-              "kind": "counter",
-              "title": "Throttled Periods %",
-              "id": "individual-throttled-periods-pct",
-              "style": "multi",
-              "unit": "percentage",
-              "query": "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_periods{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_bandwidth_periods{name=~\"__SELECTED_CGROUPS__\"}[5m]))",
-              "percentage_range": true
             },
             {
               "kind": "gauge",

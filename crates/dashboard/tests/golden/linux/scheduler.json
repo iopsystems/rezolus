@@ -356,7 +356,7 @@
         },
         {
           "name": "Discarded Timing Samples",
-          "description": "Scheduler timing samples dropped because their two timestamps arrived out of order across CPUs. While this is above zero, the latency distributions above are computed without those samples.",
+          "description": "Scheduler timing samples discarded because their two timestamps arrived out of order across CPUs. While this is above zero, the Runqueue Latency, Running, Off CPU and Uninterruptible distributions, the Runqueue Wait and Uninterruptible Tasks plots, and the per-cgroup Runqueue Wait, Off-CPU Time and Uninterruptible Tasks plots leave those samples out.",
           "plots": [
             {
               "data": [],

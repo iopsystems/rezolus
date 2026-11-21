@@ -167,25 +167,6 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_cpu_throttled_time"),
     );
 
-    plot(
-        group,
-        Plot::counter(
-            "Throttled Periods %",
-            format!("{prefix}-throttled-periods-pct"),
-            Unit::Percentage,
-        )
-        .percentage_range(),
-        if individual {
-            format!(
-                "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_periods{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_bandwidth_periods{{{filter}}}[5m]))"
-            )
-        } else {
-            format!(
-                "sum(irate(cgroup_cpu_bandwidth_throttled_periods{{{filter}}}[5m])) / sum(irate(cgroup_cpu_bandwidth_periods{{{filter}}}[5m]))"
-            )
-        },
-    );
-
     // A quota summed over cgroups is not a limit on anything, so only the
     // individual side has it. `> 0` drops cgroups with no quota, which report
     // -1.
