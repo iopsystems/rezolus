@@ -81,6 +81,31 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
     );
 
+    let transmit_complete = has_metric(data, "network_transmit_complete");
+    let transmit_busy = has_metric(data, "network_transmit_busy");
+    if transmit_complete || transmit_busy {
+        let driver = traffic.subgroup("Driver Transmit");
+        driver.describe(
+            "Calls to a device's transmit function, one per buffer (a TSO buffer is counted \
+             once), summed over every device a packet passes through, so a packet sent through a \
+             veth and a bridge to a NIC is counted at each. Refused means the driver returned \
+             busy and the buffer was requeued (it is counted again when it is accepted), or the \
+             driver dropped it or returned an error. Linux only.",
+        );
+        if transmit_complete {
+            driver.plot_promql(
+                Plot::counter("Transmits Accepted", "transmit-complete", Unit::Rate),
+                "sum(irate(network_transmit_complete[5m]))".to_string(),
+            );
+        }
+        if transmit_busy {
+            driver.plot_promql(
+                Plot::counter("Transmits Refused", "transmit-busy", Unit::Rate),
+                "sum(irate(network_transmit_busy[5m]))".to_string(),
+            );
+        }
+    }
+
     view.group(traffic);
 
     // Each chart is drawn only when the recording has its metric: a macOS
@@ -174,6 +199,79 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 .with_unit_system(Unit::Bitrate),
             "sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         );
+    }
+
+    let calls = has_metric(data, "tcp_packets");
+    let sizes = has_metric(data, "tcp_size");
+    if calls || sizes {
+        let socket = tcp.subgroup("Socket Calls");
+        socket.describe(
+            "Calls to send on TCP sockets, with the bytes passed to each (including sends that \
+             failed or sent less), and receive-buffer cleanups after data was copied out, with \
+             the bytes copied. Receive counts one per read, except that a read that waits for \
+             more data (MSG_WAITALL, SO_RCVLOWAT) can be counted more than once. These count \
+             calls, not segments: one send can become many segments, and one read can return \
+             several. Linux only.",
+        );
+        if calls {
+            socket.plot_promql(
+                Plot::counter("Send Calls", "tcp-send-calls", Unit::Rate),
+                "sum(irate(tcp_packets{direction=\"transmit\"}[5m]))".to_string(),
+            );
+            socket.plot_promql(
+                Plot::counter("Read Calls", "tcp-read-calls", Unit::Rate),
+                "sum(irate(tcp_packets{direction=\"receive\"}[5m]))".to_string(),
+            );
+        }
+        if sizes {
+            for (title, id, direction) in [
+                ("Send Size", "tcp-send-size", "transmit"),
+                ("Read Size", "tcp-read-size", "receive"),
+            ] {
+                socket.plot_promql(
+                    Plot::histogram(title, id, Unit::Bytes, HistogramView::Percentiles)
+                        .with_log_scale(true),
+                    format!("tcp_size{{direction=\"{direction}\"}}"),
+                );
+            }
+        }
+    }
+
+    for (name, title, id, metric, description) in [
+        (
+            "Round-Trip Time",
+            "Smoothed RTT",
+            "tcp-srtt",
+            "tcp_srtt",
+            "The kernel's smoothed round-trip time estimate for a connection, sampled each time \
+             an established connection processes received data or ACKs, so connections receiving \
+             more weigh more.",
+        ),
+        (
+            "RTT Variation",
+            "RTT Variation",
+            "tcp-jitter",
+            "tcp_jitter",
+            "The kernel's mean deviation of a connection's round-trip time (mdev), sampled each \
+             time an established connection processes received data or ACKs.",
+        ),
+    ] {
+        if has_metric(data, metric) {
+            let rtt = tcp.subgroup(name);
+            rtt.describe(description);
+            rtt.plot_promql(
+                Plot::gauge(format!("Mean {title}"), format!("{id}-mean"), Unit::Time)
+                    .with_unit_system(Unit::Time)
+                    .with_axis_label("Mean"),
+                format!("histogram_mean({metric})"),
+            );
+            rtt.plot_promql_full(
+                Plot::histogram_latency(title, id)
+                    .with_axis_label("Time")
+                    .with_unit_system(Unit::Time),
+                metric.to_string(),
+            );
+        }
     }
 
     if has_metric(data, "tcp_packet_latency") {

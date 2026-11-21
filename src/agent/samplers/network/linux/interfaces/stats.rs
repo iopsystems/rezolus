@@ -50,14 +50,14 @@ pub static NETWORK_DROP: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_busy",
-    description = "Packets encountering retryable device busy status. High rates indicate transmit path backpressure.",
+    description = "Calls to a network device's transmit function that returned non-zero: busy (the buffer is requeued and counted again when accepted), dropped, or an error; one per buffer, summed over every device a packet passes through",
     metadata = { unit = "packets", acq_group = "network_interfaces_counters" }
 )]
 pub static NETWORK_TX_BUSY: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_complete",
-    description = "Packets successfully transmitted by the driver. Compare with network_transmit_packets to detect transmission issues.",
+    description = "Calls to a network device's transmit function that it accepted, one per buffer, summed over every device a packet passes through",
     metadata = { unit = "packets", acq_group = "network_interfaces_counters" }
 )]
 pub static NETWORK_TX_COMPLETE: LazyCounter = LazyCounter::new(Counter::default);
