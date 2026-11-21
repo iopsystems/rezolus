@@ -100,6 +100,78 @@
             {
               "data": [],
               "opts": {
+                "title": "Throttled Periods %",
+                "id": "aggregate-throttled-periods-pct",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cgroup_cpu_bandwidth_throttled_periods{name!~\"__SELECTED_CGROUPS__\"}[5m])) / sum(irate(cgroup_cpu_bandwidth_periods{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Runqueue Wait",
+                "id": "aggregate-runqueue-wait",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cgroup_scheduler_runqueue_wait{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Off-CPU Time",
+                "id": "aggregate-offcpu-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cgroup_scheduler_offcpu{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Involuntary Context Switches",
+                "id": "aggregate-involuntary-cswitch",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cgroup_scheduler_context_switch{kind=\"involuntary\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
                 "title": "Uninterruptible Tasks",
                 "id": "aggregate-uninterruptible-tasks",
                 "type": "delta_counter",
@@ -1130,6 +1202,100 @@
                 "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Throttled Periods %",
+                "id": "individual-throttled-periods-pct",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_periods{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_bandwidth_periods{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU Quota (Cores)",
+                "id": "individual-cpu-quota",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) ((cgroup_cpu_bandwidth_quota{name=~\"__SELECTED_CGROUPS__\"} > 0) / cgroup_cpu_bandwidth_period_duration{name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Runqueue Wait",
+                "id": "individual-runqueue-wait",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (irate(cgroup_scheduler_runqueue_wait{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Off-CPU Time",
+                "id": "individual-offcpu-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (irate(cgroup_scheduler_offcpu{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Involuntary Context Switches",
+                "id": "individual-involuntary-cswitch",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (irate(cgroup_scheduler_context_switch{kind=\"involuntary\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
             {
               "data": [],

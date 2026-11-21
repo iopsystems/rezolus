@@ -170,6 +170,72 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     plot(
         group,
         Plot::counter(
+            "Throttled Periods %",
+            format!("{prefix}-throttled-periods-pct"),
+            Unit::Percentage,
+        )
+        .percentage_range(),
+        if individual {
+            format!(
+                "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_periods{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_bandwidth_periods{{{filter}}}[5m]))"
+            )
+        } else {
+            format!(
+                "sum(irate(cgroup_cpu_bandwidth_throttled_periods{{{filter}}}[5m])) / sum(irate(cgroup_cpu_bandwidth_periods{{{filter}}}[5m]))"
+            )
+        },
+    );
+
+    // A quota summed over cgroups is not a limit on anything, so only the
+    // individual side has it. `> 0` drops cgroups with no quota, which report
+    // -1.
+    if individual {
+        plot(
+            group,
+            Plot::gauge("CPU Quota (Cores)", "individual-cpu-quota", Unit::Count),
+            format!(
+                "sum by (name) ((cgroup_cpu_bandwidth_quota{{{filter}}} > 0) / cgroup_cpu_bandwidth_period_duration{{{filter}}})"
+            ),
+        );
+    }
+
+    plot(
+        group,
+        Plot::counter(
+            "Runqueue Wait",
+            format!("{prefix}-runqueue-wait"),
+            Unit::Time,
+        ),
+        rate("cgroup_scheduler_runqueue_wait"),
+    );
+
+    plot(
+        group,
+        Plot::counter("Off-CPU Time", format!("{prefix}-offcpu-time"), Unit::Time),
+        rate("cgroup_scheduler_offcpu"),
+    );
+
+    plot(
+        group,
+        Plot::counter(
+            "Involuntary Context Switches",
+            format!("{prefix}-involuntary-cswitch"),
+            Unit::Rate,
+        ),
+        if individual {
+            format!(
+                "sum by (name) (irate(cgroup_scheduler_context_switch{{kind=\"involuntary\",{filter}}}[5m]))"
+            )
+        } else {
+            format!(
+                "sum(irate(cgroup_scheduler_context_switch{{kind=\"involuntary\",{filter}}}[5m]))"
+            )
+        },
+    );
+
+    plot(
+        group,
+        Plot::counter(
             "Uninterruptible Tasks",
             format!("{prefix}-uninterruptible-tasks"),
             Unit::Count,

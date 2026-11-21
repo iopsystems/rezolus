@@ -353,6 +353,30 @@
               "promql_query": "sum by (id) (irate(scheduler_context_switch[5m]))"
             }
           ]
+        },
+        {
+          "name": "Discarded Timing Samples",
+          "description": "Scheduler timing samples dropped because their two timestamps arrived out of order across CPUs. While this is above zero, the latency distributions above are computed without those samples.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Discarded Samples",
+                "id": "scheduler-discarded-samples",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(scheduler_discarded_samples[5m]))",
+              "width": "full"
+            }
+          ]
         }
       ]
     }

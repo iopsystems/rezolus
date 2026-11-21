@@ -172,6 +172,27 @@
               }
             }
           ]
+        },
+        {
+          "name": "Discarded Timing Samples",
+          "description": "Scheduler timing samples dropped because their two timestamps arrived out of order across CPUs. While this is above zero, the latency distributions above are computed without those samples.",
+          "plots": [
+            {
+              "when": {
+                "has_counter": "scheduler_discarded_samples"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Discarded Samples",
+                  "id": "scheduler-discarded-samples",
+                  "unit": "rate",
+                  "query": "sum(irate(scheduler_discarded_samples[5m]))",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
         }
       ]
     }

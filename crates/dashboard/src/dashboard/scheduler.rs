@@ -133,6 +133,23 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
     }
 
+    if data.has_counter("scheduler_discarded_samples") {
+        let discarded = scheduler.subgroup("Discarded Timing Samples");
+        discarded.describe(
+            "Scheduler timing samples dropped because their two timestamps arrived out of \
+             order across CPUs. While this is above zero, the latency distributions above are \
+             computed without those samples.",
+        );
+        discarded.plot_promql_full(
+            Plot::counter(
+                "Discarded Samples",
+                "scheduler-discarded-samples",
+                Unit::Rate,
+            ),
+            "sum(irate(scheduler_discarded_samples[5m]))".to_string(),
+        );
+    }
+
     view.group(scheduler);
 
     view
