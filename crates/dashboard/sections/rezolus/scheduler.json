@@ -172,6 +172,27 @@
               }
             }
           ]
+        },
+        {
+          "name": "Discarded Timing Samples",
+          "description": "Scheduler timing samples discarded because their two timestamps arrived out of order across CPUs. While this is above zero, the Runqueue Latency, Running, Off CPU and Uninterruptible distributions, the Runqueue Wait plots and the Uninterruptible Sleep Tasks plot, and the per-cgroup Runqueue Wait, Off-CPU Time and Uninterruptible Tasks plots leave those samples out.",
+          "plots": [
+            {
+              "when": {
+                "has_counter": "scheduler_discarded_samples"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Discarded Samples",
+                  "id": "scheduler-discarded-samples",
+                  "unit": "rate",
+                  "query": "sum(irate(scheduler_discarded_samples[5m]))",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
         }
       ]
     }

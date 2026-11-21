@@ -27,6 +27,17 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **The Cgroups section plots scheduling and CPU quota per cgroup.** Both
+  sides gain Runqueue Wait (`cgroup_scheduler_runqueue_wait`), Off-CPU Time
+  (`cgroup_scheduler_offcpu`) and Involuntary Context Switches
+  (`cgroup_scheduler_context_switch{kind="involuntary"}`). The individual side
+  also plots CPU Quota (Cores), `cpu.max` quota over period, for cgroups that
+  have a quota. The Scheduler section plots `scheduler_discarded_samples` when
+  the recording has it, with the plots that leave those samples out named in
+  its description. A recording from an agent that predates this change and
+  sends its section template (6.0.0-alpha.62 on) shows these plots only with
+  `rezolus view --registry-templates`. (#1186)
+
 - **`cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of
   online CPUs in `/sys/devices/system/cpu/isolated`** (`isolcpus=`, `domain`
   flag). The load balancer places no work on them, yet `cpu_cores` counts

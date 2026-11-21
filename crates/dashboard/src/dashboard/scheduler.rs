@@ -133,6 +133,25 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
     }
 
+    if data.has_counter("scheduler_discarded_samples") {
+        let discarded = scheduler.subgroup("Discarded Timing Samples");
+        discarded.describe(
+            "Scheduler timing samples discarded because their two timestamps arrived out of \
+             order across CPUs. While this is above zero, the Runqueue Latency, Running, Off CPU \
+             and Uninterruptible distributions, the Runqueue Wait plots and the Uninterruptible \
+             Sleep Tasks plot, and the per-cgroup Runqueue Wait, Off-CPU Time and \
+             Uninterruptible Tasks plots leave those samples out.",
+        );
+        discarded.plot_promql_full(
+            Plot::counter(
+                "Discarded Samples",
+                "scheduler-discarded-samples",
+                Unit::Rate,
+            ),
+            "sum(irate(scheduler_discarded_samples[5m]))".to_string(),
+        );
+    }
+
     view.group(scheduler);
 
     view
