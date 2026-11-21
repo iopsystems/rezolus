@@ -159,7 +159,9 @@ brayniac reviewed the draft on GitHub. Decisions and fixes:
   and a reason for each (ambiguous attachment, unknown root, blocking mount on
   the path), or the number of possible roots when there is not one. The sweep
   warns when the reasons change. A runtime degraded status in `rezolus status`
-  needs a status API the agent does not have (#1208).
+  needs a status API the agent does not have (#1208). Resolved by #1208:
+  `stuck_sweep` and `unresolved_mounts` are runtime conditions in sampler
+  status.
 - **Stuck sweeps are visible, and cannot hang startup.** A held in-flight latch
   now returns before `last_read` advances, so `last_read` times the running
   sweep, and a sweep running past three intervals warns once. The first sweep

@@ -67,9 +67,13 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
             (SamplerState::PmuLimited { cpus, of }, _) => {
                 degraded += 1;
                 problem = true;
+                let mut d = vec![format!("{cpus} of {of} cpus")];
+                d.extend(runtime_reasons(s));
                 lines.push_str(&format!(
-                    "  {:<22} {:<12} {cpus} of {of} cpus\n",
-                    s.name, "pmu-limited"
+                    "  {:<22} {:<12} {}\n",
+                    s.name,
+                    "pmu-limited",
+                    d.join(", ")
                 ));
             }
             // Not a fault: the machine or kernel cannot do this. Counted as
@@ -114,6 +118,7 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
                             p.error.as_deref().unwrap_or("not attached")
                         )
                     })
+                    .chain(runtime_reasons(s))
                     .collect::<Vec<_>>()
                     .join(", ");
                 lines.push_str(&format!("  {:<22} {:<12} {}\n", s.name, "degraded", d));
@@ -139,6 +144,12 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
     (format!("{tally}{lines}"), problem)
 }
 
+/// The reasons of the conditions a running sampler reported, in the order
+/// the agent sent them.
+fn runtime_reasons(s: &SamplerStatus) -> impl Iterator<Item = String> + '_ {
+    s.runtime_degraded.iter().map(|c| c.reason.clone())
+}
+
 pub fn command() -> Command {
     Command::new("status")
         .about("Fetch and display agent status (version, uptime, sampler health)")
@@ -149,7 +160,8 @@ pub fn command() -> Command {
              Prints one header line — version, uptime\n\
              and the snapshot TTL — then a tally of samplers by state, and one line for each\n\
              sampler that is NOT healthy, with the reason.\n\n\
-             States: healthy, degraded (running, but a probe or some CPUs are missing),\n\
+             States: healthy, degraded (running, but a probe or some CPUs are missing,\n\
+             or the sampler reports a condition such as a stuck read),\n\
              failed (not running), unsupported (this kernel or machine cannot run it),\n\
              pmu-limited (running on fewer CPUs than asked, because PMU counters are\n\
              scarce) and pmu-starved (no counters left for it at all). Disabled samplers\n\
@@ -246,6 +258,7 @@ mod tests {
             state,
             health,
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         }
     }
 
@@ -376,12 +389,14 @@ mod tests {
                 state: SamplerState::Active,
                 health: Some(SamplerHealth::Healthy),
                 programs: vec![],
+                runtime_degraded: Vec::new(),
             },
             SamplerStatus {
                 name: "network_interfaces".into(),
                 state: SamplerState::Active,
                 health: Some(SamplerHealth::Degraded),
                 programs: vec![prog(ProbeVerdict::Broken, None, "ena_tx_timeout")],
+                runtime_degraded: Vec::new(),
             },
         ];
         let (text, problem) = render_samplers(&samplers);
@@ -390,6 +405,38 @@ mod tests {
         assert!(text.contains("network_interfaces"));
         assert!(text.contains("ena_tx_timeout"));
         assert!(!text.contains("tcp_traffic"));
+    }
+
+    #[test]
+    fn a_runtime_condition_is_shown_and_sets_problem() {
+        use crate::agent::sampler_status::RuntimeCondition;
+        let condition = |reason: &str| RuntimeCondition {
+            condition: "stuck_sweep".into(),
+            reason: reason.into(),
+        };
+        let mut degraded = sampler(
+            "filesystem",
+            SamplerState::Active,
+            Some(SamplerHealth::Degraded),
+        );
+        degraded.runtime_degraded = vec![condition("a sweep has been running for more than 3s")];
+        let mut limited = sampler(
+            "cpu_perf",
+            SamplerState::PmuLimited { cpus: 2, of: 4 },
+            Some(SamplerHealth::Degraded),
+        );
+        limited.runtime_degraded = vec![condition("read stalled")];
+        let (text, problem) = render_samplers(&[degraded, limited]);
+        assert!(problem);
+        assert!(
+            text.contains("0 healthy, 0 unsupported, 2 degraded, 0 failed"),
+            "{text}"
+        );
+        assert!(
+            text.contains("degraded     a sweep has been running for more than 3s"),
+            "{text}"
+        );
+        assert!(text.contains("2 of 4 cpus, read stalled"), "{text}");
     }
 
     #[test]
@@ -403,6 +450,7 @@ mod tests {
                 Some("CPU time by category"),
                 "cpuacct_account_field_kprobe",
             )],
+            runtime_degraded: Vec::new(),
         }];
         let (text, problem) = render_samplers(&samplers);
         assert!(!problem);
@@ -434,6 +482,7 @@ mod tests {
                     "xfs_log_force_fexit",
                 ),
             ],
+            runtime_degraded: Vec::new(),
         }];
         let (text, problem) = render_samplers(&samplers);
         assert!(!problem);
@@ -463,6 +512,7 @@ mod tests {
             state: SamplerState::Active,
             health: Some(SamplerHealth::Unsupported),
             programs: vec![a, b],
+            runtime_degraded: Vec::new(),
         }];
         let (text, _) = render_samplers(&samplers);
         assert!(
