@@ -4,6 +4,9 @@
 //! byte gauges. Tracking allocation events would miss existing allocations and
 //! require hooks across anonymous, file, slab and socket accounting hot paths.
 //! Read the kernel's authoritative cgroupfs gauges instead (principle 15).
+//! The same per-cgroup sweep reads memory.max, memory.high and the
+//! memory.events counters, which the kernel keeps, so events before the agent
+//! started are included.
 //! Walking the hierarchy and reading memory.stat can trigger kernel accounting
 //! work, so throttle independently of scrapes and run off-cycle on the blocking
 //! pool (principle 17). The 60s default follows drivehealth's slow-read model;
@@ -478,6 +481,13 @@ mod tests {
             std::fs::write(path.join("memory.current"), "8192").unwrap();
             std::fs::write(path.join("memory.swap.current"), "0").unwrap();
             std::fs::write(path.join("memory.stat"), &stat).unwrap();
+            std::fs::write(path.join("memory.max"), "max").unwrap();
+            std::fs::write(path.join("memory.high"), "1073741824").unwrap();
+            std::fs::write(
+                path.join("memory.events"),
+                "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+            )
+            .unwrap();
         }
         let mut state = State::default();
         for _ in 0..5 {
@@ -718,8 +728,8 @@ mod tests {
         assert_eq!(CGROUP_MEMORY_STAT[0].value(anon), Some(4096));
         assert_eq!(CGROUP_MEMORY_USAGE.value(state.slots[&parent]), Some(16384));
 
-        // All thirty columns must join to the same two cgroup occupants in
-        // the long stream. In particular, kinds belong to columns, not slots.
+        // Every column (gauges and counters) must join to the same two cgroup
+        // occupants in the long stream. In particular, kinds belong to columns, not slots.
         use metriken_exposition::group_builder::StreamGroup;
         let groups = registry.stream_groups();
         let group = groups
@@ -732,12 +742,25 @@ mod tests {
         assert_eq!(group.occupants.len(), 2);
         assert_eq!(group.columns.gauges.len(), GAUGES.len() + KINDS.len());
         assert_eq!(group.columns.counters.len(), EVENTS.len());
-        let child_values = &group
+        let child = group
             .occupants
             .iter()
             .find(|o| o.labels["name"] == ".../user.slice/service.slice/worker.service")
-            .unwrap()
-            .gauges;
+            .unwrap();
+        for (column, value) in group.columns.counters.iter().zip(&child.counters) {
+            assert_eq!(column.metadata["metric"], "cgroup_memory_events");
+            // A zero counter is a value, and a field the file lacks is absent.
+            let want = match column.metadata["kind"].as_str() {
+                "low" => Some(0),
+                "high" => Some(5),
+                "max" => Some(2),
+                "oom" | "oom_kill" => Some(1),
+                "oom_group_kill" => None,
+                kind => panic!("unexpected kind: {kind}"),
+            };
+            assert_eq!(*value, want, "{column:?}");
+        }
+        let child_values = &child.gauges;
         for (column, value) in group.columns.gauges.iter().zip(child_values) {
             let want = match column.metadata["metric"].as_str() {
                 "cgroup_memory_usage" => Some(8192),
@@ -775,6 +798,9 @@ mod tests {
         assert_eq!(state.slots[&replacement], slot);
         assert_eq!(CGROUP_MEMORY_USAGE.value(slot), Some(128));
         assert_eq!(CGROUP_MEMORY_STAT[0].value(anon), None);
+        // The previous occupant's limits and events do not carry over.
+        assert_eq!(CGROUP_MEMORY_MAX.value(slot), None);
+        assert_eq!(event("high").value(slot), None);
         assert_eq!(
             CGROUP_MEMORY_USAGE.load_metadata(slot).unwrap()["name"],
             ".../user.slice/service.slice/replacement.service"

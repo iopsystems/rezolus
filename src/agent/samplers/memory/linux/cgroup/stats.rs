@@ -93,8 +93,9 @@ memory_stats! {
     MEMORY_HUGETLB => "hugetlb",
 }
 
-// memory.events, which counts events in the cgroup and its descendants
-// (memory.events.local counts the cgroup alone).
+// memory.events, which counts events in the cgroup and its descendants unless
+// cgroupfs is mounted with memory_localevents (memory.events.local counts the
+// cgroup alone).
 macro_rules! memory_events {
     ($($metric:ident => $kind:literal),+ $(,)?) => {
         #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -105,7 +106,7 @@ macro_rules! memory_events {
             #[metric(
                 name = "cgroup_memory_events",
                 description = "Memory events in the cgroup and its descendants (memory.events), by kind",
-                metadata = { acq_group = "memory_cgroup_sweep", kind = $kind }
+                metadata = { unit = "events", acq_group = "memory_cgroup_sweep", kind = $kind }
             )]
             pub static $metric: CounterGroup = CounterGroup::new(MAX_CGROUPS);
         )+

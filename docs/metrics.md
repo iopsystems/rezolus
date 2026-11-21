@@ -1334,7 +1334,7 @@ finer time resolution.
 
 The agent caches each completed acquisition across both wide snapshots and
 long-format stream builds. Binary snapshots also reuse the group's encoded
-MessagePack bytes. Full `/metrics/binary` responses still include up to 30
+MessagePack bytes. Full `/metrics/binary` responses still include up to 38
 series per cgroup and copy/transmit the entire schema; caching reduces CPU
 cost, not the size of that endpoint's response. The native stream sends
 schemas/occupants as needed and deduplicates unchanged acquisition windows.
@@ -1388,23 +1388,6 @@ The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `zswap`, `zswapped`, and `hugetlb`, when exposed by the running kernel.
 Page counts and event counters in `memory.stat` are excluded.
 
-`cgroup_memory_events` has `kind` `low`, `high`, `max`, `oom`, `oom_kill` and
-`oom_group_kill`, when exposed by the running kernel. They count events in the
-cgroup and its descendants (`memory.events`, not `memory.events.local`). As the
-kernel's cgroup v2 documentation defines them: `low` counts reclaims of the
-cgroup under high memory pressure while its usage was below `memory.low`;
-`high` counts times its processes were throttled into direct reclaim because
-usage passed `memory.high`; `max` counts times usage was about to pass
-`memory.max`; `oom` counts times usage reached the limit and an allocation was
-about to fail; `oom_kill` counts processes in the cgroup killed by any kind of
-OOM killer; `oom_group_kill` counts group OOMs.
-A limit of -1 must be filtered before dividing by it, for example usage
-against the limit for cgroups that have one:
-
-```promql
-cgroup_memory_usage / (cgroup_memory_max > 0)
-```
-
 These are overlapping views, not additive buckets: `file` includes shared
 memory/tmpfs (`shmem`), `kernel` includes slab/page tables/stacks, and dirty,
 mapped, active/inactive, and huge-page fields describe subsets. There is no
@@ -1417,6 +1400,25 @@ avoid that double-counting. For example:
 ```promql
 cgroup_memory_usage{name="/system.slice/example.service"}
 cgroup_memory_stat{name="/system.slice/example.service",kind="anon"}
+```
+
+`cgroup_memory_events` has `kind` `low`, `high`, `max`, `oom`, `oom_kill` and
+`oom_group_kill`, when exposed by the running kernel. They count events in the
+cgroup and its descendants (`memory.events`, not `memory.events.local`), unless
+cgroupfs is mounted with `memory_localevents`, in which case `memory.events`
+counts the cgroup alone. As the
+kernel's cgroup v2 documentation defines them: `low` counts reclaims of the
+cgroup under high memory pressure while its usage was below `memory.low`;
+`high` counts times its processes were throttled into direct reclaim because
+usage passed `memory.high`; `max` counts times usage was about to pass
+`memory.max`; `oom` counts times usage reached the limit and an allocation was
+about to fail; `oom_kill` counts processes in the cgroup killed by any kind of
+OOM killer; `oom_group_kill` counts group OOMs.
+A limit of -1 must be filtered before dividing by it, for example usage
+against the limit for cgroups that have one:
+
+```promql
+cgroup_memory_usage / (cgroup_memory_max > 0)
 ```
 
 See the [kernel memory controller documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
