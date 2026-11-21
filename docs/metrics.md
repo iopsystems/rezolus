@@ -219,14 +219,17 @@ normalizing other CPU metrics.
 `cpu_isolated` counts the online CPUs listed in
 `/sys/devices/system/cpu/isolated`: those named by `isolcpus=` with the
 `domain` flag, which is the default. The scheduler's load balancer places no
-work on them, but they stay in every task's affinity mask, so `nproc`,
-`taskset` and `/proc/cpuinfo` count them. `cpu_cores - cpu_isolated` is the
+work on them. The kernel removes them from init's affinity mask at boot, but a
+task's mask can include them again (on a systemd host `nproc` and
+`taskset -p` have been seen to report all CPUs), and `/proc/cpuinfo` lists
+them. `cpu_cores - cpu_isolated` is the
 number of online CPUs that ordinarily scheduled work can run on; on a host
 with `isolcpus=0-23,28-55,60-63` and 64 CPUs that is 8. It is 0 on a host with
-no isolated CPUs, and absent where the kernel has no `isolated` file and on
-macOS. It does not account for a cgroup's `cpuset.cpus.effective` or CPU
-quota. Whether cpuset isolated partitions appear in the `isolated` file
-has not been checked. The dashboards still divide by `cpu_cores`.
+no isolated CPUs, absent if the agent cannot open
+`/sys/devices/system/cpu/isolated`, and absent on macOS. It does not account
+for a cgroup's `cpuset.cpus.effective` or CPU quota. CPUs in a cpuset isolated
+partition are not counted; cgroup v2 lists those in the root cgroup's
+`cpuset.cpus.isolated`. The dashboards still divide by `cpu_cores`.
 
 On macOS there is no `cpu_cores` sampler; the `cpu_usage` sampler sets
 `cpu_cores`.

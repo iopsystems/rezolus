@@ -12,9 +12,9 @@ mod stats;
 use stats::*;
 
 /// The kernel's list of CPUs isolated from scheduler load balancing: those
-/// named by `isolcpus=` with the `domain` flag (the default). A task's affinity
-/// mask still includes them, so `nproc` and `taskset` count them, but the load
-/// balancer places no work there.
+/// named by `isolcpus=` with the `domain` flag (the default). The load balancer
+/// places no work there. The kernel removes them from init's affinity mask at
+/// boot, but a task's mask can include them again, so `nproc` can count them.
 const ISOLATED: &str = "/sys/devices/system/cpu/isolated";
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -23,7 +23,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     let online = std::fs::File::open("/sys/devices/system/cpu/online")?;
-    // Absent on a kernel without the file; `cpu_isolated` is then never set.
+    // When the file cannot be opened, `cpu_isolated` is never set.
     let isolated = std::fs::File::open(ISOLATED).ok();
 
     Ok(Some(Box::new(Cores {
