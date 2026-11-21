@@ -34,12 +34,14 @@ use super::MAX_GPUS;
 // archetype, device-major by a property of the source (the perf group fd and
 // the render node belong to that one device and are reached together).
 //
-// That single read section nonetheless needs TWO groups, because the metrics it
-// fills live in two different index spaces:
+// That single read section needs three groups, because the metrics it fills
+// have three member sets:
 //
 //   - per-engine metrics are indexed by `engine_index(gpu, engine)`, a
 //     `MAX_ENGINES`-wide block per GPU;
-//   - per-GPU metrics (frequency, VRAM) are indexed by the plain GPU id.
+//   - per-GPU frequency metrics are indexed by the plain GPU id;
+//   - VRAM gauges are indexed by GPU id too, but only a GPU with VRAM has
+//     them (see `GPU_INTEL_PMU_MEMORY_ACQ`).
 //
 // A group's member set is applied verbatim to every metric tagged with it, so
 // one shared group would declare each engine index as a GPU id too. On a
@@ -48,10 +50,11 @@ use super::MAX_GPUS;
 // only real entries carry — which is exactly what the member-set mechanism
 // exists to prevent. Caught on hardware, not in review.
 //
-// Both are stamped from the same bracket, so the two windows are identical and
-// nothing is over-stated by the split.
+// The three brackets are opened one after another before the sweep and closed
+// after it, so each window covers the whole sweep; they differ by the
+// nanoseconds between consecutive `acquire()` calls.
 //
-// Single writer for both: the `spawn_blocking` task dispatched from
+// Single writer for all three: the `spawn_blocking` task dispatched from
 // `Sampler::refresh`, which is guarded against overlapping itself.
 
 /// Window for the per-engine metrics, whose members are [`super::engine_index`]
