@@ -68,6 +68,27 @@
             },
             {
               "kind": "counter",
+              "title": "Runqueue Wait",
+              "id": "aggregate-runqueue-wait",
+              "unit": "time",
+              "query": "sum(irate(cgroup_scheduler_runqueue_wait{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Off-CPU Time",
+              "id": "aggregate-offcpu-time",
+              "unit": "time",
+              "query": "sum(irate(cgroup_scheduler_offcpu{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Involuntary Context Switches",
+              "id": "aggregate-involuntary-cswitch",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_scheduler_context_switch{kind=\"involuntary\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
               "title": "Uninterruptible Tasks",
               "id": "aggregate-uninterruptible-tasks",
               "unit": "count",
@@ -486,6 +507,38 @@
               "style": "multi",
               "unit": "time",
               "query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "gauge",
+              "title": "CPU Quota (Cores)",
+              "id": "individual-cpu-quota",
+              "style": "multi",
+              "unit": "count",
+              "query": "sum by (name) ((cgroup_cpu_bandwidth_quota{name=~\"__SELECTED_CGROUPS__\"} > 0) / cgroup_cpu_bandwidth_period_duration{name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "counter",
+              "title": "Runqueue Wait",
+              "id": "individual-runqueue-wait",
+              "style": "multi",
+              "unit": "time",
+              "query": "sum by (name) (irate(cgroup_scheduler_runqueue_wait{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Off-CPU Time",
+              "id": "individual-offcpu-time",
+              "style": "multi",
+              "unit": "time",
+              "query": "sum by (name) (irate(cgroup_scheduler_offcpu{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Involuntary Context Switches",
+              "id": "individual-involuntary-cswitch",
+              "style": "multi",
+              "unit": "rate",
+              "query": "sum by (name) (irate(cgroup_scheduler_context_switch{kind=\"involuntary\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
             {
               "kind": "counter",
