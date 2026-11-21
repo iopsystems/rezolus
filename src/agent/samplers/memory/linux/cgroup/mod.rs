@@ -747,6 +747,8 @@ mod tests {
             .iter()
             .find(|o| o.labels["name"] == ".../user.slice/service.slice/worker.service")
             .unwrap();
+        assert_eq!(child.counters.len(), EVENTS.len());
+        assert_eq!(child.gauges.len(), GAUGES.len() + KINDS.len());
         for (column, value) in group.columns.counters.iter().zip(&child.counters) {
             assert_eq!(column.metadata["metric"], "cgroup_memory_events");
             // A zero counter is a value, and a field the file lacks is absent.
@@ -790,6 +792,10 @@ mod tests {
         assert_eq!(CGROUP_MEMORY_USAGE.value(slot), None);
         assert!(CGROUP_MEMORY_USAGE.load_metadata(slot).is_none());
         assert!(CGROUP_MEMORY_STAT[0].load_metadata(anon).is_none());
+        // Removal clears every group, the limits and events included.
+        assert_eq!(CGROUP_MEMORY_MAX.value(slot), None);
+        assert_eq!(event("high").value(slot), None);
+        assert!(event("high").load_metadata(slot).is_none());
 
         let replacement = parent.join("replacement.service");
         std::fs::create_dir(&replacement).unwrap();
