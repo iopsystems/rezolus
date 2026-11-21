@@ -4,6 +4,9 @@
 //! byte gauges. Tracking allocation events would miss existing allocations and
 //! require hooks across anonymous, file, slab and socket accounting hot paths.
 //! Read the kernel's authoritative cgroupfs gauges instead (principle 15).
+//! The same per-cgroup sweep reads memory.max, memory.high and the
+//! memory.events counters, which the kernel keeps, so events before the agent
+//! started are included.
 //! Walking the hierarchy and reading memory.stat can trigger kernel accounting
 //! work, so throttle independently of scrapes and run off-cycle on the blocking
 //! pool (principle 17). The 60s default follows drivehealth's slow-read model;
@@ -18,7 +21,7 @@ const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::*;
 use anyhow::Context;
-use metriken::GaugeGroup;
+use metriken::{CounterGroup, GaugeGroup};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -190,20 +193,11 @@ impl State {
                     .take(MAX_CGROUPS - retained),
             );
         let readings: Vec<_> = targets
-            .map(|(path, id)| {
-                let total = read_bytes(&path.join("memory.current"));
-                let swap = read_bytes(&path.join("memory.swap.current"));
-                let values = std::fs::read_to_string(path.join("memory.stat"))
-                    .map(|data| parse_stat(&data))
-                    .unwrap_or([None; KINDS.len()]);
-                (path, *id, total, swap, values)
-            })
+            .map(|(path, id)| (path, *id, Reading::read(path)))
             .collect();
         let count = readings
             .iter()
-            .filter(|(_, _, total, swap, values)| {
-                total.is_some() || swap.is_some() || values.iter().any(Option::is_some)
-            })
+            .filter(|(_, _, reading)| reading.any())
             .count();
         if count == 0 && !paths.is_empty() {
             return Err(std::io::Error::other("all cgroup memory reads failed"));
@@ -223,7 +217,7 @@ impl State {
         });
         let used: HashSet<usize> = self.slots.values().copied().collect();
         let mut free = (0..MAX_CGROUPS).filter(|slot| !used.contains(slot));
-        for (path, id, total, swap, values) in readings {
+        for (path, id, reading) in readings {
             let slot = if let Some(slot) = self.slots.get(path) {
                 // A cgroup removed and created again at the same path between
                 // sweeps has a new id, so it is labelled as a new occupant.
@@ -232,7 +226,7 @@ impl State {
                     self.ids.insert(*slot, id);
                 }
                 *slot
-            } else if total.is_none() && swap.is_none() && values.iter().all(Option::is_none) {
+            } else if !reading.any() {
                 // Discovered, then gone before it could be read: no slot and
                 // no labels, so the stream never carries a phantom occupant.
                 continue;
@@ -246,14 +240,93 @@ impl State {
             };
             // Missing/failed reads are absent, never zero or a previous value
             // wearing the new sweep's window. Optional fields vary by kernel.
-            set_optional(&CGROUP_MEMORY_USAGE, slot, total);
-            set_optional(&CGROUP_MEMORY_SWAP_USAGE, slot, swap);
-            for (kind, value) in values.into_iter().enumerate() {
-                set_optional(CGROUP_MEMORY_STAT[kind], slot, value);
-            }
+            reading.publish(slot);
         }
         Ok(count)
     }
+}
+
+/// One cgroup's files, each `None` when its read or parse failed.
+struct Reading {
+    total: Option<i64>,
+    swap: Option<i64>,
+    max: Option<i64>,
+    high: Option<i64>,
+    stat: [Option<i64>; KINDS.len()],
+    events: [Option<u64>; EVENTS.len()],
+}
+
+impl Reading {
+    fn read(path: &Path) -> Self {
+        Self {
+            total: read_bytes(&path.join("memory.current")),
+            swap: read_bytes(&path.join("memory.swap.current")),
+            max: read_limit(&path.join("memory.max")),
+            high: read_limit(&path.join("memory.high")),
+            stat: std::fs::read_to_string(path.join("memory.stat"))
+                .map(|data| parse_stat(&data))
+                .unwrap_or([None; KINDS.len()]),
+            events: std::fs::read_to_string(path.join("memory.events"))
+                .map(|data| parse_events(&data))
+                .unwrap_or([None; EVENTS.len()]),
+        }
+    }
+
+    /// Whether any file was read.
+    fn any(&self) -> bool {
+        self.total.is_some()
+            || self.swap.is_some()
+            || self.max.is_some()
+            || self.high.is_some()
+            || self.stat.iter().any(Option::is_some)
+            || self.events.iter().any(Option::is_some)
+    }
+
+    fn publish(self, slot: usize) {
+        set_optional(&CGROUP_MEMORY_USAGE, slot, self.total);
+        set_optional(&CGROUP_MEMORY_SWAP_USAGE, slot, self.swap);
+        set_optional(&CGROUP_MEMORY_MAX, slot, self.max);
+        set_optional(&CGROUP_MEMORY_HIGH, slot, self.high);
+        for (kind, value) in self.stat.into_iter().enumerate() {
+            set_optional(CGROUP_MEMORY_STAT[kind], slot, value);
+        }
+        for (kind, value) in self.events.into_iter().enumerate() {
+            set_optional_counter(CGROUP_MEMORY_EVENTS[kind], slot, value);
+        }
+    }
+}
+
+/// `memory.max` or `memory.high`: a byte count, or `max` for no limit, which
+/// is published as -1.
+fn read_limit(path: &Path) -> Option<i64> {
+    parse_limit(std::fs::read_to_string(path).ok()?.trim())
+}
+
+fn parse_limit(value: &str) -> Option<i64> {
+    if value == "max" {
+        Some(-1)
+    } else {
+        parse_bytes(value)
+    }
+}
+
+fn parse_events(data: &str) -> [Option<u64>; EVENTS.len()] {
+    let mut values = [None; EVENTS.len()];
+    for line in data.lines() {
+        let mut fields = line.split_whitespace();
+        if let (Some(key), Some(value), None) = (fields.next(), fields.next(), fields.next()) {
+            if let Some(idx) = EVENTS.iter().position(|kind| *kind == key) {
+                // u64::MAX is CounterGroup's never-written sentinel.
+                values[idx] = value.parse::<u64>().ok().filter(|v| *v != u64::MAX);
+            }
+        }
+    }
+    values
+}
+
+fn set_optional_counter(metric: &CounterGroup, slot: usize, value: Option<u64>) {
+    // CounterGroup's unset sentinel, returned by value() as None.
+    metric.set(slot, value.unwrap_or(u64::MAX));
 }
 
 fn path_error(path: &Path, error: std::io::Error) -> std::io::Error {
@@ -314,21 +387,29 @@ fn label_slot(slot: usize, relative: &Path, id: u64) {
         ("name".into(), memory_name(relative)),
         ("path".into(), format!("/{}", relative.to_string_lossy())),
     ]);
-    for metric in [&CGROUP_MEMORY_USAGE, &CGROUP_MEMORY_SWAP_USAGE]
-        .into_iter()
-        .chain(CGROUP_MEMORY_STAT.iter().copied())
-    {
+    for metric in GAUGES.iter().chain(CGROUP_MEMORY_STAT.iter()) {
+        metric.set_metadata(slot, metadata.clone());
+    }
+    for metric in CGROUP_MEMORY_EVENTS {
         metric.set_metadata(slot, metadata.clone());
     }
 }
 
+/// The gauges with one column each.
+static GAUGES: [&GaugeGroup; 4] = [
+    &CGROUP_MEMORY_USAGE,
+    &CGROUP_MEMORY_SWAP_USAGE,
+    &CGROUP_MEMORY_MAX,
+    &CGROUP_MEMORY_HIGH,
+];
+
 fn clear_slot(slot: usize) {
-    for metric in [&CGROUP_MEMORY_USAGE, &CGROUP_MEMORY_SWAP_USAGE] {
+    for metric in GAUGES.iter().chain(CGROUP_MEMORY_STAT.iter()) {
         set_optional(metric, slot, None);
         metric.clear_metadata(slot);
     }
-    for metric in CGROUP_MEMORY_STAT {
-        set_optional(metric, slot, None);
+    for metric in CGROUP_MEMORY_EVENTS {
+        set_optional_counter(metric, slot, None);
         metric.clear_metadata(slot);
     }
 }
@@ -400,6 +481,13 @@ mod tests {
             std::fs::write(path.join("memory.current"), "8192").unwrap();
             std::fs::write(path.join("memory.swap.current"), "0").unwrap();
             std::fs::write(path.join("memory.stat"), &stat).unwrap();
+            std::fs::write(path.join("memory.max"), "max").unwrap();
+            std::fs::write(path.join("memory.high"), "1073741824").unwrap();
+            std::fs::write(
+                path.join("memory.events"),
+                "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+            )
+            .unwrap();
         }
         let mut state = State::default();
         for _ in 0..5 {
@@ -431,6 +519,31 @@ mod tests {
             assert_eq!(get(key), None, "{key}");
         }
         assert_eq!(values.iter().flatten().count(), 3);
+    }
+
+    #[test]
+    fn limits_read_max_as_minus_one_and_events_parse_by_key() {
+        assert_eq!(parse_limit("max"), Some(-1));
+        assert_eq!(parse_limit("1073741824"), Some(1073741824));
+        assert_eq!(parse_limit(""), None);
+        assert_eq!(parse_limit("-1"), None);
+        assert_eq!(parse_limit("18446744073709551615"), None);
+        let events = parse_events(
+            "low 0\nhigh 12\nmax 3\noom 1\noom_kill 1\noom_group_kill 0\nfuture 9\nbad x\n",
+        );
+        let get = |key| events[EVENTS.iter().position(|k| *k == key).unwrap()];
+        assert_eq!(get("low"), Some(0));
+        assert_eq!(get("high"), Some(12));
+        assert_eq!(get("max"), Some(3));
+        assert_eq!(get("oom"), Some(1));
+        assert_eq!(get("oom_kill"), Some(1));
+        assert_eq!(get("oom_group_kill"), Some(0));
+        // A kernel before oom_group_kill leaves it absent.
+        let events = parse_events("low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n");
+        assert_eq!(
+            events[EVENTS.iter().position(|k| *k == "oom_group_kill").unwrap()],
+            None
+        );
     }
 
     #[test]
@@ -577,6 +690,13 @@ mod tests {
             .unwrap();
         }
         std::fs::write(child.join("memory.swap.current"), "1024\n").unwrap();
+        std::fs::write(child.join("memory.max"), "1073741824\n").unwrap();
+        std::fs::write(child.join("memory.high"), "max\n").unwrap();
+        std::fs::write(
+            child.join("memory.events"),
+            "low 0\nhigh 5\nmax 2\noom 1\noom_kill 1\n",
+        )
+        .unwrap();
         // The hierarchy root is intentionally not exported, even in fixtures
         // that provide memory.current there.
         std::fs::write(root.join("memory.current"), "32768").unwrap();
@@ -585,6 +705,17 @@ mod tests {
         let slot = state.slots[&child];
         assert_eq!(CGROUP_MEMORY_USAGE.value(slot), Some(8192));
         assert_eq!(CGROUP_MEMORY_SWAP_USAGE.value(slot), Some(1024));
+        assert_eq!(CGROUP_MEMORY_MAX.value(slot), Some(1073741824));
+        assert_eq!(CGROUP_MEMORY_HIGH.value(slot), Some(-1));
+        let event = |kind| CGROUP_MEMORY_EVENTS[EVENTS.iter().position(|k| *k == kind).unwrap()];
+        assert_eq!(event("high").value(slot), Some(5));
+        assert_eq!(event("oom_kill").value(slot), Some(1));
+        assert_eq!(event("oom_group_kill").value(slot), None);
+        assert_eq!(
+            event("oom_kill").load_metadata(slot).unwrap()["name"],
+            ".../user.slice/service.slice/worker.service"
+        );
+        assert_eq!(CGROUP_MEMORY_MAX.value(state.slots[&parent]), None);
         assert_eq!(
             CGROUP_MEMORY_USAGE.load_metadata(slot).unwrap()["name"],
             ".../user.slice/service.slice/worker.service"
@@ -597,8 +728,8 @@ mod tests {
         assert_eq!(CGROUP_MEMORY_STAT[0].value(anon), Some(4096));
         assert_eq!(CGROUP_MEMORY_USAGE.value(state.slots[&parent]), Some(16384));
 
-        // All thirty columns must join to the same two cgroup occupants in
-        // the long stream. In particular, kinds belong to columns, not slots.
+        // Every column (gauges and counters) must join to the same two cgroup
+        // occupants in the long stream. In particular, kinds belong to columns, not slots.
         use metriken_exposition::group_builder::StreamGroup;
         let groups = registry.stream_groups();
         let group = groups
@@ -609,17 +740,35 @@ mod tests {
             })
             .unwrap();
         assert_eq!(group.occupants.len(), 2);
-        assert_eq!(group.columns.gauges.len(), 2 + KINDS.len());
-        let child_values = &group
+        assert_eq!(group.columns.gauges.len(), GAUGES.len() + KINDS.len());
+        assert_eq!(group.columns.counters.len(), EVENTS.len());
+        let occupant = group
             .occupants
             .iter()
             .find(|o| o.labels["name"] == ".../user.slice/service.slice/worker.service")
-            .unwrap()
-            .gauges;
+            .unwrap();
+        assert_eq!(occupant.counters.len(), EVENTS.len());
+        assert_eq!(occupant.gauges.len(), GAUGES.len() + KINDS.len());
+        for (column, value) in group.columns.counters.iter().zip(&occupant.counters) {
+            assert_eq!(column.metadata["metric"], "cgroup_memory_events");
+            // A zero counter is a value, and a field the file lacks is absent.
+            let want = match column.metadata["kind"].as_str() {
+                "low" => Some(0),
+                "high" => Some(5),
+                "max" => Some(2),
+                "oom" | "oom_kill" => Some(1),
+                "oom_group_kill" => None,
+                kind => panic!("unexpected kind: {kind}"),
+            };
+            assert_eq!(*value, want, "{column:?}");
+        }
+        let child_values = &occupant.gauges;
         for (column, value) in group.columns.gauges.iter().zip(child_values) {
             let want = match column.metadata["metric"].as_str() {
                 "cgroup_memory_usage" => Some(8192),
                 "cgroup_memory_swap_usage" => Some(1024),
+                "cgroup_memory_max" => Some(1073741824),
+                "cgroup_memory_high" => Some(-1),
                 "cgroup_memory_stat"
                     if matches!(column.metadata["kind"].as_str(), "anon" | "file") =>
                 {
@@ -643,6 +792,10 @@ mod tests {
         assert_eq!(CGROUP_MEMORY_USAGE.value(slot), None);
         assert!(CGROUP_MEMORY_USAGE.load_metadata(slot).is_none());
         assert!(CGROUP_MEMORY_STAT[0].load_metadata(anon).is_none());
+        // Removal clears every group, the limits and events included.
+        assert_eq!(CGROUP_MEMORY_MAX.value(slot), None);
+        assert_eq!(event("high").value(slot), None);
+        assert!(event("high").load_metadata(slot).is_none());
 
         let replacement = parent.join("replacement.service");
         std::fs::create_dir(&replacement).unwrap();
@@ -651,6 +804,9 @@ mod tests {
         assert_eq!(state.slots[&replacement], slot);
         assert_eq!(CGROUP_MEMORY_USAGE.value(slot), Some(128));
         assert_eq!(CGROUP_MEMORY_STAT[0].value(anon), None);
+        // The previous occupant's limits and events do not carry over.
+        assert_eq!(CGROUP_MEMORY_MAX.value(slot), None);
+        assert_eq!(event("high").value(slot), None);
         assert_eq!(
             CGROUP_MEMORY_USAGE.load_metadata(slot).unwrap()["name"],
             ".../user.slice/service.slice/replacement.service"

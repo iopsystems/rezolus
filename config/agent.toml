@@ -367,9 +367,10 @@ enabled = false
 # hw.memsize; see docs/metrics.md#memory_meminfo.
 [samplers.memory_meminfo]
 
-# Per-cgroup v2 memory totals and type breakdown (includes descendants).
+# Per-cgroup v2 memory totals, type breakdown, limits and memory.events
+# counters (includes descendants).
 # Reads cgroupfs off the scrape path, at most once per minute by default.
-# Opt-in: 30 series per cgroup still add export cost to every scrape, even
+# Opt-in: 38 series per cgroup still add export cost to every scrape, even
 # between reads. Suitable for memory trends; can miss short-lived spikes/groups.
 # A scrape dispatches a read once `interval`, less 50ms for timer jitter, has
 # passed since the previous dispatch; a read that overruns `interval` is

@@ -28,6 +28,20 @@ pub static CGROUP_MEMORY_USAGE: GaugeGroup = GaugeGroup::new(MAX_CGROUPS);
 )]
 pub static CGROUP_MEMORY_SWAP_USAGE: GaugeGroup = GaugeGroup::new(MAX_CGROUPS);
 
+#[metric(
+    name = "cgroup_memory_max",
+    description = "The cgroup's memory.max hard limit, or -1 when it has none (max)",
+    metadata = { unit = "bytes", acq_group = "memory_cgroup_sweep" }
+)]
+pub static CGROUP_MEMORY_MAX: GaugeGroup = GaugeGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_memory_high",
+    description = "The cgroup's memory.high throttling threshold, or -1 when it has none (max)",
+    metadata = { unit = "bytes", acq_group = "memory_cgroup_sweep" }
+)]
+pub static CGROUP_MEMORY_HIGH: GaugeGroup = GaugeGroup::new(MAX_CGROUPS);
+
 // Each kind is a column over the same cgroup slots. The long stream joins
 // columns by slot, so a flattened cgroup × kind index would mix occupants.
 macro_rules! memory_stats {
@@ -77,4 +91,33 @@ memory_stats! {
     MEMORY_SLAB_UNRECLAIMABLE => "slab_unreclaimable",
     MEMORY_SLAB => "slab",
     MEMORY_HUGETLB => "hugetlb",
+}
+
+// memory.events, which counts events in the cgroup and its descendants unless
+// cgroupfs is mounted with memory_localevents (memory.events.local counts the
+// cgroup alone).
+macro_rules! memory_events {
+    ($($metric:ident => $kind:literal),+ $(,)?) => {
+        #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+        pub const EVENTS: &[&str] = &[$($kind),+];
+        #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+        pub static CGROUP_MEMORY_EVENTS: &[&CounterGroup] = &[$(&$metric),+];
+        $(
+            #[metric(
+                name = "cgroup_memory_events",
+                description = "Memory events in the cgroup and its descendants (memory.events), by kind",
+                metadata = { unit = "events", acq_group = "memory_cgroup_sweep", kind = $kind }
+            )]
+            pub static $metric: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+        )+
+    }
+}
+
+memory_events! {
+    EVENT_LOW => "low",
+    EVENT_HIGH => "high",
+    EVENT_MAX => "max",
+    EVENT_OOM => "oom",
+    EVENT_OOM_KILL => "oom_kill",
+    EVENT_OOM_GROUP_KILL => "oom_group_kill",
 }

@@ -27,6 +27,17 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **`memory_cgroup` reads each cgroup's limits and memory events.**
+  `cgroup_memory_max` and `cgroup_memory_high` are `memory.max` and
+  `memory.high` in bytes, -1 when the file says `max`.
+  `cgroup_memory_events{kind}` counts `memory.events`: `low`, `high`, `max`,
+  `oom`, `oom_kill` and `oom_group_kill`, including descendants unless
+  cgroupfs is mounted with `memory_localevents`. They are read
+  in the same sweep and carry the same `name`, `path` and `id` labels, so
+  usage against the limit is `cgroup_memory_usage / (cgroup_memory_max > 0)`.
+  The sampler stays opt-in; a cgroup now has up to 38 series, up from 30.
+  (#1290)
+
 - **The Network section plots the TCP and driver metrics it left out.** The
   TCP group gains Socket Calls (`tcp_packets` and `tcp_size` by direction,
   which on Linux count send calls and receive-buffer cleanups, not segments),
