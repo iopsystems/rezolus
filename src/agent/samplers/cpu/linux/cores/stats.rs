@@ -10,8 +10,9 @@ use linkme::distributed_slice;
 // the BPF samplers in this family (e.g. `cpu_tlb_flush`'s groups)
 // — see `crate::agent::samplers::bpf_sampler_name`'s doc comment.
 //
-/// Brackets the single `/sys/devices/system/cpu/online` read + parse (single
-/// writer: this sampler's own `refresh()`).
+/// Brackets the `/sys/devices/system/cpu/online` and
+/// `/sys/devices/system/cpu/isolated` reads and parses (single writer: this
+/// sampler's own `refresh()`).
 pub static CPU_CORES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("cpu_cores"),
     "cpu_cores_read",
@@ -26,3 +27,10 @@ static CPU_CORES_ACQ_REG: &'static AcquisitionGroup = &CPU_CORES_ACQ;
     metadata = { acq_group = "cpu_cores_read" }
 )]
 pub static CPU_CORES: LazyGauge = LazyGauge::new(Gauge::default);
+
+#[metric(
+    name = "cpu_isolated",
+    description = "The number of online logical cores isolated from the scheduler's load balancing (isolcpus)",
+    metadata = { acq_group = "cpu_cores_read" }
+)]
+pub static CPU_ISOLATED: LazyGauge = LazyGauge::new(Gauge::default);

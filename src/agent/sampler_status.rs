@@ -1,5 +1,7 @@
 //! Process-global registry of per-sampler status, populated during agent
-//! initialization and read by the `/samplers` HTTP endpoint and the recorder.
+//! initialization and read by the `/samplers` and `/status` HTTP endpoints.
+//! A running sampler adds and clears conditions with
+//! [`set_runtime_degraded`] and [`clear_runtime_degraded`].
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -15,6 +17,21 @@ pub struct SamplerStatus {
     pub health: Option<SamplerHealth>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub programs: Vec<ProgramStatus>,
+    /// Conditions the running sampler reports, sorted by condition name. On a
+    /// running sampler (`active` or `pmu_limited`), any entry makes `health`
+    /// `degraded` in [`snapshot`] unless it is `failed`. On a sampler in
+    /// another state the entries are attached and `health` is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_degraded: Vec<RuntimeCondition>,
+}
+
+/// A condition a running sampler reported through [`set_runtime_degraded`]
+/// and has not cleared.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeCondition {
+    /// The sampler's name for the condition, such as `stuck_sweep`.
+    pub condition: String,
+    pub reason: String,
 }
 
 /// Aggregate agent status returned by the `/status` endpoint: identity +
@@ -156,6 +173,37 @@ fn registry() -> &'static Mutex<BTreeMap<&'static str, SamplerStatus>> {
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+type RuntimeConditions = BTreeMap<(&'static str, &'static str), String>;
+
+/// Runtime conditions by (sampler, condition). Kept apart from the init-time
+/// records so that a `set_*` call replacing a record does not drop them.
+fn runtime() -> &'static Mutex<RuntimeConditions> {
+    static RUNTIME: OnceLock<Mutex<RuntimeConditions>> = OnceLock::new();
+    RUNTIME.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// Report that running sampler `name` is degraded by `condition`, with the
+/// reason. Setting a condition already set replaces its reason. While any
+/// condition is set on a running sampler (`active` or `pmu_limited`),
+/// `/samplers` and `/status` report its health as `degraded` (unless it is
+/// `failed`) and `rezolus status` exits 1. The caller logs the condition; this
+/// records it.
+pub fn set_runtime_degraded(name: &'static str, condition: &'static str, reason: String) {
+    runtime()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((name, condition), reason);
+}
+
+/// Clear `condition` for sampler `name`. Clearing a condition that is not set
+/// does nothing.
+pub fn clear_runtime_degraded(name: &'static str, condition: &'static str) {
+    runtime()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&(name, condition));
+}
+
 /// Mark a sampler active if its record still says unsupported. For a
 /// sampler that initialises after start (`samplers::deferred`): its
 /// "waiting" record is replaced once init succeeds, unless init already
@@ -175,6 +223,7 @@ pub fn set_active_if_unsupported(name: &'static str) {
                 state: SamplerState::Active,
                 health: None,
                 programs: Vec::new(),
+                runtime_degraded: Vec::new(),
             },
         );
     }
@@ -189,6 +238,7 @@ pub fn set_disabled(name: &'static str) {
             state: SamplerState::Disabled,
             health: None,
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         },
     );
 }
@@ -202,6 +252,7 @@ pub fn set_pmu_limited(name: &'static str, cpus: usize, of: usize) {
             state: SamplerState::PmuLimited { cpus, of },
             health: Some(SamplerHealth::Degraded),
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         },
     );
 }
@@ -218,6 +269,7 @@ pub fn set_pmu_starved(name: &'static str, wants: usize, free: usize) {
             state: SamplerState::PmuStarved { wants, free },
             health: Some(SamplerHealth::Unsupported),
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         },
     );
 }
@@ -234,6 +286,7 @@ pub fn set_unsupported(name: &'static str, reason: String) {
             state: SamplerState::Unsupported { reason },
             health: Some(SamplerHealth::Unsupported),
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         },
     );
 }
@@ -247,6 +300,7 @@ pub fn set_failed(name: &'static str, error: String) {
             state: SamplerState::Failed { error },
             health: None,
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         },
     );
 }
@@ -266,6 +320,7 @@ pub fn set_active_with_programs(
             state: SamplerState::Active,
             health: Some(health),
             programs,
+            runtime_degraded: Vec::new(),
         },
     );
 }
@@ -283,6 +338,7 @@ pub fn set_active_if_absent(name: &'static str) {
             state: SamplerState::Active,
             health: None,
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         });
 }
 
@@ -310,6 +366,7 @@ pub fn note_perf_unavailable(name: &'static str, reason: &str) {
         state: SamplerState::Active,
         health: None,
         programs: Vec::new(),
+        runtime_degraded: Vec::new(),
     });
 
     if let Some(existing) = entry.programs.iter_mut().find(|p| p.name == "pmu") {
@@ -348,9 +405,51 @@ impl SamplerStatus {
     }
 }
 
-/// Snapshot of all sampler statuses, sorted by name (BTreeMap order).
+/// The reason recorded for `condition` on sampler `name`, if set.
+#[cfg(test)]
+pub(crate) fn runtime_condition(name: &str, condition: &str) -> Option<String> {
+    runtime()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|((s, c), _)| *s == name && *c == condition)
+        .map(|(_, reason)| reason.clone())
+}
+
+/// Snapshot of all sampler statuses, sorted by name (BTreeMap order), with
+/// each sampler's runtime conditions attached.
 pub fn snapshot() -> Vec<SamplerStatus> {
-    registry().lock().unwrap().values().cloned().collect()
+    let mut statuses: Vec<SamplerStatus> = registry().lock().unwrap().values().cloned().collect();
+    let runtime = runtime().lock().unwrap_or_else(|e| e.into_inner());
+    for status in &mut statuses {
+        apply_runtime(status, &runtime);
+    }
+    statuses
+}
+
+/// Attach the runtime conditions recorded for `status`'s sampler. A sampler
+/// that is running (`active` or `pmu_limited`) with any condition reads
+/// `degraded`, unless its health is `failed`. A sampler in any other state is
+/// not running, so its conditions are attached and its health is left alone.
+fn apply_runtime(status: &mut SamplerStatus, runtime: &RuntimeConditions) {
+    status.runtime_degraded = runtime
+        .iter()
+        .filter(|((sampler, _), _)| *sampler == status.name)
+        .map(|((_, condition), reason)| RuntimeCondition {
+            condition: condition.to_string(),
+            reason: reason.clone(),
+        })
+        .collect();
+    let running = matches!(
+        status.state,
+        SamplerState::Active | SamplerState::PmuLimited { .. }
+    );
+    if running
+        && !status.runtime_degraded.is_empty()
+        && status.health != Some(SamplerHealth::Failed)
+    {
+        status.health = Some(SamplerHealth::Degraded);
+    }
 }
 
 /// Author-declared meaning of a BPF program's attach.
@@ -506,6 +605,7 @@ mod tests {
                     verdict: ProbeVerdict::Unsupported,
                 },
             ],
+            runtime_degraded: Vec::new(),
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""name":"cpu_usage""#));
@@ -523,6 +623,7 @@ mod tests {
             state: SamplerState::Disabled,
             health: None,
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         })
         .unwrap();
         assert_eq!(json, r#"{"name":"gpu","state":"disabled"}"#);
@@ -537,6 +638,7 @@ mod tests {
             },
             health: None,
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         })
         .unwrap();
         assert!(json.contains(r#""state":"failed""#));
@@ -663,6 +765,7 @@ mod tests {
             state: SamplerState::Active,
             health: Some(SamplerHealth::Unsupported),
             programs: Vec::new(),
+            runtime_degraded: Vec::new(),
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""health":"unsupported""#));
@@ -694,6 +797,7 @@ mod tests {
                 state: SamplerState::Active,
                 health: Some(SamplerHealth::Healthy),
                 programs: Vec::new(),
+                runtime_degraded: Vec::new(),
             }],
         };
         let json = serde_json::to_string(&s).unwrap();
@@ -703,5 +807,92 @@ mod tests {
         let back: AgentStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back.uptime_seconds, 11532);
         assert_eq!(back.samplers.len(), 1);
+    }
+
+    fn status_of(name: &str) -> SamplerStatus {
+        snapshot().into_iter().find(|s| s.name == name).unwrap()
+    }
+
+    // Each test uses its own sampler name: the registry is process-global and
+    // tests run in parallel.
+    #[test]
+    fn a_runtime_condition_degrades_a_running_sampler_until_cleared() {
+        const NAME: &str = "test_runtime_degrades";
+        set_active_if_absent(NAME);
+        assert_eq!(status_of(NAME).health, None);
+
+        set_runtime_degraded(NAME, "b_second", "second".into());
+        set_runtime_degraded(NAME, "a_first", "first".into());
+        let s = status_of(NAME);
+        assert_eq!(s.health, Some(SamplerHealth::Degraded));
+        let reasons: Vec<&str> = s
+            .runtime_degraded
+            .iter()
+            .map(|c| c.reason.as_str())
+            .collect();
+        assert_eq!(reasons, ["first", "second"]);
+
+        set_runtime_degraded(NAME, "a_first", "replaced".into());
+        assert_eq!(status_of(NAME).runtime_degraded[0].reason, "replaced");
+
+        clear_runtime_degraded(NAME, "a_first");
+        assert_eq!(status_of(NAME).health, Some(SamplerHealth::Degraded));
+        clear_runtime_degraded(NAME, "b_second");
+        let s = status_of(NAME);
+        assert_eq!(s.health, None);
+        assert!(s.runtime_degraded.is_empty());
+        // Clearing what is not set does nothing.
+        clear_runtime_degraded(NAME, "b_second");
+    }
+
+    #[test]
+    fn a_replaced_record_keeps_its_runtime_conditions() {
+        const NAME: &str = "test_runtime_survives_replace";
+        set_unsupported(NAME, "waiting".into());
+        set_runtime_degraded(NAME, "stuck", "stuck".into());
+        // Not running: the condition is attached and the health left alone.
+        let s = status_of(NAME);
+        assert_eq!(s.health, Some(SamplerHealth::Unsupported));
+        assert_eq!(s.runtime_degraded.len(), 1);
+
+        set_active_with_programs(NAME, SamplerHealth::Healthy, Vec::new());
+        assert_eq!(status_of(NAME).health, Some(SamplerHealth::Degraded));
+        set_pmu_limited(NAME, 2, 4);
+        assert_eq!(status_of(NAME).health, Some(SamplerHealth::Degraded));
+        clear_runtime_degraded(NAME, "stuck");
+    }
+
+    #[test]
+    fn a_runtime_condition_does_not_mask_a_failed_health() {
+        const NAME: &str = "test_runtime_failed";
+        set_active_with_programs(NAME, SamplerHealth::Failed, Vec::new());
+        set_runtime_degraded(NAME, "stuck", "stuck".into());
+        assert_eq!(status_of(NAME).health, Some(SamplerHealth::Failed));
+        clear_runtime_degraded(NAME, "stuck");
+    }
+
+    #[test]
+    fn runtime_conditions_serialize_only_when_present() {
+        let mut s = SamplerStatus {
+            name: "filesystem".into(),
+            state: SamplerState::Active,
+            health: Some(SamplerHealth::Healthy),
+            programs: Vec::new(),
+            runtime_degraded: Vec::new(),
+        };
+        assert!(!serde_json::to_string(&s)
+            .unwrap()
+            .contains("runtime_degraded"));
+        s.runtime_degraded.push(RuntimeCondition {
+            condition: "stuck_sweep".into(),
+            reason: "a sweep has been running for more than 3s".into(),
+        });
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""runtime_degraded":[{"condition":"stuck_sweep","#),
+            "{json}"
+        );
+        let back: SamplerStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
     }
 }
