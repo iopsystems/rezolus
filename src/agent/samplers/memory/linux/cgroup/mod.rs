@@ -742,14 +742,14 @@ mod tests {
         assert_eq!(group.occupants.len(), 2);
         assert_eq!(group.columns.gauges.len(), GAUGES.len() + KINDS.len());
         assert_eq!(group.columns.counters.len(), EVENTS.len());
-        let child = group
+        let occupant = group
             .occupants
             .iter()
             .find(|o| o.labels["name"] == ".../user.slice/service.slice/worker.service")
             .unwrap();
-        assert_eq!(child.counters.len(), EVENTS.len());
-        assert_eq!(child.gauges.len(), GAUGES.len() + KINDS.len());
-        for (column, value) in group.columns.counters.iter().zip(&child.counters) {
+        assert_eq!(occupant.counters.len(), EVENTS.len());
+        assert_eq!(occupant.gauges.len(), GAUGES.len() + KINDS.len());
+        for (column, value) in group.columns.counters.iter().zip(&occupant.counters) {
             assert_eq!(column.metadata["metric"], "cgroup_memory_events");
             // A zero counter is a value, and a field the file lacks is absent.
             let want = match column.metadata["kind"].as_str() {
@@ -762,7 +762,7 @@ mod tests {
             };
             assert_eq!(*value, want, "{column:?}");
         }
-        let child_values = &child.gauges;
+        let child_values = &occupant.gauges;
         for (column, value) in group.columns.gauges.iter().zip(child_values) {
             let want = match column.metadata["metric"].as_str() {
                 "cgroup_memory_usage" => Some(8192),
