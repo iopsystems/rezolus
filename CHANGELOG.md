@@ -35,7 +35,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   `network_transmit_complete` and `network_transmit_busy`, calls to a device's
   transmit function that it accepted or that returned busy, a drop or an
   error, summed over every device a packet passes through. The descriptions
-  of those four metrics now say what they count; the old one for
+  of `network_transmit_complete`, `network_transmit_busy`, `tcp_srtt` and
+  `tcp_jitter` now say what they count; the old one for
   `network_transmit_complete` named a `network_transmit_packets` metric that
   does not exist, and `tcp_jitter`'s did not say it is the RTT mean
   deviation. A recording from an agent that predates this change and sends
