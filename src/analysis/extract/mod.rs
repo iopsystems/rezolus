@@ -200,9 +200,9 @@ pub(crate) fn validate_no_nulls(record: &OverviewRecord) -> Result<(), String> {
 /// Derive a metric's subsystem. The `sampler` label (stamped by agents >=
 /// 5.17.1) is always authoritative when present. Absent a label, *name
 /// inference* — everything below — only runs when `infer` is true, which
-/// callers must compute from the recording's `source` metadata being
-/// exactly `"rezolus"` (see `extract()` and the module doc in
-/// `context.rs`): a metric named `cpu_usage` in a Prometheus-scraped or
+/// callers compute from whether the recording is known to be a Rezolus
+/// agent's (see `extract()` and the module doc in `context.rs`): a metric
+/// named `cpu_usage` in a Prometheus-scraped or
 /// otherwise foreign recording proves nothing, since the name is just a
 /// string some unrelated exporter happened to also use. When `infer` is
 /// false and no label matched, the result is unconditionally
@@ -368,18 +368,17 @@ fn analyze_entry(
 /// Where a recording came from, for the sole purpose of deciding whether its
 /// metric NAMES may be trusted to name rezolus samplers.
 ///
-/// Not the same question as `MetricsSource::source()`, which is a label. A
-/// recording inside a `.rez` carries the endpoint name its caller chose
-/// (`record --endpoint url,source=redis`) as its `source`, while the
-/// container itself can only be written from a rezolus/msgpack endpoint — so
-/// the label says "redis" about data that is unambiguously the agent's.
+/// Not the same question as `MetricsSource::source()`, which can be the
+/// endpoint name the caller chose (`record --endpoint url,source=redis`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provenance {
-    /// The reader is known to be over a rezolus recording, whatever its
-    /// `source` metadata says. Every recording in a `.rez` container.
+    /// The opener judged the recording to be a Rezolus agent's
+    /// (`mcp::is_rezolus_recording`: its identity layers' producer, or
+    /// without layers a `source` of `rezolus` or the agent's self-telemetry
+    /// metrics), whatever its `source` says.
     RezolusAgent,
-    /// Provenance unknown: fall back to the `source` file metadata, where
-    /// `"rezolus"` — and nothing else — means the names are the agent's own.
+    /// Provenance unknown: the names are the agent's own when the `source`
+    /// is `"rezolus"` or the identity layers name `rezolus` as producer.
     FromMetadata,
 }
 
@@ -407,18 +406,14 @@ pub fn extract(
     }
 
     // Name inference (METRIC_SAMPLERS/prefix/ambiguity tiers) is trusted
-    // only for genuine rezolus recordings (parquet and .rez, every agent
-    // version) -- a metric coincidentally named e.g. `cpu_usage` in a
-    // Prometheus-scraped or otherwise foreign recording proves nothing. A
-    // missing/empty source is treated as unknown, i.e. conservative (no
-    // inference). See the module doc in context.rs.
+    // only for a recording known to be a Rezolus agent's: a metric
+    // coincidentally named e.g. `cpu_usage` in a Prometheus-scraped or
+    // otherwise foreign recording proves nothing. See the module doc in
+    // context.rs.
     //
-    // Which recording is "genuine" comes from the caller's `provenance`, NOT
-    // from the `source` metadata alone: a recording selected out of a `.rez`
-    // reports the endpoint name its caller chose (`--endpoint
-    // url,source=redis`), so reading that field would refuse inference for
-    // data that is unambiguously the agent's own -- and silently, as
-    // `unattributed` everywhere.
+    // The caller's open decides, by `mcp::is_rezolus_recording`, and passes
+    // `RezolusAgent`; the `source` metadata alone cannot, since it can be the
+    // endpoint name the caller chose (`--endpoint url,source=redis`).
     let source = data.source();
     let infer = match provenance {
         Provenance::RezolusAgent => true,
@@ -562,11 +557,14 @@ pub fn extract(
         duration_s,
         data.interval(),
         data.metadata_get("systeminfo"),
-        &present_subsystems,
-        &context::Uncertainty {
-            domains: &uncertain_domains,
-            samplers: &uncertain_samplers,
-        },
+        context::build_coverage(
+            &present_subsystems,
+            &context::Uncertainty {
+                domains: &uncertain_domains,
+                samplers: &uncertain_samplers,
+            },
+            infer,
+        ),
     );
 
     let record = assemble(
@@ -830,6 +828,7 @@ mod tests {
             coverage: Coverage {
                 subsystems_present: vec![],
                 subsystems_absent: vec![],
+                absence_known: true,
             },
         }
     }

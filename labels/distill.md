@@ -166,7 +166,9 @@ which describe dismissed hypotheses, not actions. `ruled_out` items carry no
 7. **`overall.data_quality` must be honest.** `coverage_gaps` should name
    subsystems the record itself reports absent
    (`context.coverage.subsystems_absent`) if they matter to your
-   conclusion; `uncertainty_limited` should be `true` if any claim you made
+   conclusion. If `context.coverage.absence_known` is false, absence was
+   not judged; do not infer from an empty list that nothing is missing.
+   `uncertainty_limited` should be `true` if any claim you made
    was constrained by an acquisition-window band per rule 3.
 8. **Ground every claim in the record below.** Do not reference prior
    knowledge about what this experiment "should" show — reason only from

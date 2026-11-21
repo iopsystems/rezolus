@@ -227,6 +227,19 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **`rezolus mcp extract-features` (and the MCP server's `extract_features`)
+  no longer lists every Rezolus sampler as absent for a recording that is not
+  a Rezolus agent's.** Every recording opened was treated as an agent's, so a
+  Prometheus scrape or another producer's recording had its metric names
+  matched against Rezolus samplers, and `context.coverage.subsystems_absent`
+  named nearly every sampler. A recording now counts as an agent's by the rule
+  the viewers use: its identity layers' producer, or without layers a `source`
+  of `rezolus` or the agent's self-telemetry metrics. For any other recording
+  `subsystems_absent` is empty, the new `context.coverage.absence_known` is
+  false, and its unlabeled metrics' `sampler` is `unattributed`. An agent
+  recording that has neither identity layers, a `source` of `rezolus`, nor the
+  `rezolus_rusage` sampler's metrics is read the same way. The record's
+  `schema_version` is 6 (#1292).
 - **`gpu_memory` from `gpu_intel_pmu` carries an acquisition window, and its
   group `gpu_intel_pmu_memory` lists only the GPUs that report VRAM.** In
   5.21.0 through 5.32.0 and the 6.0 prereleases, the sampler never bracketed

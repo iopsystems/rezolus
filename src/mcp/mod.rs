@@ -43,11 +43,10 @@ pub(crate) struct Opened {
     /// the archive held a single recording, saying nothing about the other
     /// arms or about the fact that nothing was captured at all.
     pub all_empty_recordings: Vec<std::collections::BTreeMap<String, String>>,
-    /// Whether the reader is known to be over a rezolus recording — true for
-    /// every recording in a `.rez`, which can only be written from a
-    /// rezolus/msgpack endpoint. Recorded HERE, where the container was just
-    /// identified, because the recording's own `source` metadata cannot
-    /// answer it: that is the endpoint name the caller chose.
+    /// Whether the reader is over a Rezolus agent's recording, by
+    /// [`is_rezolus_recording`]; for a combined reader, whether every joined
+    /// recording is. The recording's `source` alone cannot answer it: that
+    /// can be the endpoint name the caller chose.
     pub rezolus_native: bool,
     /// The recordings joined into `reader`, when the archive holds several of
     /// one run and no selector named one (`viewer::opens_combined`): every
@@ -55,6 +54,38 @@ pub(crate) struct Opened {
     pub combined: Vec<std::collections::BTreeMap<String, String>>,
     /// Each of `combined`'s position in the archive (`--ab baseline=N`).
     pub combined_positions: Vec<usize>,
+}
+
+/// Whether `reader` is a Rezolus agent's recording, by the rule both viewers
+/// use to classify a source (`dashboard::source_kind::classify_sources`): a
+/// recording with identity layers by its `__producer__`; one without by a
+/// `source` of `rezolus` or by the agent's self-telemetry metric names
+/// (`REZOLUS_SELF_ANCHORS`), which a recording made with a user-chosen
+/// `source` (`record --endpoint url,source=redis` before identity layers)
+/// still carries. A Prometheus scrape, another producer's stream and an
+/// upgraded foreign parquet are none of these. The viewers' template step is
+/// left out: no recording is classed as a service here.
+fn is_rezolus_recording(reader: &dyn metriken_query::MetricsSource) -> bool {
+    let metadata: serde_json::Map<String, serde_json::Value> = reader
+        .file_metadata()
+        .into_iter()
+        .map(|(key, val)| {
+            let json = serde_json::from_str(&val).unwrap_or(serde_json::Value::String(val));
+            (key, json)
+        })
+        .collect();
+    let mut names = reader.counter_names();
+    names.extend(reader.gauge_names());
+    names.extend(reader.histogram_names());
+    names.extend(reader.gauge_histogram_names());
+    ::dashboard::source_kind::classify_sources(
+        &serde_json::Value::Object(metadata),
+        &names,
+        &std::collections::HashSet::new(),
+        None,
+    )
+    .iter()
+    .any(|entry| entry.is_rezolus)
 }
 
 impl Opened {
@@ -246,11 +277,12 @@ pub(crate) fn open_source_with_pool_labeled(
             Vec::new()
         };
         let (labels, reader) = recordings.swap_remove(0);
+        let rezolus_native = is_rezolus_recording(&reader);
         return Ok(Opened {
             labels,
             reader: std::sync::Arc::new(reader),
             all_empty_recordings,
-            rezolus_native: true,
+            rezolus_native,
             combined: Vec::new(),
             combined_positions: Vec::new(),
         });
@@ -267,12 +299,13 @@ pub(crate) fn open_source_with_pool_labeled(
             use metriken_query::MetricsSource;
             r.filename()
         });
+        let rezolus_native = recordings.iter().all(|(_, r)| is_rezolus_recording(r));
         let (reader, _) = crate::rez_reader::RezReader::combine(recordings, filename);
         return Ok(Opened {
             labels: std::collections::BTreeMap::new(),
             reader: std::sync::Arc::new(reader),
             all_empty_recordings: Vec::new(),
-            rezolus_native: true,
+            rezolus_native,
             combined: candidates,
             combined_positions: candidate_idx,
         });
@@ -398,11 +431,12 @@ pub(crate) fn open_source_with_pool_labeled(
     };
 
     let (labels, reader) = recordings.swap_remove(chosen);
+    let rezolus_native = is_rezolus_recording(&reader);
     Ok(Opened {
         labels,
         reader: std::sync::Arc::new(reader),
         all_empty_recordings: Vec::new(),
-        rezolus_native: true,
+        rezolus_native,
         combined: Vec::new(),
         combined_positions: Vec::new(),
     })
@@ -1082,11 +1116,10 @@ fn run_query(
 }
 
 fn run_extract_features(file: PathBuf, selector: &RecordingSelector) {
-    // The labeled open, for its `rezolus_native`: a recording selected out of
-    // a `.rez` reports the endpoint name the caller chose as its `source`, so
-    // deciding sampler inference from that field alone would leave every
-    // unlabeled metric `unattributed` on exactly the archives this selector
-    // exists to read.
+    // The labeled open, for its `rezolus_native`: a recording's `source` can
+    // be the endpoint name the caller chose, so deciding sampler inference
+    // from that field alone would leave every unlabeled metric `unattributed`
+    // on an agent recording with a user-chosen name.
     let opened =
         match open_selected_labeled(&file, selector, SelectorSyntax::Flag("--recording"), false) {
             Ok(o) => o,
@@ -2755,16 +2788,12 @@ pub(crate) mod tests {
         );
     }
 
-    /// A `.rez` is a rezolus recording whatever an arm is CALLED.
-    ///
-    /// `record --endpoint url,source=redis` puts `source=redis` in the
-    /// recording's metadata, so an analysis that decided "is this rezolus
-    /// data?" from that field alone answered no for a selected arm and
-    /// dropped sampler inference — silently, as `unattributed`. The container
-    /// answers the question: a `.rez` can only be written from a
-    /// rezolus/msgpack endpoint.
+    /// A selected arm is an agent's recording only by the evidence it
+    /// carries. These arms have a `source` other than `rezolus`, no identity
+    /// layers and no agent self-telemetry, so they are not; the positive case
+    /// is `an_agent_recording_with_a_chosen_source_judges_absence_through_the_cli_open`.
     #[test]
-    fn a_selected_rez_arm_is_known_rezolus_native_whatever_its_source_says() {
+    fn a_selected_arm_without_agent_evidence_is_not_rezolus_native() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ab.dendro");
         multi_recording(&path, &["redis", "valkey"], &[true, true]);
@@ -2777,10 +2806,10 @@ pub(crate) mod tests {
             "redis",
             "fixture sanity: the arm really does report a non-rezolus source"
         );
-        assert!(opened.rezolus_native);
+        assert!(!opened.rezolus_native);
         assert_eq!(
             opened.provenance(),
-            crate::analysis::extract::Provenance::RezolusAgent
+            crate::analysis::extract::Provenance::FromMetadata
         );
     }
 

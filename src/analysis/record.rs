@@ -31,7 +31,9 @@
 /// read from the old labels too (`context::MERGED_SAMPLERS`).
 /// v4: likewise `blockio_requests` and `blockio_latency` as `blockio`.
 /// v5: likewise `scheduler_runqueue` and `cpu_migrations` as `scheduler`.
-pub const RECORD_SCHEMA_VERSION: u32 = 5;
+/// v6: `Coverage.absence_known`; a recording whose source is not rezolus has
+/// an empty `subsystems_absent`.
+pub const RECORD_SCHEMA_VERSION: u32 = 6;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -68,15 +70,13 @@ pub struct Context {
 ///
 /// Extraction attributes each metric to a subsystem via `extract::
 /// subsystem_of`. A `sampler` label (agents >= 5.17.1) is always
-/// authoritative. Absent a label, *name inference* only runs at all when
-/// the recording's `source` metadata is exactly `"rezolus"` (computed once
-/// per recording as `infer`): a metric named e.g. `cpu_usage` in a
+/// authoritative. Absent a label, *name inference* only runs for a recording
+/// known to be a Rezolus agent's (computed once per recording as `infer`;
+/// see `extract::Provenance`): a metric named e.g. `cpu_usage` in a
 /// Prometheus-scraped or otherwise foreign recording proves nothing about
 /// which sampler produced it — the name is just a string some unrelated
-/// exporter happened to reuse — so a missing, empty, or non-`"rezolus"`
-/// source disables inference and every unlabeled metric is `unattributed`.
-/// rezolus-agent recordings (parquet and `.rez`, every agent version)
-/// always carry `source = "rezolus"`.
+/// exporter happened to reuse — so for any other recording every unlabeled
+/// metric is `unattributed`.
 ///
 /// When inference is trusted, in order: a name in `extract::context::
 /// AMBIGUOUS_METRICS` (declared identically by more than one sampler, e.g.
@@ -100,27 +100,30 @@ pub struct Context {
 /// unlabeled `cpu_cores` prunes only `{cpu_cores, cpu_usage}`, and an
 /// unlabeled `rezolus_bpf_run_count` prunes only the BPF-backed samplers,
 /// deliberately NOT the unrelated `rezolus_rusage` sampler even though both
-/// names share the `"rezolus"` first-token domain. Anything else left
-/// unattributed (inference untrusted, or a genuinely unknown name) prunes
-/// its whole domain (first `_`-token of the sampler name, e.g. `blockio`
-/// for `blockio_latency`) — coarser, but still never asserts a false
-/// absence. Both forms are defense-in-depth now — they exist for genuinely
-/// unknowable cases (foreign sources, metrics newer than this build's
-/// `METRIC_SAMPLERS` table, or ambiguous vocabulary) rather than the
-/// primary mechanism pruning was before the table existed. Recordings from
+/// names share the `"rezolus"` first-token domain. Any other unattributed
+/// name prunes its whole domain (first `_`-token of the sampler name, e.g.
+/// `blockio` for `blockio_latency`), which is coarser but never asserts a
+/// false absence. Both forms cover cases the tables cannot resolve: metrics
+/// newer than this build's `METRIC_SAMPLERS` table, and ambiguous
+/// vocabulary. Recordings from
 /// agents older than 5.17.1 carry no `sampler` labels at all, so on a
 /// trusted (rezolus-sourced) recording every metric falls to the table/
 /// prefix tiers; only the residual ambiguous or foreign names stay
 /// unattributed — such recordings may therefore still report a shorter
 /// `subsystems_absent` list than a labeled one covering the same
 /// subsystems, just a much shorter gap than under prefix inference alone.
-/// A foreign (non-`"rezolus"`) source gets none of this: every unlabeled
-/// metric is `unattributed`, so `subsystems_absent` will typically be
-/// empty or near-empty rather than fabricated.
+/// A recording not known to be a Rezolus agent's gets none of this: every
+/// unlabeled metric is `unattributed`, `subsystems_absent` is empty, and
+/// `absence_known` is false.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coverage {
     pub subsystems_present: Vec<String>,
     pub subsystems_absent: Vec<String>,
+    /// True when `subsystems_absent` lists the expected subsystems the
+    /// recording lacks. False when the recording's metric names were not
+    /// trusted for attribution (it is not known to be a Rezolus agent's
+    /// recording): absence cannot be judged, so `subsystems_absent` is empty.
+    pub absence_known: bool,
 }
 
 /// Detail level of a per-metric entry.
@@ -324,6 +327,7 @@ mod tests {
                 coverage: Coverage {
                     subsystems_present: vec!["cpu".to_string(), "scheduler".to_string()],
                     subsystems_absent: vec!["blockio".to_string()],
+                    absence_known: true,
                 },
             },
             metrics: vec![
@@ -468,7 +472,7 @@ mod tests {
     fn record_wire_shape_is_pinned() {
         let v = serde_json::to_value(sample_record()).unwrap();
         let expected = serde_json::json!({
-            "schema_version": 5,
+            "schema_version": 6,
             "context": {
                 "source": "rezolus",
                 "agent_version": "1.2.3",
@@ -480,7 +484,8 @@ mod tests {
                 },
                 "coverage": {
                     "subsystems_present": ["cpu", "scheduler"],
-                    "subsystems_absent": ["blockio"]
+                    "subsystems_absent": ["blockio"],
+                    "absence_known": true
                 }
             },
             "metrics": [
