@@ -27,6 +27,22 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **The Network section plots the TCP and driver metrics it left out.** The
+  TCP group gains Socket Calls (`tcp_packets` and `tcp_size` by direction,
+  which on Linux count send calls and receive-buffer cleanups, not segments),
+  Round-Trip Time (`tcp_srtt`) and RTT Variation (`tcp_jitter`), each drawn
+  when the recording has the metric. Traffic gains Driver Transmit:
+  `network_transmit_complete` and `network_transmit_busy`, calls to a device's
+  transmit function that it accepted or that returned busy, a drop or an
+  error, summed over every device a packet passes through. The descriptions
+  of `network_transmit_complete`, `network_transmit_busy`, `tcp_srtt` and
+  `tcp_jitter` now say what they count; the old one for
+  `network_transmit_complete` named a `network_transmit_packets` metric that
+  does not exist, and `tcp_jitter`'s did not say it is the RTT mean
+  deviation. A recording from an agent that predates this change and sends
+  its section template (6.0.0-alpha.62 on) shows these plots only with
+  `rezolus view --registry-templates`. (#1185)
+
 - **The Cgroups section plots scheduling and CPU quota per cgroup.** Both
   sides gain Runqueue Wait (`cgroup_scheduler_runqueue_wait`), Off-CPU Time
   (`cgroup_scheduler_offcpu`) and Involuntary Context Switches

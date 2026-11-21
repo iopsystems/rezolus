@@ -169,6 +169,46 @@
               "promql_query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
             }
           ]
+        },
+        {
+          "name": "Driver Transmit",
+          "description": "Calls to a device's transmit function, one per buffer (a TSO buffer is counted once), summed over every device a packet passes through, so a packet sent through a veth and a bridge to a NIC is counted at each. Refused means the driver returned busy and the buffer was requeued (it is counted again when it is accepted), or the driver dropped it or returned an error. Linux only.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Transmits Accepted",
+                "id": "transmit-complete",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_transmit_complete[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Transmits Refused",
+                "id": "transmit-busy",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_transmit_busy[5m]))"
+            }
+          ]
         }
       ]
     },
@@ -333,6 +373,174 @@
                 }
               },
               "promql_query": "sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8"
+            }
+          ]
+        },
+        {
+          "name": "Socket Calls",
+          "description": "Calls to send on TCP sockets, with the bytes passed to each (including sends that failed or sent less), and receive-buffer cleanups after data was copied out, with the bytes copied. Receive counts one per read, except that a read that waits for more data (MSG_WAITALL, SO_RCVLOWAT) can be counted more than once. These count calls, not segments: one send can become many segments, and one read can return several. Linux only.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Send Calls",
+                "id": "tcp-send-calls",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_packets{direction=\"transmit\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Calls",
+                "id": "tcp-read-calls",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_packets{direction=\"receive\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Send Size",
+                "id": "tcp-send-size",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": true,
+                  "value_label": null
+                }
+              },
+              "promql_query": "tcp_size{direction=\"transmit\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Size",
+                "id": "tcp-read-size",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": true,
+                  "value_label": null
+                }
+              },
+              "promql_query": "tcp_size{direction=\"receive\"}"
+            }
+          ]
+        },
+        {
+          "name": "Round-Trip Time",
+          "description": "The kernel's smoothed round-trip time estimate for a connection, sampled each time an established connection processes received data or ACKs, so connections receiving more weigh more.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Mean Smoothed RTT",
+                "id": "tcp-srtt-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(tcp_srtt)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Smoothed RTT",
+                "id": "tcp-srtt",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Time",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "tcp_srtt",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "RTT Variation",
+          "description": "The kernel's mean deviation of a connection's round-trip time (mdev), sampled each time an established connection processes received data or ACKs.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Mean RTT Variation",
+                "id": "tcp-jitter-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(tcp_jitter)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "RTT Variation",
+                "id": "tcp-jitter",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Time",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "tcp_jitter",
+              "width": "full"
             }
           ]
         },

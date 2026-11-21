@@ -2465,8 +2465,8 @@ network latency conditions that affect all TCP-based communications.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `tcp_jitter` | Distribution of TCP latency jitter | |
-| `tcp_srtt` | Distribution of TCP smoothed round-trip time | |
+| `tcp_jitter` | Mean deviation of a TCP connection's round-trip time (mdev), sampled each time an established connection processes received data or ACKs | |
+| `tcp_srtt` | Smoothed round-trip time of a TCP connection, sampled each time an established connection processes received data or ACKs | |
 
 ### tcp_retransmit
 

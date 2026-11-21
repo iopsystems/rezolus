@@ -26,7 +26,7 @@ static SRTT_ACQ_REG: &'static AcquisitionGroup = &SRTT_ACQ;
 
 #[metric(
     name = "tcp_jitter",
-    description = "Distribution of TCP latency jitter",
+    description = "Mean deviation of a TCP connection's round-trip time (mdev), sampled each time an established connection processes received data or ACKs",
     metadata = { unit = "nanoseconds", acq_group = "tcp_receive_jitter" }
 )]
 pub static TCP_JITTER: RwLockCounterHistogram =
@@ -34,7 +34,7 @@ pub static TCP_JITTER: RwLockCounterHistogram =
 
 #[metric(
     name = "tcp_srtt",
-    description = "Distribution of TCP smoothed round-trip time",
+    description = "Smoothed round-trip time of a TCP connection, sampled each time an established connection processes received data or ACKs",
     metadata = { unit = "nanoseconds", acq_group = "tcp_receive_srtt" }
 )]
 pub static TCP_SRTT: RwLockCounterHistogram =
