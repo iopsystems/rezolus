@@ -21,13 +21,18 @@
 //! unknown. Candidates skipped for such a reason, or for an ambiguous table, are
 //! logged when the reasons change: a warning when skipping starts, debug for
 //! candidates skipped while others already are, info when all resolve again.
+//! While no local filesystem is selected and a candidate was skipped, or the
+//! mount table has no single possible root, sampler status reports `filesystem` degraded with
+//! condition `unresolved_mounts`, so `rezolus status` exits 1.
 //! Network `statvfs` calls can block on an unavailable server; autofs path
 //! lookup can trigger a mount. Classification must precede path lookup.
 //! Mount-id validation detects replacement after discovery when the kernel
 //! supplies `STATX_MNT_ID`, but cannot prevent a lookup from blocking if a
 //! network mount is stacked over the path between discovery and `open`.
 //! Such a lookup leaves later sweeps skipped while it stays blocked; a sweep
-//! still running after three intervals is logged as a warning.
+//! still running after three intervals is logged as a warning, and sampler
+//! status reports `filesystem` degraded with condition `stuck_sweep` until
+//! the sweep returns.
 //!
 //! Network support is deferred in `docs/backlog.md`; any opt-in must bound
 //! both blocking workers and per-mount wait time.
@@ -96,6 +101,7 @@ const SYS_FS_EXT4: &str = "/sys/fs/ext4";
 /// A sweep still running after this many intervals is reported as stuck.
 const STUCK_INTERVALS: u32 = 3;
 
+use crate::agent::sampler_status::{clear_runtime_degraded, set_runtime_degraded};
 use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
@@ -504,6 +510,33 @@ fn report_selection(previous: &Reported, current: &Reported) {
     }
 }
 
+/// The runtime condition set while no local filesystem is selected and a
+/// candidate was skipped for a reason in [`report_selection`].
+const UNRESOLVED_CONDITION: &str = "unresolved_mounts";
+
+/// The reason reported in sampler status for this sweep's selection, given the
+/// number of local filesystems selected, or `None`. A host where some
+/// candidates resolve, or where there are no candidates, has no condition.
+fn selection_condition((starts, skipped): &Reported, local: usize) -> Option<String> {
+    if let Some(n) = starts {
+        return Some(format!(
+            "the mount table names {n} mounts that could hold the process root, not one; \
+             no filesystem is sampled"
+        ));
+    }
+    if local > 0 {
+        return None;
+    }
+    let first = skipped.first()?;
+    Some(match skipped.len() {
+        1 => format!("no local filesystem is sampled: not sampling {first}"),
+        n => format!(
+            "no local filesystem is sampled: not sampling {first}, and {} more",
+            n - 1
+        ),
+    })
+}
+
 /// Log a change in how many mounts of one kind are over their cap; see
 /// [`count_change`].
 fn report_dropped(what: &str, cap: usize, last: usize, now: usize) {
@@ -572,6 +605,10 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     }
     let mounts = selection.mounts;
     let (local, tmpfs) = classes(&mounts);
+    match selection_condition(reported, local.len()) {
+        Some(reason) => set_runtime_degraded(NAME, UNRESOLVED_CONDITION, reason),
+        None => clear_runtime_degraded(NAME, UNRESOLVED_CONDITION),
+    }
     let assignment = slots.assign_within(&[
         (local.as_slice(), MAX_MOUNTS),
         (tmpfs.as_slice(), MAX_TMPFS),
@@ -1413,5 +1450,62 @@ mod tests {
             slots.relabel(0, &ext4_at("/data")),
             "a vacated slot's labels were cleared, so it must label again"
         );
+    }
+
+    #[test]
+    fn the_status_condition_is_set_only_while_no_local_filesystem_is_selected() {
+        let skip = |mount: &str| mounts::Skipped {
+            mount_point: mount.to_string(),
+            device: "8:1".to_string(),
+            reason: mounts::SkipReason::Blocking {
+                through: "/net".to_string(),
+                fstype: "nfs4".to_string(),
+            },
+        };
+        assert_eq!(selection_condition(&(None, Vec::new()), 0), None);
+        assert_eq!(selection_condition(&(None, vec![skip("/net/a")]), 1), None);
+        assert_eq!(
+            selection_condition(&(None, vec![skip("/net/a")]), 0).as_deref(),
+            Some(
+                "no local filesystem is sampled: not sampling /net/a (8:1): its path passes through \
+                 nfs4 at /net, whose lookup can block"
+            )
+        );
+        let two = selection_condition(&(None, vec![skip("/net/a"), skip("/net/b")]), 0).unwrap();
+        assert!(two.ends_with(", and 1 more"), "{two}");
+        let ambiguous = selection_condition(&(Some(2), Vec::new()), 0).unwrap();
+        assert!(ambiguous.contains("names 2 mounts"), "{ambiguous}");
+    }
+
+    /// The sweep sets the condition from its own selection, and clears it once a
+    /// local filesystem is selected.
+    #[test]
+    fn a_sweep_sets_and_clears_the_unresolved_condition() {
+        use crate::agent::sampler_status::runtime_condition;
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let table = dir.path().join("mountinfo");
+        let table = table.to_str().unwrap();
+        let mut state = SweepState::new();
+
+        // A chroot of a plain directory: the only candidate is skipped.
+        std::fs::write(
+            table,
+            "40 22 8:1 / /data rw - ext4 /dev/sda1 rw\n41 22 0:3 / /proc rw - proc proc rw\n",
+        )
+        .unwrap();
+        sweep_table(&mut state, table);
+        let reason = runtime_condition(NAME, UNRESOLVED_CONDITION).expect("condition set");
+        assert!(reason.contains("not sampling /data"), "{reason}");
+
+        // `/` resolves while `/net/data`, below an NFS mount, is still skipped.
+        std::fs::write(
+            table,
+            "22 1 259:2 / / rw - ext4 /dev/root rw\n41 22 0:40 / /net rw - nfs4 nas:/export rw\n\
+             40 41 8:1 / /net/data rw - ext4 /dev/sda1 rw\n",
+        )
+        .unwrap();
+        sweep_table(&mut state, table);
+        assert_eq!(runtime_condition(NAME, UNRESOLVED_CONDITION), None);
     }
 }

@@ -132,6 +132,24 @@ fn stuck_warning_resets_only_when_a_new_worker_is_admitted() {
     assert!(!recover_lock("test", &worker.schedule).stuck_warned);
 }
 
+#[test]
+fn a_stuck_read_degrades_the_sampler_until_it_returns() {
+    use crate::agent::sampler_status::runtime_condition;
+    // Its own name: the status registry is process-global.
+    const NAME: &str = "test_stuck_status";
+    let worker =
+        BlockingWorker::new(NAME, INTERVAL, Cadence::FromDispatch).with_stuck_warning(INTERVAL * 3);
+    let start = Instant::now();
+    let permit = worker.try_acquire_at(start).unwrap();
+    assert!(worker.try_acquire_at(start + INTERVAL * 3).is_none());
+    assert_eq!(runtime_condition(NAME, STUCK_CONDITION), None);
+    assert!(worker.try_acquire_at(start + INTERVAL * 4).is_none());
+    let reason = runtime_condition(NAME, STUCK_CONDITION).expect("stuck read reported");
+    assert!(reason.contains("more than"), "{reason}");
+    drop(permit);
+    assert_eq!(runtime_condition(NAME, STUCK_CONDITION), None);
+}
+
 #[tokio::test]
 async fn a_blocking_read_does_not_block_the_async_worker_or_overlap() {
     let worker = BlockingWorker::new("test", Duration::ZERO, Cadence::FromDispatch);

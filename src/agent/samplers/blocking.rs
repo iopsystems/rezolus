@@ -9,6 +9,7 @@
 //! Panic recovery applies only when the process unwinds. The binary's global
 //! panic hook exits the process, and this helper does not override that policy.
 
+use crate::agent::sampler_status::{clear_runtime_degraded, set_runtime_degraded};
 use crate::{error, warn};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
@@ -22,6 +23,10 @@ use tokio::task::JoinHandle;
 /// above that and at most 5% of the default interval of every sampler that
 /// uses it (1s for the shortest).
 pub(super) const SCRAPE_TOLERANCE: Duration = Duration::from_millis(50);
+
+/// The runtime condition a worker built with
+/// [`BlockingWorker::with_stuck_warning`] reports while a read is stuck.
+pub(super) const STUCK_CONDITION: &str = "stuck_sweep";
 
 /// When the next read is due after a read that ran. A worker built with
 /// [`BlockingWorker::with_tolerance`] admits each read up to that tolerance,
@@ -76,8 +81,12 @@ impl BlockingWorker {
         self
     }
 
-    /// Warn once when a read has been running for longer than `after`; the
-    /// warning resets when the next read is admitted.
+    /// Warn once when a read has been running for longer than `after`, and
+    /// report the sampler degraded (condition [`STUCK_CONDITION`]) until that
+    /// read returns. The warning resets when the next read is admitted.
+    ///
+    /// The check runs when a refresh tries to admit a read, so a read is found
+    /// stuck only while something is still asking for this sampler.
     pub(super) fn with_stuck_warning(mut self, after: Duration) -> Self {
         self.warn_after = Some(after);
         self
@@ -107,13 +116,23 @@ impl BlockingWorker {
         };
         if let Some(started) = schedule.running_since {
             let running = now.saturating_duration_since(started);
-            if self.warn_after.is_some_and(|after| running > after) && !schedule.stuck_warned {
-                schedule.stuck_warned = true;
-                warn!(
-                    "{}: a sweep has been running for {running:?}; its values hold until it \
-                     returns, and no other sweep starts",
-                    self.name
-                );
+            if let Some(after) = self.warn_after.filter(|after| running > *after) {
+                if !schedule.stuck_warned {
+                    schedule.stuck_warned = true;
+                    warn!(
+                        "{}: a sweep has been running for {running:?}; its values hold until it \
+                         returns, and no other sweep starts",
+                        self.name
+                    );
+                    set_runtime_degraded(
+                        self.name,
+                        STUCK_CONDITION,
+                        format!(
+                            "a sweep has been running for more than {after:?}; its values hold \
+                             until it returns"
+                        ),
+                    );
+                }
             }
             return None;
         }
@@ -196,6 +215,9 @@ impl Permit {
             Outcome::Ran => {}
         }
         schedule.running_since = None;
+        if schedule.stuck_warned {
+            clear_runtime_degraded(self.worker.name, STUCK_CONDITION);
+        }
     }
 }
 
