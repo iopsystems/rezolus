@@ -27,6 +27,15 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- `cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of online
+  CPUs in `/sys/devices/system/cpu/isolated` (`isolcpus=`, `domain` flag).
+  The load balancer places no work on them, yet `cpu_cores` counts them, so on
+  a host with `isolcpus=0-23,28-55,60-63` and 64 CPUs a workload saturating
+  the 8 it can use read as 12.5% busy. `cpu_cores - cpu_isolated` is the
+  number it can use. The dashboards still divide by `cpu_cores`. `cpu_cores`
+  no longer panics the agent on a read error or an unparseable `online` list;
+  it skips that refresh. (#1043)
+
 - **`gpu_nvidia` logs, once at startup, the NVML queries each GPU does not
   support.** For example `gpu_nvidia: GPU 0 does not support: gpm` on an
   RTX 4090, which has no GPM. A metric with no value is either unsupported on
