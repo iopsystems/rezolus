@@ -27,6 +27,17 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- `rezolus status`, `/status` and `/samplers` report a running sampler that
+  becomes degraded, and clear it when the condition ends. Each such sampler
+  carries `runtime_degraded`, a list of `{condition, reason}`, and reads
+  health `degraded`, so `rezolus status` exits 1. Two conditions use it:
+  `stuck_sweep`, for `filesystem` and `hw_sensors` while a sweep has run for
+  more than three intervals, and `unresolved_mounts`, for `filesystem` on
+  Linux while a candidate is skipped (a mount table naming more than one
+  possible root, a chroot's unknown root, or a path through NFS, FUSE or
+  autofs). Before, both were only logged. An older `rezolus status` shows such
+  a sampler as degraded with no reason. (#1208)
+
 - **`gpu_nvidia` logs, once at startup, the NVML queries each GPU does not
   support.** For example `gpu_nvidia: GPU 0 does not support: gpm` on an
   RTX 4090, which has no GPM. A metric with no value is either unsupported on

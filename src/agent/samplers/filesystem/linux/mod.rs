@@ -21,13 +21,17 @@
 //! unknown. Candidates skipped for such a reason, or for an ambiguous table, are
 //! logged when the reasons change: a warning when skipping starts, debug for
 //! candidates skipped while others already are, info when all resolve again.
+//! While any is skipped, sampler status reports `filesystem` degraded with
+//! condition `unresolved_mounts`, so `rezolus status` exits 1.
 //! Network `statvfs` calls can block on an unavailable server; autofs path
 //! lookup can trigger a mount. Classification must precede path lookup.
 //! Mount-id validation detects replacement after discovery when the kernel
 //! supplies `STATX_MNT_ID`, but cannot prevent a lookup from blocking if a
 //! network mount is stacked over the path between discovery and `open`.
 //! Such a lookup leaves later sweeps skipped while it stays blocked; a sweep
-//! still running after three intervals is logged as a warning.
+//! still running after three intervals is logged as a warning, and sampler
+//! status reports `filesystem` degraded with condition `stuck_sweep` until
+//! the sweep returns.
 //!
 //! Network support is deferred in `docs/backlog.md`; any opt-in must bound
 //! both blocking workers and per-mount wait time.
@@ -96,6 +100,7 @@ const SYS_FS_EXT4: &str = "/sys/fs/ext4";
 /// A sweep still running after this many intervals is reported as stuck.
 const STUCK_INTERVALS: u32 = 3;
 
+use crate::agent::sampler_status::{clear_runtime_degraded, set_runtime_degraded};
 use crate::agent::samplers::blocking::{BlockingWorker, Cadence, SCRAPE_TOLERANCE};
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
@@ -504,6 +509,26 @@ fn report_selection(previous: &Reported, current: &Reported) {
     }
 }
 
+/// The runtime condition set while a filesystem candidate is not sampled for
+/// a reason in [`report_selection`].
+const UNRESOLVED_CONDITION: &str = "unresolved_mounts";
+
+/// The reason reported in sampler status for this sweep's selection, or `None`
+/// when every candidate resolves.
+fn selection_condition((starts, skipped): &Reported) -> Option<String> {
+    if let Some(n) = starts {
+        return Some(format!(
+            "the mount table names {n} mounts that could hold the process root, not one; \
+             no filesystem is sampled"
+        ));
+    }
+    let first = skipped.first()?;
+    Some(match skipped.len() {
+        1 => format!("not sampling {first}"),
+        n => format!("not sampling {first}, and {} more", n - 1),
+    })
+}
+
 /// Log a change in how many mounts of one kind are over their cap; see
 /// [`count_change`].
 fn report_dropped(what: &str, cap: usize, last: usize, now: usize) {
@@ -568,6 +593,10 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     let now = (selection.unresolvable_starts, selection.skipped.clone());
     if *reported != now {
         report_selection(reported, &now);
+        match selection_condition(&now) {
+            Some(reason) => set_runtime_degraded(NAME, UNRESOLVED_CONDITION, reason),
+            None => clear_runtime_degraded(NAME, UNRESOLVED_CONDITION),
+        }
         *reported = now;
     }
     let mounts = selection.mounts;
@@ -1413,5 +1442,27 @@ mod tests {
             slots.relabel(0, &ext4_at("/data")),
             "a vacated slot's labels were cleared, so it must label again"
         );
+    }
+
+    #[test]
+    fn the_status_condition_names_what_is_skipped_and_clears_when_nothing_is() {
+        let skip = |mount: &str| mounts::Skipped {
+            mount_point: mount.to_string(),
+            device: "8:1".to_string(),
+            reason: mounts::SkipReason::Blocking {
+                through: "/net".to_string(),
+                fstype: "nfs4".to_string(),
+            },
+        };
+        assert_eq!(selection_condition(&(None, Vec::new())), None);
+        assert_eq!(
+            selection_condition(&(None, vec![skip("/net/a")])).as_deref(),
+            Some("not sampling /net/a (8:1): its path passes through nfs4 at /net, whose lookup can block")
+        );
+        let two = selection_condition(&(None, vec![skip("/net/a"), skip("/net/b")])).unwrap();
+        assert!(two.starts_with("not sampling /net/a (8:1)"), "{two}");
+        assert!(two.ends_with(", and 1 more"), "{two}");
+        let ambiguous = selection_condition(&(Some(2), vec![skip("/net/a")])).unwrap();
+        assert!(ambiguous.contains("names 2 mounts"), "{ambiguous}");
     }
 }
