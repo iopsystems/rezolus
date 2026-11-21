@@ -22,7 +22,7 @@
 //! logged when the reasons change: a warning when skipping starts, debug for
 //! candidates skipped while others already are, info when all resolve again.
 //! While no local filesystem is selected and a candidate was skipped, or the
-//! process root is unknown, sampler status reports `filesystem` degraded with
+//! mount table has no single possible root, sampler status reports `filesystem` degraded with
 //! condition `unresolved_mounts`, so `rezolus status` exits 1.
 //! Network `statvfs` calls can block on an unavailable server; autofs path
 //! lookup can trigger a mount. Classification must precede path lookup.
@@ -529,9 +529,9 @@ fn selection_condition((starts, skipped): &Reported, local: usize) -> Option<Str
     }
     let first = skipped.first()?;
     Some(match skipped.len() {
-        1 => format!("no filesystem is sampled: not sampling {first}"),
+        1 => format!("no local filesystem is sampled: not sampling {first}"),
         n => format!(
-            "no filesystem is sampled: not sampling {first}, and {} more",
+            "no local filesystem is sampled: not sampling {first}, and {} more",
             n - 1
         ),
     })
@@ -1467,7 +1467,7 @@ mod tests {
         assert_eq!(
             selection_condition(&(None, vec![skip("/net/a")]), 0).as_deref(),
             Some(
-                "no filesystem is sampled: not sampling /net/a (8:1): its path passes through \
+                "no local filesystem is sampled: not sampling /net/a (8:1): its path passes through \
                  nfs4 at /net, whose lookup can block"
             )
         );
@@ -1498,11 +1498,11 @@ mod tests {
         let reason = runtime_condition(NAME, UNRESOLVED_CONDITION).expect("condition set");
         assert!(reason.contains("not sampling /data"), "{reason}");
 
-        // `/` resolves while `/data` stays covered by NFS.
+        // `/` resolves while `/net/data`, below an NFS mount, is still skipped.
         std::fs::write(
             table,
-            "22 1 259:2 / / rw - ext4 /dev/root rw\n40 22 8:1 / /data rw - ext4 /dev/sda1 rw\n\
-             41 40 0:40 / /data rw - nfs4 nas:/export rw\n",
+            "22 1 259:2 / / rw - ext4 /dev/root rw\n41 22 0:40 / /net rw - nfs4 nas:/export rw\n\
+             40 41 8:1 / /net/data rw - ext4 /dev/sda1 rw\n",
         )
         .unwrap();
         sweep_table(&mut state, table);
