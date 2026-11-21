@@ -86,10 +86,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if transmit_complete || transmit_busy {
         let driver = traffic.subgroup("Driver Transmit");
         driver.describe(
-            "Packets handed to a network device's transmit function, counted on every \
-             interface including virtual ones (loopback, veth, bridges): accepted, and refused \
-             with a non-zero return such as a full device queue. A sustained refused rate means \
-             the transmit path is backed up. Linux only.",
+            "Calls to a device's transmit function, one per buffer (a TSO buffer is counted \
+             once), summed over every device a packet passes through, so a packet sent through a \
+             veth and a bridge to a NIC is counted at each. Refused means the driver returned \
+             busy and the buffer was requeued (it is counted again when it is accepted), or the \
+             driver dropped it or returned an error. Linux only.",
         );
         if transmit_complete {
             driver.plot_promql(
@@ -205,9 +206,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if calls || sizes {
         let socket = tcp.subgroup("Socket Calls");
         socket.describe(
-            "Send calls on TCP sockets and reads that copied data out of them, and the bytes \
-             each moved. These count socket calls, not segments: one send can become many \
-             segments, and one read can return several. Linux only.",
+            "Calls to send on TCP sockets, with the bytes passed to each (including sends that \
+             failed or sent less), and receive-buffer cleanups after data was copied out, with \
+             the bytes copied. Receive counts one per read, except that a read that waits for \
+             more data (MSG_WAITALL, SO_RCVLOWAT) can be counted more than once. These count \
+             calls, not segments: one send can become many segments, and one read can return \
+             several. Linux only.",
         );
         if calls {
             socket.plot_promql(
@@ -240,8 +244,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "tcp-srtt",
             "tcp_srtt",
             "The kernel's smoothed round-trip time estimate for a connection, sampled each time \
-             an established connection processes an incoming segment, so connections receiving \
-             more segments weigh more.",
+             an established connection processes received data or ACKs, so connections receiving \
+             more weigh more.",
         ),
         (
             "RTT Variation",
@@ -249,13 +253,18 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "tcp-jitter",
             "tcp_jitter",
             "The kernel's mean deviation of a connection's round-trip time (mdev), sampled each \
-             time an established connection processes an incoming segment.",
+             time an established connection processes received data or ACKs.",
         ),
     ] {
         if has_metric(data, metric) {
             let rtt = tcp.subgroup(name);
             rtt.describe(description);
-            rtt.histogram_rate_mean(title, id, metric, RateSource::FromHistogram, Unit::Time);
+            rtt.plot_promql(
+                Plot::gauge(format!("Mean {title}"), format!("{id}-mean"), Unit::Time)
+                    .with_unit_system(Unit::Time)
+                    .with_axis_label("Mean"),
+                format!("histogram_mean({metric})"),
+            );
             rtt.plot_promql_full(
                 Plot::histogram_latency(title, id)
                     .with_axis_label("Time")

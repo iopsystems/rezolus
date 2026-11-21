@@ -172,7 +172,7 @@
         },
         {
           "name": "Driver Transmit",
-          "description": "Packets handed to a network device's transmit function, counted on every interface including virtual ones (loopback, veth, bridges): accepted, and refused with a non-zero return such as a full device queue. A sustained refused rate means the transmit path is backed up. Linux only.",
+          "description": "Calls to a device's transmit function, one per buffer (a TSO buffer is counted once), summed over every device a packet passes through, so a packet sent through a veth and a bridge to a NIC is counted at each. Refused means the driver returned busy and the buffer was requeued (it is counted again when it is accepted), or the driver dropped it or returned an error. Linux only.",
           "plots": [
             {
               "data": [],
@@ -378,7 +378,7 @@
         },
         {
           "name": "Socket Calls",
-          "description": "Send calls on TCP sockets and reads that copied data out of them, and the bytes each moved. These count socket calls, not segments: one send can become many segments, and one read can return several. Linux only.",
+          "description": "Calls to send on TCP sockets, with the bytes passed to each (including sends that failed or sent less), and receive-buffer cleanups after data was copied out, with the bytes copied. Receive counts one per read, except that a read that waits for more data (MSG_WAITALL, SO_RCVLOWAT) can be counted more than once. These count calls, not segments: one send can become many segments, and one read can return several. Linux only.",
           "plots": [
             {
               "data": [],
@@ -454,29 +454,12 @@
         },
         {
           "name": "Round-Trip Time",
-          "description": "The kernel's smoothed round-trip time estimate for a connection, sampled each time an established connection processes an incoming segment, so connections receiving more segments weigh more.",
+          "description": "The kernel's smoothed round-trip time estimate for a connection, sampled each time an established connection processes received data or ACKs, so connections receiving more weigh more.",
           "plots": [
             {
               "data": [],
               "opts": {
-                "title": "Smoothed RTT Rate",
-                "id": "tcp-srtt-rate",
-                "type": "delta_counter",
-                "format": {
-                  "x_axis_label": null,
-                  "y_axis_label": null,
-                  "unit_system": "rate",
-                  "precision": 2,
-                  "log_scale": null,
-                  "value_label": null
-                }
-              },
-              "promql_query": "sum(histogram_irate(tcp_srtt))"
-            },
-            {
-              "data": [],
-              "opts": {
-                "title": "Smoothed RTT Mean/Total",
+                "title": "Mean Smoothed RTT",
                 "id": "tcp-srtt-mean",
                 "type": "gauge",
                 "format": {
@@ -488,8 +471,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "histogram_mean(tcp_srtt)",
-              "promql_query_total": "histogram_sum(tcp_srtt)"
+              "promql_query": "histogram_mean(tcp_srtt)"
             },
             {
               "data": [],
@@ -518,29 +500,12 @@
         },
         {
           "name": "RTT Variation",
-          "description": "The kernel's mean deviation of a connection's round-trip time (mdev), sampled each time an established connection processes an incoming segment.",
+          "description": "The kernel's mean deviation of a connection's round-trip time (mdev), sampled each time an established connection processes received data or ACKs.",
           "plots": [
             {
               "data": [],
               "opts": {
-                "title": "RTT Variation Rate",
-                "id": "tcp-jitter-rate",
-                "type": "delta_counter",
-                "format": {
-                  "x_axis_label": null,
-                  "y_axis_label": null,
-                  "unit_system": "rate",
-                  "precision": 2,
-                  "log_scale": null,
-                  "value_label": null
-                }
-              },
-              "promql_query": "sum(histogram_irate(tcp_jitter))"
-            },
-            {
-              "data": [],
-              "opts": {
-                "title": "RTT Variation Mean/Total",
+                "title": "Mean RTT Variation",
                 "id": "tcp-jitter-mean",
                 "type": "gauge",
                 "format": {
@@ -552,8 +517,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "histogram_mean(tcp_jitter)",
-              "promql_query_total": "histogram_sum(tcp_jitter)"
+              "promql_query": "histogram_mean(tcp_jitter)"
             },
             {
               "data": [],
