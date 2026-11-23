@@ -13,11 +13,12 @@ pub const MAX_INTERFACES: usize = 64;
 
 /// Every ENA allowance counter, one member per tracked interface. Single
 /// writer: `refresh` in `mod.rs`, which reads every interface's stats under
-/// one acquisition.
+/// one acquisition. One group for all five families because one
+/// `ETHTOOL_GSTATS` ioctl per interface returns them together: principle 18's
+/// device-visit sweep.
 ///
-/// Declared so that a counter at zero is published as zero. In the default
-/// group, a zero-valued `CounterGroup` entry is skipped, so an interface whose
-/// allowance was never exceeded had no series at all (#1727).
+/// Declared so that a counter at zero is published as zero; the default group
+/// skips a zero-valued `CounterGroup` entry (#1727).
 pub static ENA_ALLOWANCE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("network_ethtool"),
     "network_ethtool_interfaces",

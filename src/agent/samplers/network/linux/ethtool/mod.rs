@@ -162,6 +162,8 @@ struct TrackedInterface {
     slot: usize,
     n_stats: u32,
     stats: Vec<TrackedStat>,
+    /// Whether the last read succeeded, so a change is logged once.
+    reading: bool,
 }
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -391,19 +393,33 @@ impl EthtoolInner {
             slot: 0,
             n_stats,
             stats: tracked_stats,
+            reading: true,
         }))
     }
 
     /// Read every interface's stats inside one acquisition window. With
     /// several interfaces, one whose read fails keeps its previous values under
-    /// a window the others stamped, the device-sweep cost principle 18 accepts.
+    /// a window the others stamped, the device-visit cost principle 18 accepts.
     pub fn refresh(&mut self) {
         let guard = ENA_ALLOWANCE_ACQ.acquire();
         let mut read_any = false;
-        for iface in &self.interfaces {
-            match self.read_stats(iface) {
-                Ok(()) => read_any = true,
-                Err(e) => debug!("{NAME}: reading stats for {} failed: {e}", iface.name),
+        for i in 0..self.interfaces.len() {
+            let result = self.read_stats(&self.interfaces[i]);
+            let iface = &mut self.interfaces[i];
+            match result {
+                Ok(()) => {
+                    if !iface.reading {
+                        info!("{NAME}: {}: stats can be read again", iface.name);
+                    }
+                    iface.reading = true;
+                    read_any = true;
+                }
+                Err(e) => {
+                    if iface.reading {
+                        warn!("{NAME}: {}: stats can no longer be read: {e}", iface.name);
+                    }
+                    iface.reading = false;
+                }
             }
         }
         // With no interface read, no value is from inside this window, and
