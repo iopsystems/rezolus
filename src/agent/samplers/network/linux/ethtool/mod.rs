@@ -211,7 +211,7 @@ impl Sampler for Ethtool {
     async fn refresh(&self) {
         let mut inner = self.inner.lock().await;
 
-        let _ = inner.refresh();
+        inner.refresh();
     }
 }
 
@@ -290,6 +290,11 @@ impl EthtoolInner {
             }
             return Ok(None);
         }
+
+        // Slots are assigned from 0 in order, so the prefix bound is exact. The
+        // interface set is fixed at init. A sampler that does not come up is
+        // bounded to zero by `bound_groups_without_a_live_sampler`.
+        ENA_ALLOWANCE_ACQ.set_member_bound(interfaces.len());
 
         Ok(Some(Self { fd, interfaces }))
     }
@@ -389,12 +394,25 @@ impl EthtoolInner {
         }))
     }
 
-    pub fn refresh(&mut self) -> Result<(), std::io::Error> {
+    /// Read every interface's stats inside one acquisition window. With
+    /// several interfaces, one whose read fails keeps its previous values under
+    /// a window the others stamped, the device-sweep cost principle 18 accepts.
+    pub fn refresh(&mut self) {
+        let guard = ENA_ALLOWANCE_ACQ.acquire();
+        let mut read_any = false;
         for iface in &self.interfaces {
-            self.read_stats(iface)?;
+            match self.read_stats(iface) {
+                Ok(()) => read_any = true,
+                Err(e) => debug!("{NAME}: reading stats for {} failed: {e}", iface.name),
+            }
         }
-
-        Ok(())
+        // With no interface read, no value is from inside this window, and
+        // stamping it would present the old values as fresh.
+        if read_any {
+            guard.finish();
+        } else {
+            guard.discard();
+        }
     }
 
     fn read_stats(&self, iface: &TrackedInterface) -> Result<(), std::io::Error> {

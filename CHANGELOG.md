@@ -285,6 +285,14 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **`network_ethtool` publishes an ENA allowance counter that is zero.** The
+  five `network_ena_*_allowance_exceeded` counters were in no acquisition
+  group, and the snapshot builder skips a zero entry of an undeclared counter
+  group. An interface whose allowance was never exceeded therefore had no
+  series, which reads the same as a host with no ENA interface. Releases from
+  5.21.0 through 5.32.0 and the 6.0 prereleases have this. The counters are now
+  in the group `network_ethtool_interfaces`, with one member per tracked
+  interface. (#1727)
 - **The `cpu_cores` sampler no longer exits the agent on a read error from
   `/sys/devices/system/cpu/online` or a line it cannot parse.** It skips that
   refresh. Releases from 4.0.0 on exit with status 101 on that error. (#1043)

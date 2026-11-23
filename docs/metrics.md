@@ -1743,6 +1743,9 @@ and an `interface` label (its name, e.g. `eth0`). A host with several ENIs
 reports each separately — which ENI is being throttled is the question these
 counters exist to answer.
 
+A counter that has never left zero is published as zero, so a series at zero
+means the interface's allowance was not exceeded.
+
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `network_ena_bandwidth_allowance_exceeded` | Packets queued or dropped due to the bandwidth allowance being exceeded | `direction={receive,transmit}`, `id`, `interface` |
