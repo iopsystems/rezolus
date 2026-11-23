@@ -1743,11 +1743,11 @@ and an `interface` label (its name, e.g. `eth0`). A host with several ENIs
 reports each separately — which ENI is being throttled is the question these
 counters exist to answer.
 
-In V3 snapshots (the default), a tracked interface publishes each counter its
-driver reports, including one at zero, so a series at zero means that
-allowance has not been exceeded since the driver's counter was last reset. A
-counter the interface's driver does not report has no value. With
-`snapshot_format = "v2"` a zero entry is omitted.
+In V3 snapshots (the default), an interface whose driver reports ENA
+allowance stats publishes each of those counters, including one at zero, so a
+series at zero means that allowance has not been exceeded since the driver's
+counter was last reset. A counter the interface's driver does not report has
+no value. With `snapshot_format = "v2"` a zero entry is omitted.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
