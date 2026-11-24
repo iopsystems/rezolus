@@ -538,9 +538,32 @@ impl Config {
             .unwrap_or_else(|| path.display().to_string())
     }
 
+    /// The name a hint's commands use for the baseline file at `path`: the
+    /// `.dendro` that `recording upgrade` writes beside a converted file,
+    /// since those commands open `.dendro` files only, else `path`.
+    fn hint_source(&self, path: &Path) -> String {
+        match &self.source_converted_from {
+            Some(file) => crate::parquet_tools::legacy::dendro_beside(Path::new(file))
+                .display()
+                .to_string(),
+            None => path.display().to_string(),
+        }
+    }
+
+    /// [`Config::hint_source`], for the experiment file at `path`.
+    fn hint_experiment(&self, path: &Path) -> String {
+        match &self.experiment_converted_from {
+            Some(file) => crate::parquet_tools::legacy::dendro_beside(Path::new(file))
+                .display()
+                .to_string(),
+            None => path.display().to_string(),
+        }
+    }
+
     /// For a hint whose commands name the files: the `recording upgrade`
-    /// commands to run first, since those commands open `.dendro` files
-    /// only. Empty when neither file was converted.
+    /// commands that write the `.dendro` files it names
+    /// ([`Config::hint_source`]), ending in a newline. Empty when neither
+    /// file was converted.
     fn upgrade_first(&self) -> String {
         let files: Vec<&String> = [&self.source_converted_from, &self.experiment_converted_from]
             .into_iter()
@@ -549,10 +572,10 @@ impl Config {
         if files.is_empty() {
             return String::new();
         }
-        let mut out = String::from("\nThese commands take .dendro files; convert first with:");
+        let mut out = String::from("These files are not .dendro archives; convert them first:\n");
         for file in files {
             out.push_str(&format!(
-                "\n  {} recording upgrade {}",
+                "  {} recording upgrade {}\n",
                 env!("CARGO_BIN_NAME"),
                 ::rez::container::shell_word(file)
             ));
@@ -1143,18 +1166,18 @@ fn init_file_mode_rez(
     // is one recording.
     if let Some(experiment) = &config.experiment_path {
         if readers.len() != 1 {
-            let file = shown.to_string();
+            let file = config.hint_source(path);
             eprintln!(
                 "{}{}",
+                config.upgrade_first(),
                 ::rez::container::one_recording_hint(
                     env!("CARGO_BIN_NAME"),
                     &file,
                     "the baseline",
                     readers.len(),
                     &file,
-                    &config.shown_experiment(experiment),
-                ),
-                config.upgrade_first()
+                    &config.hint_experiment(experiment),
+                )
             );
             exit_viewer(1);
         }
@@ -1373,11 +1396,19 @@ fn init_file_mode_rez(
     }
 
     if let Some(exp_path) = &config.experiment_path {
-        let baseline = shown.to_string();
-        let name = config.shown_experiment(exp_path);
+        // The names open_experiment's hint uses in its commands.
+        let baseline = config.hint_source(path);
+        let name = config.hint_experiment(exp_path);
         let (reader, systeminfo, file_meta) =
             open_experiment(exp_path, &name, &baseline, Arc::clone(&pool)).unwrap_or_else(|e| {
-                eprintln!("{e}{}", config.upgrade_first());
+                // Only the hint has commands; another error (a load failure)
+                // is printed alone.
+                let first = if e.contains(" recording combine ") {
+                    config.upgrade_first()
+                } else {
+                    String::new()
+                };
+                eprintln!("{first}{e}");
                 exit_viewer(1);
             });
         state.captures.attach_experiment(
@@ -1387,7 +1418,10 @@ fn init_file_mode_rez(
             config.experiment_alias.clone(),
         );
         *state.cli_experiment_path.write() = Some(exp_path.clone());
-        info!("Attached experiment capture: {name}");
+        info!(
+            "Attached experiment capture: {}",
+            config.shown_experiment(exp_path)
+        );
     }
 
     if let Some(ref cat_name) = config.category_name {

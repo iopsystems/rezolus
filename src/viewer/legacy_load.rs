@@ -111,13 +111,15 @@ pub fn dendro_path(path: &Path) -> Result<PathBuf, String> {
     Ok(out)
 }
 
-/// Write the upload `body`, named `filename`, to `dest` as a dendro archive:
-/// as it is when it is one, else converted from the format it is in. A file
-/// that is not a recording is refused. `dest` is replaced.
-pub fn stage_upload(body: &[u8], filename: &str, dest: &Path) -> Result<(), String> {
+/// Store the upload `body`, named `filename`, as a dendro archive and
+/// return its path: a dendro archive at `dest`, which is replaced, and any
+/// other recording converted into the conversion directory, so [`remove`]
+/// deletes it. A file that is not a recording is refused.
+pub fn stage_upload(body: &[u8], filename: &str, dest: &Path) -> Result<PathBuf, String> {
     let container = Container::of_bytes(body);
     if container == Container::Dendro {
-        return std::fs::write(dest, body).map_err(|e| format!("failed to store upload: {e}"));
+        std::fs::write(dest, body).map_err(|e| format!("failed to store upload: {e}"))?;
+        return Ok(dest.to_path_buf());
     }
     if !container.is_legacy() {
         return Err(::rez::container::not_dendro(
@@ -141,8 +143,8 @@ pub fn stage_upload(body: &[u8], filename: &str, dest: &Path) -> Result<(), Stri
             .map_err(|e| format!("failed to store upload: {e}"))
     })?;
     std::fs::write(input.path(), body).map_err(|e| format!("failed to store upload: {e}"))?;
-    let _ = std::fs::remove_file(dest);
-    crate::parquet_tools::legacy::convert_quiet(input.path(), dest).map_err(|e| {
+    let dest = fresh_path("upload", "dendro")?;
+    crate::parquet_tools::legacy::convert_quiet(input.path(), &dest).map_err(|e| {
         // The converter names its input, here a staged copy of the upload.
         let e = e
             .to_string()
@@ -150,7 +152,7 @@ pub fn stage_upload(body: &[u8], filename: &str, dest: &Path) -> Result<(), Stri
         format!("failed to convert {filename} to open it: {e}")
     })?;
     tracing::info!("{}", converted_note(filename, container));
-    Ok(())
+    Ok(dest)
 }
 
 #[cfg(test)]

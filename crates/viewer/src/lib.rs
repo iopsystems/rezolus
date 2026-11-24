@@ -133,20 +133,14 @@ fn not_dendro(filename: &str, container: rez::container::Container) -> String {
 /// ([`MAX_REPORT_SOURCE_BYTES`]).
 pub const MAX_CONVERT_BYTES: usize = 640 << 20;
 
-/// The refusal of a `size`-byte `container` file over the conversion limit
+/// The refusal of a `size`-byte file, a `what`, over the conversion limit
 /// `limit` ([`MAX_CONVERT_BYTES`]):
 /// the command that converts it on the user's machine.
-fn convert_too_large(
-    filename: &str,
-    container: rez::container::Container,
-    size: usize,
-    limit: usize,
-) -> String {
+fn convert_too_large(filename: &str, what: &str, size: usize, limit: usize) -> String {
     format!(
-        "{filename} is a {} of {} MiB, too large to convert in the browser, which converts \
+        "{filename} is a {what} of {} MiB, too large to convert in the browser, which converts \
          files of up to {} MiB. Convert it to a .dendro on your machine, then open the \
          .dendro:\n  rezolus recording upgrade {}",
-        container.name(),
         size >> 20,
         limit >> 20,
         rez::container::shell_word(filename)
@@ -205,7 +199,7 @@ fn open_upload(
         Container::Dendro => (Bytes::from(data), None),
         c if rez::legacy::converts(c) => {
             if data.len() > limit {
-                return Err(convert_too_large(filename, c, data.len(), limit));
+                return Err(convert_too_large(filename, c.name(), data.len(), limit));
             }
             let converted = rez::legacy::to_dendro_bytes(data, filename, "rezolus")?;
             (Bytes::from(converted.bytes), Some(converted.from))
@@ -229,12 +223,27 @@ fn open_upload(
 /// [`MAX_CONVERT_BYTES`]: the page asks before it reads the whole file into
 /// memory, which for a file near 4 GiB would fail before any refusal.
 /// `None` when the upload may be read; the attach then decides.
+///
+/// A tar `.rez` is recognized by its `manifest.json` entry, which need not
+/// be in the first 4 KiB, so any tar file over the limit is refused: a tar
+/// the browser does not convert (an A/B tarball) is refused on load anyway.
 #[wasm_bindgen]
 pub fn upload_refusal(head: &[u8], size: f64, filename: &str) -> Option<String> {
     let container = rez::container::Container::of_bytes(head);
     let size = size as usize;
-    (rez::legacy::converts(container) && size > MAX_CONVERT_BYTES)
-        .then(|| convert_too_large(filename, container, size, MAX_CONVERT_BYTES))
+    if size <= MAX_CONVERT_BYTES {
+        return None;
+    }
+    if rez::legacy::converts(container) {
+        return Some(convert_too_large(
+            filename,
+            container.name(),
+            size,
+            MAX_CONVERT_BYTES,
+        ));
+    }
+    let tar = head.get(257..262) == Some(b"ustar");
+    tar.then(|| convert_too_large(filename, "tar archive", size, MAX_CONVERT_BYTES))
 }
 
 /// Whether an archive's recordings open as one combined view: more than one
@@ -2093,7 +2102,7 @@ mod tests {
         );
         let big = convert_too_large(
             "big.rez",
-            rez::container::Container::RezV3,
+            rez::container::Container::RezV3.name(),
             MAX_CONVERT_BYTES + 1,
             MAX_CONVERT_BYTES,
         );
@@ -2135,6 +2144,16 @@ mod tests {
         assert!(upload_refusal(head, size as f64, "big.rez").is_none());
         let dendro = one_recording();
         assert!(upload_refusal(&dendro[..4096.min(dendro.len())], over, "big.dendro").is_none());
+        // The head of a tar whose first entry is not `manifest.json`: a
+        // header naming another file, with the ustar magic at offset 257.
+        let mut tar = vec![0u8; 4096];
+        tar[..13].copy_from_slice(b"rec/a.parquet");
+        tar[257..262].copy_from_slice(b"ustar");
+        assert!(
+            upload_refusal(&tar, over, "old.rez")
+                .unwrap()
+                .starts_with("old.rez is a tar archive of")
+        );
     }
 
     /// A converted `.rez` that was not finalized says so, without the advice

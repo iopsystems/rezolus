@@ -172,10 +172,10 @@ fn ingest_upload(
     if state.live.load(Ordering::Relaxed) {
         return ApiResponse::err("upload is only available in file mode", "bad_request");
     }
-    let temp_path = baseline_temp_path();
-    if let Err(e) = super::legacy_load::stage_upload(body, &filename, &temp_path) {
-        return ApiResponse::err(e, "invalid_recording");
-    }
+    let temp_path = match super::legacy_load::stage_upload(body, &filename, &baseline_temp_path()) {
+        Ok(path) => path,
+        Err(e) => return ApiResponse::err(e, "invalid_recording"),
+    };
     ingest_rez_from_path(state, temp_path, filename)
 }
 
@@ -476,11 +476,12 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
         )
             .into_response();
     }
-    let temp_path =
+    let dest =
         std::env::temp_dir().join(format!("rezolus-experiment-{}.dendro", std::process::id()));
-    if let Err(e) = super::legacy_load::stage_upload(body, &filename, &temp_path) {
-        return (StatusCode::BAD_REQUEST, e).into_response();
-    }
+    let temp_path = match super::legacy_load::stage_upload(body, &filename, &dest) {
+        Ok(path) => path,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
 
     let (exp_reader, sysinfo, file_meta) =
         match super::open_experiment(&temp_path, &filename, &baseline, Arc::clone(&state.pool)) {
