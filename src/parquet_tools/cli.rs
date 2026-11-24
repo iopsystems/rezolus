@@ -329,6 +329,10 @@ pub enum Recording {
     Upgrade(UpgradeArgs),
     #[command(about = "Copy an archive that is still being written, without stopping the writer")]
     Snapshot(SnapshotArgs),
+    #[command(
+        about = "Rewrite a .dendro recording's segment indexes in place, so its tables open faster"
+    )]
+    Reindex(ReindexArgs),
 }
 
 // The `Args` structs carry no doc comments: clap derive would turn them into
@@ -640,6 +644,15 @@ pub struct SnapshotArgs {
     pub output: PathBuf,
 }
 
+#[derive(Args, Debug)]
+pub struct ReindexArgs {
+    #[arg(
+        value_name = "FILE",
+        help = "The archive to re-index (.dendro), in place; not one another process has open"
+    )]
+    pub file: PathBuf,
+}
+
 fn command(host: &Host) -> Command {
     let cmd = Recording::augment_subcommands(Command::new("recording"))
         .about(format!(
@@ -691,6 +704,7 @@ fn command(host: &Host) -> Command {
     .mut_subcommand("snapshot", |c| {
         c.long_about(host.render(help::SNAPSHOT_LONG))
     })
+    .mut_subcommand("reindex", |c| c.long_about(host.render(help::REINDEX_LONG)))
 }
 
 fn run(host: &Host, cmd: Recording) -> i32 {
@@ -713,6 +727,7 @@ fn run(host: &Host, cmd: Recording) -> i32 {
             super::upgrade_to_dendro(&args.file, args.output.as_deref(), &args.to)
         }
         Recording::Snapshot(args) => super::snapshot_rez(&args.file, &args.output, host.program),
+        Recording::Reindex(args) => super::reindex_dendro(&args.file, host.program).map(|_| ()),
     };
     match result {
         Ok(()) => 0,
@@ -740,6 +755,7 @@ mod help {
                  convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro\n    \
                  filter     Shrink a recording to the {table_noun} or metrics named\n    \
                  snapshot   Copy an archive that is still being written into a complete .dendro\n    \
+                 reindex    Rewrite a recording's segment indexes in place, so its tables open faster\n    \
                  upgrade    Convert a recording an earlier release wrote into a .dendro archive\n\n\
                  Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,\n\
                  a .parquet file or a .parquet.ab.tar A/B tarball is refused with the command\n\
@@ -999,6 +1015,28 @@ mod help {
                          EXAMPLES:\n    \
                          {buffer_example}{live_example}\n    \
                          {program} recording snapshot {agent}.dendro -o so-far.dendro";
+
+    pub(super) const REINDEX_LONG: &str =
+        "Rewrite the index of every sealed segment of a .dendro recording, in\n\
+                         place, as this release writes it. Opening a table then reads its\n\
+                         segments' indexes instead of every segment, so the first chart of a\n\
+                         table takes less time. No segment's data is rewritten: each segment is\n\
+                         read once to build its index.\n\n\
+                         A recording this release records needs no re-index, and neither does\n\
+                         a filter that keeps named metrics. Any other copy of an older recording\n\
+                         (a snapshot, a combine, a filter of whole tables) keeps its indexes and\n\
+                         needs one.\n\n\
+                         An archive another process has open (a viewer, a recording) is\n\
+                         refused; re-index it once that process closes it, or re-index a\n\
+                         `{program} recording snapshot` of it. While the re-index runs, the\n\
+                         viewer cannot open the file. An archive written before .dendro's\n\
+                         current layout (schema 5) is refused with the snapshot that copies it\n\
+                         into the current one.\n\n\
+                         EXAMPLES:\n    \
+                         {program} recording reindex run.dendro\n\n    \
+                         # An older archive: copy it, then re-index the copy\n    \
+                         {program} recording snapshot old.dendro -o current.dendro\n    \
+                         {program} recording reindex current.dendro";
 
     pub(super) const CONVERT_METADATA: &str = "Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer reads to identify where a recording came from (it defaults to {agent}). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=";
 }

@@ -696,6 +696,16 @@ tarballs 5.x wrote, which every other subcommand refuses with that command.
 - **Snapshot** — copy an archive that is still being written consistently,
   including committed data in SQLite's sidecar, into a `.dendro`. Prefer this
   over copying an active file with `cp`.
+- **Reindex** — rewrite a recording's segment indexes in place, as this
+  release writes them, so the viewer opens a table from the indexes instead
+  of reading every segment, and a table's first chart takes less time. A
+  recording this release records needs none, and neither does the output of
+  `filter --metrics`; any other copy of an older recording (`snapshot`,
+  `combine`, `filter` without `--metrics`) keeps its indexes and needs one.
+  It refuses a file another process has open (a viewer, a recording), and an
+  archive from before the current layout (schema 5), which `snapshot` copies
+  into the current one first. While it runs, the viewer cannot open the
+  file.
 
 On a recording with identity layers, `annotate --queries` (also spelled
 `--template`) and `--systeminfo` append one user-layer entry by `annotate`:
@@ -733,6 +743,7 @@ rezolus recording combine rezolus.dendro service.dendro -o combined.dendro
 rezolus recording convert rezolus.raw.zst              # writes rezolus.dendro
 rezolus recording filter run.dendro --samplers cpu_usage -o slim.dendro
 rezolus recording snapshot live.dendro -o incident.dendro
+rezolus recording reindex run.dendro
 rezolus recording upgrade capture.rez -o capture.dendro
 ```
 

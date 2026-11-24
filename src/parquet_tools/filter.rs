@@ -236,6 +236,11 @@ fn filter_dendro(
         )
         .into());
     }
+    // A projection re-encodes each segment and dendro drops its index, which
+    // described the columns before it; the copy is indexed again here.
+    if keep_columns.is_some() {
+        metriken_storage::reindex::reindex(&staged)?;
+    }
     // In place, the filtered copy replaces the input, as asked; to a new
     // output, nothing that appeared there meanwhile is replaced.
     if in_place {
@@ -469,6 +474,15 @@ mod tests {
         let (x, y) = (answer(&a), answer(&b));
         assert_eq!(x.len(), 2, "two threads, by their labels: {x:?}");
         assert_eq!(x, y, "the kept metric answers the same");
+
+        // Each table segment of a projected copy is indexed as the writer
+        // indexes it: a re-index finds nothing to replace.
+        drop((a, b));
+        for out in [&mem, &tasks] {
+            let report = metriken_storage::reindex::reindex(out).unwrap();
+            assert_eq!(report.replaced, 0, "{report:?}");
+            assert!(report.current > 0, "{report:?}");
+        }
     }
 
     /// The `.rez` guards hold for a dendro archive: an unknown sampler is

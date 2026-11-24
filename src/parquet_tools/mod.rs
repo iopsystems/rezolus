@@ -16,7 +16,7 @@ pub(crate) mod select;
 #[allow(unused_imports)]
 pub use cli::{
     AnnotateArgs, CheckArgs, CombineArgs, ConvertArgs, FilterArgs, Host, MetadataArgs, Recording,
-    SnapshotArgs, TableFlag, UpgradeArgs,
+    ReindexArgs, SnapshotArgs, TableFlag, UpgradeArgs,
 };
 
 /// Copy a dendro archive that may still be written into one complete
@@ -46,6 +46,56 @@ pub(crate) fn snapshot_rez(
     legacy::publish(&staged, output)?;
     println!("Wrote {}", output.display());
     Ok(())
+}
+
+/// Rewrite the names index of every sealed segment of the dendro archive at
+/// `path` in place, as this release's writer writes them
+/// (`metriken_storage::reindex`): each table segment's index then holds what
+/// opening its table reads, so the viewer opens the table without fetching
+/// the segment. No segment is re-encoded.
+///
+/// Refuses any file but a dendro archive, an archive before schema 5 (where
+/// reading a segment's index reads the segment), naming the `snapshot` that
+/// copies it into a current one, and an archive another connection has open
+/// (a viewer, a recording): the re-index needs the file to itself, and a
+/// viewer cannot open it while the re-index runs.
+pub(crate) fn reindex_dendro(
+    path: &std::path::Path,
+    program: &str,
+) -> Result<metriken_storage::reindex::Reindexed, Box<dyn std::error::Error>> {
+    ::rez::container::require_dendro(path, program)?;
+    let shown = path.display().to_string();
+    let in_use = |e: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
+        match e.downcast_ref::<dendro::Error>() {
+            Some(dendro::Error::InUse { .. }) => format!(
+                "{shown} is open in another process (a viewer, an MCP server, a recording \
+                 or an edit); re-index it once that process closes it, or re-index a \
+                 `{program} recording snapshot` of it"
+            )
+            .into(),
+            _ => e,
+        }
+    };
+    let schema = dendro::archive::Archive::open(path)
+        .and_then(|a| a.schema_version())
+        .map_err(|e| in_use(e.into()))?;
+    if schema < 5 {
+        let file = ::rez::container::shell_word(&shown);
+        return Err(format!(
+            "{shown} is an archive of schema {schema}, where reading a segment's index \
+             reads the whole segment; copy it into a current archive and re-index the \
+             copy:\n    {program} recording snapshot {file} -o NEW.dendro\n    \
+             {program} recording reindex NEW.dendro"
+        )
+        .into());
+    }
+    let report = metriken_storage::reindex::reindex(path).map_err(in_use)?;
+    println!(
+        "Re-indexed {shown}: {} of {} segments rewritten, {} already current, {} left as \
+         they were",
+        report.replaced, report.segments, report.current, report.left
+    );
+    Ok(report)
 }
 
 /// Convert the legacy recording at `path` (any `.rez`, a parquet file, or a
@@ -339,9 +389,142 @@ mod upgrade_to_dendro_tests {
 
 #[cfg(test)]
 mod dendro_command_tests {
-    use super::{snapshot_rez, upgrade_to_dendro};
+    use super::{reindex_dendro, snapshot_rez, upgrade_to_dendro};
     use crate::dendro_copy::fixtures;
     use dendro::archive::Archive;
+
+    /// A copy in `dir` of `tests/fixtures/upgraded/v3.dendro`, which an
+    /// earlier release wrote: its segments carry the earlier indexes.
+    fn earlier(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("v3.dendro");
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/upgraded/v3.dendro"),
+            &path,
+        )
+        .unwrap();
+        path
+    }
+
+    /// Every sealed segment's index in the archive at `path`.
+    fn indexes(path: &std::path::Path) -> Vec<Option<Vec<u8>>> {
+        let archive = Archive::open(path).unwrap();
+        let mut out = Vec::new();
+        for source in archive.read_sources().unwrap() {
+            for stream in archive.all_streams(source.id).unwrap() {
+                for (_, index) in archive.read_segment_indexes(source.id, &stream).unwrap() {
+                    out.push(index);
+                }
+            }
+        }
+        out
+    }
+
+    /// Every counter's rate and every gauge of the archive at `path`.
+    fn answers(path: &std::path::Path) -> Vec<serde_json::Value> {
+        use metriken_query::MetricsSource;
+        let readers = ::rez::reader::RezReader::open_recordings(
+            path,
+            metriken_storage::BufferPool::new(16 << 20),
+        )
+        .unwrap();
+        let r = &readers[0].1;
+        let (start, end) = r.time_range().unwrap();
+        let queries: Vec<String> = r
+            .counter_names()
+            .into_iter()
+            .map(|c| format!("sum(irate({c}[2s]))"))
+            .chain(r.gauge_names())
+            .collect();
+        assert!(!queries.is_empty());
+        queries
+            .iter()
+            .map(|q| serde_json::to_value(r.query_range(q, start, end, 1.0).unwrap()).unwrap())
+            .collect()
+    }
+
+    /// `reindex` of an archive an earlier release wrote replaces its table
+    /// segments' indexes, and every query answers as before; a second run
+    /// finds every index current.
+    #[test]
+    fn reindex_replaces_earlier_indexes_and_answers_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = earlier(dir.path());
+        let (before, old) = (answers(&path), indexes(&path));
+
+        let first = reindex_dendro(&path, "rezolus").unwrap();
+        assert!(first.replaced > 0, "{first:?}");
+        assert_eq!(first.segments, first.replaced + first.current + first.left);
+        assert_ne!(indexes(&path), old);
+        assert_eq!(answers(&path), before);
+
+        let again = reindex_dendro(&path, "rezolus").unwrap();
+        assert_eq!(
+            (again.replaced, again.current),
+            (0, first.replaced + first.current),
+            "{again:?}"
+        );
+    }
+
+    /// `reindex` refuses an archive before schema 5, naming the snapshot
+    /// that copies it into a current one, and leaves it as it was.
+    #[test]
+    fn reindex_refuses_a_schema_4_archive_with_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.dendro");
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/released/v5.29.2.dendro"),
+            &path,
+        )
+        .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
+        assert!(err.contains("schema 4"), "{err}");
+        assert!(err.contains("tool recording snapshot"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    /// `reindex` refuses an archive a reader holds open (as the viewer
+    /// keeps one), saying another process has it open.
+    #[test]
+    fn reindex_refuses_an_archive_open_for_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = earlier(dir.path());
+        let held = Archive::open(&path).unwrap();
+        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
+        assert!(err.contains("is open in another process"), "{err}");
+        drop(held);
+    }
+
+    /// `reindex` refuses an archive another connection holds exclusively (an
+    /// in-place edit), at the schema read, saying another process has it
+    /// open.
+    #[test]
+    fn reindex_refuses_an_archive_an_edit_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = earlier(dir.path());
+        let edit = dendro::archive::ArchiveMut::open(&path).unwrap();
+        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
+        assert!(err.contains("is open in another process"), "{err}");
+        drop(edit);
+    }
+
+    /// `reindex` refuses an archive a writer holds, saying another process
+    /// has it open.
+    #[test]
+    fn reindex_refuses_an_archive_being_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.dendro");
+        let writer = metriken_storage::ArchiveWriter::create(
+            &path,
+            metriken_storage::WriterConfig::default(),
+        )
+        .unwrap();
+        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
+        assert!(err.contains("is open in another process"), "{err}");
+        drop(writer);
+    }
 
     /// `snapshot` of a dendro archive with rows still in its WAL: the copy
     /// holds every row, all sealed, and nothing is left beside it.

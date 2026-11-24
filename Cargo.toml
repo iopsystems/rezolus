@@ -18,8 +18,8 @@ log = "0.4.29"
 metriken = "0.11.4"
 metriken-charts = "0.1.5"
 metriken-exposition = "0.28.0"
-metriken-query = { version = "0.52.0", default-features = false }
-metriken-storage = { version = "0.14.0", default-features = false }
+metriken-query = { version = "0.52.1", default-features = false }
+metriken-storage = { version = "0.14.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -51,8 +51,10 @@ dashboard = { path = "crates/dashboard" }
 # adds `SourceWriter::set_identity`, which metriken-storage 0.6's writer uses.
 # 0.8.1 is the version metriken-storage 0.14 builds on: an archive holds one
 # source per uuid (`Error::DuplicateSource`), and each writing handle holds an
-# advisory lock on an `<archive>-lock` file beside the archive.
-dendro = { version = "0.8.1", default-features = false }
+# advisory lock on an `<archive>-lock` file beside the archive. 0.8.2 adds
+# `ArchiveMut::replace_segment_index`, which metriken-storage 0.14.1's
+# `reindex` (`recording reindex`) uses.
+dendro = { version = "0.8.2", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -61,7 +63,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.169"
+version = "6.0.0-alpha.170"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

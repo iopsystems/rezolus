@@ -416,6 +416,9 @@ fn invocations_are_unchanged() {
         "recording snapshot snap.dendro -o snap2.dendro",
         "recording snapshot simple.parquet -o snap3.dendro",
         "recording metadata -i snap2.dendro",
+        // reindex: a recording this release wrote is current.
+        "recording reindex snap2.dendro",
+        "recording reindex simple.parquet",
         // mcp shares the selector.
         "mcp describe-recording multi.dendro",
         "mcp describe-recording multi.dendro --recording host=nowhere",

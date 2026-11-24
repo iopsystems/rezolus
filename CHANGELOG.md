@@ -32,6 +32,26 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **`rezolus recording reindex FILE` rewrites a recording's segment indexes
+  in place**, as this release writes them, so the viewer opens a table from
+  its segments' indexes instead of reading every segment (metriken-storage
+  0.14.1's `reindex`, with metriken-query 0.52.1 and dendro 0.8.2). No
+  segment's data is rewritten. On a 9.6 h recording of 5,874 segments,
+  copied into a current archive, `recording reindex` took 5.5 s and 207 MB
+  peak RSS (one run, release build, Apple M4 Max). On a re-indexed copy of
+  the same recording, metriken's journal measured the first query on its
+  wide task table at 1.31 s by median (1.30–2.14 s, five runs), against
+  2.45–2.81 s for a metriken-storage build without that index change
+  (metriken #438) reading the earlier indexes; this release reading an
+  archive that was not re-indexed was not measured. A recording this
+  release records (`record`, hindsight) needs no re-index, and neither does
+  the output of `filter --metrics`, which now indexes its output. Any other
+  copy of an older recording (`snapshot`, `combine`, `filter` without
+  `--metrics`) keeps its indexes and needs one. An archive before schema 5
+  is refused with the `recording snapshot` that copies it into the current
+  layout, and an archive another process has open (a viewer, a recording)
+  is refused; while it runs, the viewer cannot open the file.
+
 - **`memory_cgroup` reads each cgroup's limits and memory events.**
   `cgroup_memory_max` and `cgroup_memory_high` are `memory.max` and
   `memory.high` in bytes, -1 when the file says `max`.
@@ -836,8 +856,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   file, `combine` and Save as Report each write a copy, and refuse it.
 - **Writing to an archive leaves an empty `<archive>-lock` file beside it**:
   `record`, and an in-place `recording annotate`, `check --annotate` or MCP
-  edit (`add_event`, `remove_events`, `run_checks` with `annotate=true`).
-  dendro takes an advisory lock on that file so that two processes cannot
+  edit (`add_event`, `remove_events`, `run_checks` with `annotate=true`),
+  and `recording reindex`. dendro takes an advisory lock on that file so that two processes cannot
   write one archive; the second is refused. The file holds no data, a copy
   does not need it, and nothing removes it.
 - **A `drivehealth` or `memory_cgroup` read that finishes a full interval
