@@ -314,8 +314,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 - **With `bpf_stats = true`, `rezolus_bpf_run_time` and
   `rezolus_bpf_run_count` are published at 0 for a sampler whose BPF programs
   have not run.** They were set only when the summed value was above 0, so a
-  sampler whose programs had not fired (for example `xfs_log` on a host with
-  no XFS mount) had no series, the same as when run-time accounting is off.
+  sampler whose programs had not fired (for example `tcp_retransmit` on a host
+  with no retransmits) had no series, the same as when run-time accounting is
+  off. This needs the agent to have enabled run-time statistics; it logs a
+  warning when it cannot.
   Releases from 5.19.1 through 5.32.0 and the 6.0 prereleases have this.
   Without `bpf_stats`, a 0 is still not published, since the kernel reports 0
   while accounting is off.
