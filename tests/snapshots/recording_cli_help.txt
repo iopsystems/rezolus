@@ -96,6 +96,7 @@ Commands:
   filter    Shrink a .dendro recording to the samplers or metrics named
   upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
+  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -116,6 +117,7 @@ SUBCOMMANDS:
     convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro
     filter     Shrink a recording to the samplers or metrics named
     snapshot   Copy an archive that is still being written into a complete .dendro
+    reindex    Rewrite a recording's segment indexes in place, so its tables open faster
     upgrade    Convert a recording an earlier release wrote into a .dendro archive
 
 Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,
@@ -137,6 +139,7 @@ Commands:
   filter    Shrink a .dendro recording to the samplers or metrics named
   upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
+  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -825,6 +828,59 @@ Options:
           Print help (see a summary with '-h')
 --- stderr
 
+=== rezolus recording reindex -h
+--- exit 0
+--- stdout
+Rewrite a .dendro recording's segment indexes in place, so its tables open faster
+
+Usage: rezolus recording reindex <FILE>
+
+Arguments:
+  <FILE>  The archive to re-index (.dendro), in place; not one another process has open
+
+Options:
+  -h, --help  Print help (see more with '--help')
+--- stderr
+
+=== rezolus recording reindex --help
+--- exit 0
+--- stdout
+Rewrite the index of every sealed segment of a .dendro recording, in
+place, as this release writes it. Opening a table then reads its
+segments' indexes instead of every segment, so the first chart of a
+table takes less time. No segment's data is rewritten: each segment is
+read once to build its index.
+
+A recording this release records needs no re-index, and neither does
+a filter that keeps named metrics. A recording an earlier 6.0 build
+wrote, and any copy of one (a snapshot, a combine, a filter of whole
+tables), keeps the earlier indexes and needs one.
+
+An archive another process has open (a viewer, a recording) is
+refused; re-index it once that process closes it, or re-index a
+`rezolus recording snapshot` of it. While the re-index runs, the
+viewer cannot open the file. An archive written before .dendro's
+current layout (schema 5) is refused with the snapshot that copies it
+into the current one.
+
+EXAMPLES:
+    rezolus recording reindex run.dendro
+
+    # A 5.x archive (schema 4): copy it, then re-index the copy
+    rezolus recording snapshot old.dendro -o current.dendro
+    rezolus recording reindex current.dendro
+
+Usage: rezolus recording reindex <FILE>
+
+Arguments:
+  <FILE>
+          The archive to re-index (.dendro), in place; not one another process has open
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+--- stderr
+
 === rezolus mcp -h
 --- exit 0
 --- stdout
@@ -1417,6 +1473,7 @@ Commands:
   filter    Shrink a .dendro recording to the samplers or metrics named
   upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
+  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1437,6 +1494,7 @@ SUBCOMMANDS:
     convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro
     filter     Shrink a recording to the samplers or metrics named
     snapshot   Copy an archive that is still being written into a complete .dendro
+    reindex    Rewrite a recording's segment indexes in place, so its tables open faster
     upgrade    Convert a recording an earlier release wrote into a .dendro archive
 
 Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,
@@ -1458,6 +1516,7 @@ Commands:
   filter    Shrink a .dendro recording to the samplers or metrics named
   upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
+  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:

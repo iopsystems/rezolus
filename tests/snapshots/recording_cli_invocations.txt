@@ -3,7 +3,7 @@
 --- stdout
 --- stderr
 error: 'rezolus recording' requires a subcommand but one was not provided
-  [subcommands: annotate, check, combine, metadata, convert, filter, upgrade, snapshot, help]
+  [subcommands: annotate, check, combine, metadata, convert, filter, upgrade, snapshot, reindex, help]
 
 Usage: rezolus recording <COMMAND>
 
@@ -1111,6 +1111,19 @@ dendro archive — 1 recording(s)
     a/g                         12 rows  ~1.000s  (3 segments)
     b/g                         12 rows  ~1.000s  (3 segments)
 --- stderr
+
+=== rezolus recording reindex snap2.dendro
+--- exit 0
+--- stdout
+Re-indexed snap2.dendro: 0 of 6 segments rewritten, 6 already current, 0 left as they were
+--- stderr
+
+=== rezolus recording reindex simple.parquet
+--- exit 1
+--- stdout
+--- stderr
+Error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus mcp describe-recording multi.dendro
 --- exit 0
