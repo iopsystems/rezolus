@@ -3622,6 +3622,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
+ "dashboard",
  "dendro",
  "histogram",
  "metriken",
@@ -3639,7 +3640,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.173"
+version = "6.0.0-alpha.174"
 dependencies = [
  "allan",
  "anyhow",

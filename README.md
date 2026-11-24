@@ -168,9 +168,10 @@ Recorder and Hindsight write **`.dendro`** archives only: a recording per
 endpoint, each acquisition group at its own cadence. One archive can hold
 Rezolus agents and Prometheus endpoints. An output path not ending in
 `.dendro` is refused; a rezolus 5.x recorder (5.27.0 or later) still writes
-`.rez`, parquet and raw. Every other command opens `.dendro` only: a `.rez`,
-`.parquet` or `.parquet.ab.tar` from an earlier release is refused with the
-command that converts it, `rezolus recording upgrade FILE`. See
+`.rez`, parquet and raw. `rezolus view` and the browser viewer convert a
+`.rez` or `.parquet` from an earlier release to a `.dendro` when they open it;
+every other command opens `.dendro` only and refuses those with the command
+that converts them, `rezolus recording upgrade FILE`. See
 [Output format](docs/usage.md#output-format) for the overwrite rules.
 
 `rezolus view` runs a local Rust server that evaluates queries and serves the

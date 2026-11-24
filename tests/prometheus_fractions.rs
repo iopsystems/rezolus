@@ -364,7 +364,7 @@ fn a_prometheus_endpoints_fractions_read_back_through_both_viewers() {
 
     // The WASM viewer, built natively.
     let bytes = std::fs::read(output).unwrap();
-    let wasm = match viewer::Viewer::new(&bytes, "fractions.dendro") {
+    let wasm = match viewer::Viewer::new(bytes.to_vec(), "fractions.dendro") {
         Ok(v) => v,
         Err(_) => panic!("the WASM viewer opens the recording"),
     };

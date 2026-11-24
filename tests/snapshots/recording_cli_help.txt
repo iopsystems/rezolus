@@ -720,8 +720,9 @@ Options:
 Bring a recording an earlier release wrote up to what this release writes.
 
 A v1, v2 or v3 `.rez`, a standalone `.parquet` or a `.parquet.ab.tar`
-A/B tarball is converted into a new .dendro archive. Every other command
-opens .dendro archives only and refuses these with this command.
+A/B tarball is converted into a new .dendro archive. `view` converts these
+to a temporary .dendro when it opens one; every other command opens .dendro
+archives only and refuses these with this command.
 
 A v3 `.rez`'s recordings become sources and its tables streams; segment,
 WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings

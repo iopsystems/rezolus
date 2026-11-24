@@ -4,8 +4,9 @@
 //! Recordings opened anywhere (the viewers, `mcp`, the `recording` tools)
 //! are dendro archives. The formats earlier releases wrote (`.rez` archives
 //! in both containers, standalone parquet files, `.parquet.ab.tar` A/B
-//! tarballs) are converted once, by `recording upgrade`, and the readers
-//! refuse them with the command that does it.
+//! tarballs) are converted by `recording upgrade`, and by the viewers when
+//! they open one ([`crate::legacy`] in the browser); `mcp` and the
+//! `recording` tools refuse them with the upgrade command.
 
 use std::io::Read;
 use std::path::Path;
