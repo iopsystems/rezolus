@@ -685,6 +685,18 @@ pub fn render_section(
     if let Some(scope) = ctx.scopes.get(route) {
         return render_scoped(data, route, ctx, scope);
     }
+    let mut rendered = render_unscoped(data, route, ctx)?;
+    rendered
+        .view
+        .annotate_errata(&crate::errata::for_source(data));
+    Some(rendered)
+}
+
+fn render_unscoped(
+    data: &dyn MetricsSource,
+    route: &str,
+    ctx: &DashboardContext,
+) -> Option<Rendered> {
     let Some(template) = ctx.template.as_deref() else {
         return generate_section(data, route, ctx).map(|view| Rendered { view, error: None });
     };
@@ -723,6 +735,9 @@ fn render_scoped(
         )?,
         None => generate_section(&scoped, route, ctx).map(|view| Rendered { view, error: None })?,
     };
+    rendered
+        .view
+        .annotate_errata(&crate::errata::for_source(&scoped));
     let own = &route_scope.scope.sources;
     if !own.is_empty() {
         let mut with_throughput = own.clone();

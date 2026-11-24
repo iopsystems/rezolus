@@ -32,6 +32,16 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **The viewer shows known errata on the dashboard charts they affect.** A
+  section chart whose query reads a metric with a known erratum for its
+  recording's agent version (the table `describe-recording` uses) carries a
+  notice above it: the severity, the metric, what is wrong, why it applies
+  to this recording, and a link to the fix. In an archive read combined,
+  each recording's charts carry that recording's errata. In a comparison,
+  only the baseline recording's errata are shown; an erratum of the
+  experiment's recording is not. The expanded single-chart view and
+  selections do not show the notice. Both the server and the static viewer
+  show it. (#1220)
 - **MCP `describe-recording` and `describe-metrics` list known errata.** An
   erratum is a defect in metrics recorded by agents of a range of versions;
   the table is compiled in (`crates/dashboard/src/errata.rs`) and checked

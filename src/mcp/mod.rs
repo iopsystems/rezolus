@@ -135,26 +135,7 @@ pub(crate) fn format_errata(errata: &[RecordingErrata], combined: bool) -> Strin
 /// upgraded foreign parquet are none of these. The viewers' template step is
 /// left out: no recording is classed as a service here.
 fn is_rezolus_recording(reader: &dyn metriken_query::MetricsSource) -> bool {
-    let metadata: serde_json::Map<String, serde_json::Value> = reader
-        .file_metadata()
-        .into_iter()
-        .map(|(key, val)| {
-            let json = serde_json::from_str(&val).unwrap_or(serde_json::Value::String(val));
-            (key, json)
-        })
-        .collect();
-    let mut names = reader.counter_names();
-    names.extend(reader.gauge_names());
-    names.extend(reader.histogram_names());
-    names.extend(reader.gauge_histogram_names());
-    ::dashboard::source_kind::classify_sources(
-        &serde_json::Value::Object(metadata),
-        &names,
-        &std::collections::HashSet::new(),
-        None,
-    )
-    .iter()
-    .any(|entry| entry.is_rezolus)
+    ::dashboard::source_kind::is_rezolus_recording(reader)
 }
 
 impl Opened {
