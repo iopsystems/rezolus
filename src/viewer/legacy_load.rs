@@ -58,6 +58,20 @@ fn fresh_path(stem: &str, extension: &str) -> Result<PathBuf, String> {
     })
 }
 
+/// A path for the archive converted from an upload, in a directory of its
+/// own inside the conversion directory, created while that directory is
+/// locked so that two uploads at once never share it.
+fn reserve_upload_output() -> Result<PathBuf, String> {
+    let dir = with_dir(|dir| {
+        tempfile::Builder::new()
+            .prefix("upload-")
+            .tempdir_in(dir)
+            .map(tempfile::TempDir::keep)
+            .map_err(|e| format!("failed to store upload: {e}"))
+    })?;
+    Ok(dir.join("upload.dendro"))
+}
+
 /// Remove the directory converted archives were written to.
 pub fn remove() {
     #[cfg(not(test))]
@@ -143,12 +157,13 @@ pub fn stage_upload(body: &[u8], filename: &str, dest: &Path) -> Result<PathBuf,
             .map_err(|e| format!("failed to store upload: {e}"))
     })?;
     std::fs::write(input.path(), body).map_err(|e| format!("failed to store upload: {e}"))?;
-    let dest = fresh_path("upload", "dendro")?;
+    let dest = reserve_upload_output()?;
     crate::parquet_tools::legacy::convert_quiet(input.path(), &dest).map_err(|e| {
-        // The converter names its input, here a staged copy of the upload.
+        // The converter names its input and output, here staged copies.
         let e = e
             .to_string()
-            .replace(&input.path().display().to_string(), filename);
+            .replace(&input.path().display().to_string(), filename)
+            .replace(&dest.display().to_string(), "the converted archive");
         format!("failed to convert {filename} to open it: {e}")
     })?;
     tracing::info!("{}", converted_note(filename, container));
@@ -178,5 +193,24 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("not a recording"), "{err}");
+    }
+
+    /// Each upload's converted archive has a path of its own, reserved before
+    /// the conversion writes it, so two uploads converting at once do not
+    /// collide; and both store.
+    #[test]
+    fn two_uploads_converting_at_once_get_their_own_paths() {
+        let a = super::reserve_upload_output().unwrap();
+        let b = super::reserve_upload_output().unwrap();
+        assert_ne!(a, b);
+        assert!(a.parent().unwrap().is_dir() && b.parent().unwrap().is_dir());
+
+        let dir = tempfile::tempdir().unwrap();
+        let rez = std::fs::read(::rez::fixtures::committed_rez("v3.rez", dir.path())).unwrap();
+        let unused = dir.path().join("unused.dendro");
+        let first = super::stage_upload(&rez, "old.rez", &unused).unwrap();
+        let second = super::stage_upload(&rez, "old.rez", &unused).unwrap();
+        assert_ne!(first, second);
+        assert!(first.exists() && second.exists() && !unused.exists());
     }
 }
