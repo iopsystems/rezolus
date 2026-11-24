@@ -86,35 +86,32 @@ pub(crate) struct DendroUpgrade {
 /// Changing the input in place is refused while another connection has it
 /// open (a viewer, a recording, an edit), and holds the file exclusively
 /// until the re-index is done, or until just before the copy is renamed
-/// over it, so a viewer cannot open it while the upgrade runs. In place, a symlink's target is
-/// upgraded, and a copy that replaces it takes its permissions.
+/// over it, so a viewer cannot open it while the upgrade runs. In place, a
+/// symlink's target is upgraded, and a copy that replaces it takes its
+/// permissions.
 pub(crate) fn upgrade_dendro(
     path: &std::path::Path,
     output: Option<&std::path::Path>,
     program: &str,
 ) -> Result<DendroUpgrade, Box<dyn std::error::Error>> {
     let shown = path.display().to_string();
-    let copy_instead = match output {
-        None => format!(
-            "; or write an upgraded copy with `{program} recording upgrade {shown} -o \
-             NEW.dendro`"
-        ),
-        Some(_) => String::new(),
-    };
+    let copy =
+        format!("write an upgraded copy with `{program} recording upgrade {shown} -o NEW.dendro`");
     let in_use = |e: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
-        match e.downcast_ref::<dendro::Error>() {
-            Some(dendro::Error::InUse { .. }) => format!(
+        match (e.downcast_ref::<dendro::Error>(), output) {
+            (Some(dendro::Error::InUse { .. }), None) => format!(
                 "{shown} is open in another process (a viewer, an MCP server, a recording \
-                 or an edit); upgrade it once that process closes it{}",
-                if copy_instead.is_empty() {
-                    String::new()
-                } else {
-                    format!(", or, if a viewer or a recording has it open{copy_instead}")
-                }
+                 or an edit); upgrade it once that process closes it, or, while a viewer, an \
+                 MCP server or a recording has it open, {copy}"
             )
             .into(),
-            Some(dendro::Error::ReadOnly(_)) => {
-                format!("{shown} is not writable{copy_instead}").into()
+            // A copy reads the input, which only an exclusive holder refuses.
+            (Some(dendro::Error::InUse { .. }), Some(_)) => format!(
+                "{shown} is held by an edit or an in-place upgrade; run this once it finishes"
+            )
+            .into(),
+            (Some(dendro::Error::ReadOnly(_)), _) => {
+                format!("{shown} is not writable; {copy}").into()
             }
             _ => e,
         }
@@ -684,8 +681,14 @@ mod dendro_command_tests {
         let path = earlier(dir.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
         let err = upgrade_dendro(&path, None, "tool").unwrap_err().to_string();
-        assert!(err.contains("is not writable"), "{err}");
-        assert!(err.contains("-o NEW.dendro"), "{err}");
+        assert_eq!(
+            err,
+            format!(
+                "{0} is not writable; write an upgraded copy with `tool recording upgrade {0} \
+                 -o NEW.dendro`",
+                path.display()
+            )
+        );
         let out = dir.path().join("copy.dendro");
         upgrade_dendro(&path, Some(&out), "tool").unwrap();
     }
@@ -715,7 +718,22 @@ mod dendro_command_tests {
         let path = earlier(dir.path());
         let edit = dendro::archive::ArchiveMut::open(&path).unwrap();
         let err = upgrade_dendro(&path, None, "tool").unwrap_err().to_string();
-        assert!(err.contains("is open in another process"), "{err}");
+        assert!(
+            err.ends_with(&format!(
+                "upgrade it once that process closes it, or, while a viewer, an MCP server \
+                 or a recording has it open, write an upgraded copy with `tool recording \
+                 upgrade {} -o NEW.dendro`",
+                path.display()
+            )),
+            "{err}"
+        );
+        let err = upgrade_dendro(&path, Some(&dir.path().join("c.dendro")), "tool")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.ends_with("is held by an edit or an in-place upgrade; run this once it finishes"),
+            "{err}"
+        );
         drop(edit);
     }
 
