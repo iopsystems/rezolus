@@ -85,8 +85,8 @@ pub(crate) struct DendroUpgrade {
 ///
 /// Changing the input in place is refused while another connection has it
 /// open (a viewer, a recording, an edit), and holds the file exclusively
-/// until the re-index is done or the copy replaces it, so a viewer cannot
-/// open it while the upgrade runs. In place, a symlink's target is
+/// until the re-index is done, or until just before the copy is renamed
+/// over it, so a viewer cannot open it while the upgrade runs. In place, a symlink's target is
 /// upgraded, and a copy that replaces it takes its permissions.
 pub(crate) fn upgrade_dendro(
     path: &std::path::Path,
@@ -94,14 +94,28 @@ pub(crate) fn upgrade_dendro(
     program: &str,
 ) -> Result<DendroUpgrade, Box<dyn std::error::Error>> {
     let shown = path.display().to_string();
+    let copy_instead = match output {
+        None => format!(
+            "; or write an upgraded copy with `{program} recording upgrade {shown} -o \
+             NEW.dendro`"
+        ),
+        Some(_) => String::new(),
+    };
     let in_use = |e: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
         match e.downcast_ref::<dendro::Error>() {
             Some(dendro::Error::InUse { .. }) => format!(
                 "{shown} is open in another process (a viewer, an MCP server, a recording \
-                 or an edit); upgrade it once that process closes it, or write an upgraded \
-                 copy with `{program} recording upgrade {shown} -o NEW.dendro`"
+                 or an edit); upgrade it once that process closes it{}",
+                if copy_instead.is_empty() {
+                    String::new()
+                } else {
+                    format!(", or, if a viewer or a recording has it open{copy_instead}")
+                }
             )
             .into(),
+            Some(dendro::Error::ReadOnly(_)) => {
+                format!("{shown} is not writable{copy_instead}").into()
+            }
             _ => e,
         }
     };
@@ -630,10 +644,9 @@ mod dendro_command_tests {
         let record = seen.clone();
         super::BEFORE_RENAME.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move |input: &std::path::Path| {
-                record.borrow_mut().push((
-                    Archive::open(input).is_ok(),
-                    dendro::archive::ArchiveMut::open(input).is_ok(),
-                ));
+                let read = Archive::open(input).is_ok();
+                let edit = dendro::archive::ArchiveMut::open(input).is_ok();
+                record.borrow_mut().push((read, edit));
             }))
         });
         upgrade_dendro(&path, None, "rezolus").unwrap();
@@ -659,6 +672,22 @@ mod dendro_command_tests {
         assert_eq!(Archive::open(&path).unwrap().schema_version().unwrap(), 5);
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);
+    }
+
+    /// `upgrade` in place of a read-only archive says it is not writable and
+    /// names `-o`, which writes an upgraded copy.
+    #[cfg(unix)]
+    #[test]
+    fn upgrade_of_a_read_only_archive_names_the_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = earlier(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let err = upgrade_dendro(&path, None, "tool").unwrap_err().to_string();
+        assert!(err.contains("is not writable"), "{err}");
+        assert!(err.contains("-o NEW.dendro"), "{err}");
+        let out = dir.path().join("copy.dendro");
+        upgrade_dendro(&path, Some(&out), "tool").unwrap();
     }
 
     /// `upgrade` in place refuses an archive a reader holds open (as the

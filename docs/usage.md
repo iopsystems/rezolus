@@ -702,7 +702,8 @@ wrote, which every other subcommand refuses with that command.
     and a table's first chart takes less time. One an earlier 6.0 build wrote
     is re-indexed without rewriting any segment's data. A 5.x `.dendro`
     (schema 4) is copied into the current layout and the copy renamed over
-    it, which needs free space for one copy; 5.x cannot open the result. A current one is left as it is.
+    it, which needs free space for one copy; 5.x cannot open the result. A
+    current one is left as it is.
     A recording this release records is current, and so is the output of
     `filter --metrics`; a `snapshot`, `combine` or `filter` without
     `--metrics` of an older recording keeps its indexes and needs an
