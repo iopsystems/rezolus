@@ -77,6 +77,7 @@ impl From<&str> for McpTool {
 const MCP_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
 
 /// A cached reader, tagged with the recording it was opened from.
+#[derive(Clone)]
 struct CachedReader {
     /// The chosen recording's label set — the recording's own identity, so
     /// two selectors that name the same recording of the same file share one
@@ -96,6 +97,9 @@ struct CachedReader {
     /// Whether `source` joins several recordings of one run
     /// (`Opened::combined`), which `extract_features` does not read.
     combined: bool,
+    /// `Opened::errata`: the known errata of the recording, or of each joined
+    /// recording.
+    errata: Vec<crate::mcp::RecordingErrata>,
 }
 
 /// The six read tools, as the server has always listed them.
@@ -103,7 +107,7 @@ fn read_tools() -> Vec<Value> {
     json!([
         {
             "name": "describe_recording",
-            "description": "Describe a Rezolus performance recording with version and duration information",
+            "description": "Describe a Rezolus performance recording with version and duration information, and the known errata (metrics that the recording's agent version recorded wrongly or without a counter needed to read them) that apply to it",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -149,7 +153,7 @@ fn read_tools() -> Vec<Value> {
         },
         {
             "name": "describe_metrics",
-            "description": "List and describe all metrics available in a Rezolus recording, organized by type",
+            "description": "List and describe all metrics available in a Rezolus recording, organized by type, with any known erratum under the metric it affects",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -972,12 +976,25 @@ impl Server {
         ),
         Box<dyn std::error::Error>,
     > {
+        self.resolve_reader(parquet_file, selector, combined_ok)
+            .await
+            .map(|r| (r.source, r.provenance))
+    }
+
+    /// The reader for `parquet_file` and `selector`, from the cache or a new
+    /// open, with what the open determined about it.
+    async fn resolve_reader(
+        &self,
+        parquet_file: &str,
+        selector: &crate::mcp::RecordingSelector,
+        combined_ok: bool,
+    ) -> Result<CachedReader, Box<dyn std::error::Error>> {
         let path_key = cache_path(parquet_file);
         let key = (path_key.clone(), selector.clone());
         {
             let cache = self.reader_cache.read().unwrap();
             if let Some(hit) = cache.get(&key).filter(|hit| combined_ok || !hit.combined) {
-                return Ok((Arc::clone(&hit.source), hit.provenance));
+                return Ok(hit.clone());
             }
         }
 
@@ -1003,6 +1020,7 @@ impl Server {
         )?;
         let provenance = opened.provenance();
         let combined = !opened.combined.is_empty();
+        let errata = opened.errata;
         let reader = opened.reader;
         let identity = opened.labels.clone();
 
@@ -1018,17 +1036,16 @@ impl Server {
             .find(|((p, _), c)| *p == path_key && c.identity == identity && c.combined == combined)
             .map(|(_, c)| Arc::clone(&c.source))
             .unwrap_or(reader);
-        cache.insert(
-            key,
-            CachedReader {
-                identity,
-                source: Arc::clone(&source),
-                provenance,
-                combined,
-            },
-        );
+        let entry = CachedReader {
+            identity,
+            source,
+            provenance,
+            combined,
+            errata,
+        };
+        cache.insert(key, entry.clone());
 
-        Ok((source, provenance))
+        Ok(entry)
     }
 
     /// Analyze correlation between two metrics
@@ -1071,10 +1088,14 @@ impl Server {
             .ok_or("Missing parquet_file")?;
 
         let selector = Self::selector_of(arguments)?;
-        let reader = self.get_reader_selected(parquet_file, &selector).await?;
+        let resolved = self.resolve_reader(parquet_file, &selector, true).await?;
 
         use crate::mcp::describe_metrics::format_metrics_description;
-        Ok(format_metrics_description(reader.as_ref()))
+        Ok(format_metrics_description(
+            resolved.source.as_ref(),
+            &resolved.errata,
+            resolved.combined,
+        ))
     }
 
     /// Detect anomalies in time series data
@@ -1741,6 +1762,34 @@ mod tests {
             listing.contains(r#"recording {"source": "redis"}"#),
             "it must render the tool argument the client can send: {listing}"
         );
+    }
+
+    /// `describe_metrics` prints errata from the cached open as well as a new
+    /// one: the second call is answered from the reader cache.
+    #[tokio::test]
+    async fn describe_metrics_reports_errata_from_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.dendro");
+        rez::fixtures::one_run(
+            &path,
+            &[rez::fixtures::Recording {
+                labels: &[("source", "rezolus")],
+                metadata: &[("source", "rezolus"), ("version", "5.19.1")],
+                cpus: 1,
+                busy_ns: 1,
+                counter: Some(("network_packets", 10)),
+            }],
+        );
+        let args = json!({ "parquet_file": path.to_str().unwrap() });
+        let server = Server::new();
+        for _ in 0..2 {
+            let out = server.describe_metrics(&args).await.unwrap();
+            assert!(
+                out.contains("  Erratum: misleading (recorded by an agent before 5.20.1-alpha.3)"),
+                "{out}"
+            );
+        }
+        assert_eq!(server.reader_cache.read().unwrap().len(), 1);
     }
 
     /// The server reads an archive of one run combined for every tool but

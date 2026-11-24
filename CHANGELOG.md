@@ -32,6 +32,24 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
+- **MCP `describe-recording` and `describe-metrics` list known errata.** An
+  erratum is a defect in metrics recorded by agents of a range of versions;
+  the table is compiled in (`crates/dashboard/src/errata.rs`) and checked
+  against each recording's agent version when it is opened, so it covers
+  recordings made before the defect was known. `describe-recording` adds a
+  Known Errata section and `describe-metrics` an `Erratum:` line under each
+  affected metric; in an archive read combined, each line names its
+  recording. A recording with no Rezolus agent version, or one that is not a
+  semver version, is reported as possibly affected, unless it holds a metric
+  that only fixed agents record. Values are not changed. (#1220) Three
+  entries:
+  - `network_ena_*_allowance_exceeded` from agents before 5.20.1-alpha.4
+    report one interface on a host with several (#1216);
+  - the same counters from 5.20.1-alpha.4, before 6.0.0-alpha.169, have no
+    series for a zero value (#1736);
+  - `network_bytes`/`network_packets` from agents before 5.20.1-alpha.3 count
+    each interface layer, with no `network_host_*` counters to compare
+    against (#1214).
 - **`memory_cgroup` reads each cgroup's limits and memory events.**
   `cgroup_memory_max` and `cgroup_memory_high` are `memory.max` and
   `memory.high` in bytes, -1 when the file says `max`.
