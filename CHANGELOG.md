@@ -91,6 +91,15 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   sends its section template (6.0.0-alpha.62 on) shows these plots only with
   `rezolus view --registry-templates`. (#1186)
 
+- **The Cgroups section plots CPU throttle events and average throttle
+  duration.** Both sides gain CPU Throttle Events (`cgroup_cpu_throttled`,
+  counted per CPU runqueue) and Average Throttle Duration, throttled time over
+  throttle events, which tells many short throttles from a few long ones. The
+  Exceptions section's CPU Throttling group plots Throttled Time and Bandwidth
+  Throttled Time per cgroup. A recording from an agent that predates this
+  change and sends its section template (6.0.0-alpha.62 on) shows these plots
+  only with `rezolus view --registry-templates`. (#1738, #1739)
+
 - **`cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of
   online CPUs in `/sys/devices/system/cpu/isolated`** (`isolcpus=`, `domain`
   flag). The load balancer places no work on them, yet `cpu_cores` counts
@@ -339,6 +348,21 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   no longer stops the interfaces after it from updating, and an interface
   whose stats stop being readable is logged at warn, and at info when they can
   be read again. (#1727)
+- **The Exceptions section plots throttled time as time per second.** CPU
+  Throttling's Throttled Time and Bandwidth Throttled Time were seconds per
+  second drawn as a percentage, so 1.5 s/s read as 150%. Releases from 5.13.0
+  through 5.32.0 and the 6.0 prereleases have this. A recording from an agent
+  that predates this change and sends its section template (6.0.0-alpha.62
+  on) shows the percentage unless viewed with `rezolus view
+  --registry-templates`. (#1738)
+- **The Scheduler section's Runqueue Wait and Runqueue Latency descriptions
+  say the wait includes time throttled by a cgroup CPU quota.** Runqueue Wait
+  called values above 1s/s an indicator of scheduler pressure, but one cgroup
+  at its CPU limit produces the same value with CPUs idle. Releases from 5.12.0
+  through 5.32.0 and the 6.0 prereleases have this. A recording from an
+  agent that predates this change and sends its section template
+  (6.0.0-alpha.62 on) shows the old descriptions unless viewed with `rezolus
+  view --registry-templates`. (#1737)
 - **The `cpu_cores` sampler no longer exits the agent on a read error from
   `/sys/devices/system/cpu/online` or a line it cannot parse.** It skips that
   refresh. Releases from 4.0.0 on exit with status 101 on that error. (#1043)

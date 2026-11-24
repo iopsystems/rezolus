@@ -197,7 +197,7 @@
         },
         {
           "name": "Throttled Time",
-          "description": "Time cgroups spent waiting on the CFS bandwidth quota. Sustained non-zero values mean quota is the bottleneck.",
+          "description": "Time cgroup runqueues spent throttled by the CFS bandwidth quota, summed over CPUs, so a cgroup throttled on several CPUs at once records more than 1s/s. Sustained non-zero values mean quota is the bottleneck.",
           "plots": [
             {
               "when": {
@@ -208,9 +208,18 @@
                   "kind": "counter",
                   "title": "Throttled Time",
                   "id": "cgroup-throttled-time",
-                  "unit": "percentage",
-                  "query": "sum(irate(cgroup_cpu_throttled_time[5m])) / 1000000000",
-                  "unit_system": "percentage"
+                  "unit": "time",
+                  "query": "sum(irate(cgroup_cpu_throttled_time[5m]))",
+                  "unit_system": "time"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Throttled Time (Per-Cgroup)",
+                  "id": "cgroup-throttled-time-per-cgroup",
+                  "style": "multi",
+                  "unit": "time",
+                  "query": "sum by (name) (irate(cgroup_cpu_throttled_time[5m]))",
+                  "unit_system": "time"
                 }
               ]
             },
@@ -223,9 +232,18 @@
                   "kind": "counter",
                   "title": "Bandwidth Throttled Time",
                   "id": "cgroup-bw-throttled-time",
-                  "unit": "percentage",
-                  "query": "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m])) / 1000000000",
-                  "unit_system": "percentage"
+                  "unit": "time",
+                  "query": "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m]))",
+                  "unit_system": "time"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Bandwidth Throttled Time (Per-Cgroup)",
+                  "id": "cgroup-bw-throttled-time-per-cgroup",
+                  "style": "multi",
+                  "unit": "time",
+                  "query": "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_time[5m]))",
+                  "unit_system": "time"
                 }
               ]
             }
