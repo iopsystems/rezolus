@@ -311,6 +311,14 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **With `bpf_stats = true`, `rezolus_bpf_run_time` and
+  `rezolus_bpf_run_count` are published at 0 for a sampler whose BPF programs
+  have not run.** They were set only when the summed value was above 0, so a
+  sampler whose programs had not fired (for example `xfs_log` on a host with
+  no XFS mount) had no series, the same as when run-time accounting is off.
+  Releases from 5.19.1 through 5.32.0 and the 6.0 prereleases have this.
+  Without `bpf_stats`, a 0 is still not published, since the kernel reports 0
+  while accounting is off.
 - **In V3 snapshots, `network_ethtool` publishes an ENA allowance counter
   that is zero.** The five `network_ena_*_allowance_exceeded` counters declared
   no acquisition group, and the V3 builder skips a zero entry of an undeclared

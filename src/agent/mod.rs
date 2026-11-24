@@ -136,6 +136,7 @@ pub fn run(config: PathBuf) {
     let _bpf_stats_fd = if config.general().bpf_stats() {
         match enable_bpf_run_stats() {
             Ok(fd) => {
+                bpf::RUN_STATS_HELD.store(true, std::sync::atomic::Ordering::Relaxed);
                 info!(
                     "bpf_stats=true: enabled host-wide BPF run-time statistics;                      rezolus_bpf_run_time/count will populate. This taxes EVERY BPF                      program on the host, not just Rezolus's."
                 );

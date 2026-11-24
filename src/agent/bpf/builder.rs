@@ -183,6 +183,18 @@ pub struct BpfProgStats {
     pub run_count: &'static LazyCounter,
 }
 
+/// Whether a summed BPF run statistic is a reading to publish.
+///
+/// The kernel reports 0 for both statistics while run-time accounting is off.
+/// While this agent holds the stats fd (`held`) accounting is on, so any total
+/// read from at least one program is a reading, including 0. Without the fd,
+/// accounting is on only if something else enabled it; a nonzero total shows
+/// that it was, and a total of 0 cannot be told apart from accounting being
+/// off, so it is not published.
+fn run_stat_is_reading(held: bool, read_any: bool, total: u64) -> bool {
+    read_any && (held || total > 0)
+}
+
 pub struct PerfEvent {
     inner: Event,
 }
@@ -1338,6 +1350,7 @@ where
 
                 let mut run_time: u64 = 0;
                 let mut run_count: u64 = 0;
+                let mut read_any = false;
 
                 for prog in skel.object().progs() {
                     let mut info = libbpf_sys::bpf_prog_info::default();
@@ -1349,16 +1362,19 @@ where
                         unsafe { libbpf_sys::bpf_prog_get_info_by_fd(fd, &mut info, &mut len) };
 
                     if result == 0 {
+                        read_any = true;
                         run_time = run_time.wrapping_add(info.run_time_ns);
                         run_count = run_count.wrapping_add(info.run_cnt);
                     }
                 }
 
-                if run_time > 0 {
+                let held = super::RUN_STATS_HELD.load(std::sync::atomic::Ordering::Relaxed);
+
+                if run_stat_is_reading(held, read_any, run_time) {
                     self.prog_stats.run_time.set(run_time);
                 }
 
-                if run_count > 0 {
+                if run_stat_is_reading(held, read_any, run_count) {
                     self.prog_stats.run_count.set(run_count);
                 }
 
@@ -1726,6 +1742,29 @@ where
             );
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod run_stat_tests {
+    use super::run_stat_is_reading;
+
+    #[test]
+    fn zero_is_a_reading_while_the_agent_holds_the_stats_fd() {
+        assert!(run_stat_is_reading(true, true, 0));
+        assert!(run_stat_is_reading(true, true, 7));
+    }
+
+    #[test]
+    fn zero_is_not_a_reading_without_the_stats_fd() {
+        assert!(!run_stat_is_reading(false, true, 0));
+        assert!(run_stat_is_reading(false, true, 7));
+    }
+
+    #[test]
+    fn nothing_is_a_reading_when_no_program_info_was_read() {
+        assert!(!run_stat_is_reading(true, false, 0));
+        assert!(!run_stat_is_reading(false, false, 0));
     }
 }
 
