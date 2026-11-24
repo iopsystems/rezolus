@@ -26,7 +26,7 @@
   "result": {
     "tools": [
       {
-        "description": "Describe a Rezolus performance recording with version and duration information",
+        "description": "Describe a Rezolus performance recording with version and duration information, and the known errata (metrics that the recording's agent version recorded wrongly or without a counter needed to read them) that apply to it",
         "inputSchema": {
           "properties": {
             "parquet_file": {
@@ -82,7 +82,7 @@
         "name": "analyze_correlation"
       },
       {
-        "description": "List and describe all metrics available in a Rezolus recording, organized by type",
+        "description": "List and describe all metrics available in a Rezolus recording, organized by type, with any known erratum under the metric it affects",
         "inputSchema": {
           "properties": {
             "parquet_file": {
