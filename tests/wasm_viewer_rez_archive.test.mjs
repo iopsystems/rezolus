@@ -1,6 +1,7 @@
 // The static-site viewer opens `.dendro` archives, single- and
-// multi-recording, and refuses a `.rez` or parquet file with the command that
-// converts it on the user's machine. `rezolus` is a binary-only crate, so
+// multi-recording, and converts a `.rez` or parquet file to one in memory as
+// `rezolus recording upgrade` would; what it does not convert is refused with
+// that command. `rezolus` is a binary-only crate, so
 // nothing could depend on its archive reader; it lives in `crates/rez`, which
 // this bundle links.
 //
@@ -54,22 +55,47 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     const upgraded = (name) => new Uint8Array(fs.readFileSync(
         path.join(repoRoot, 'tests/fixtures/upgraded', name)));
 
-    test('a .rez or parquet upload is refused with the upgrade command', () => {
+    // What a capture shows that does not depend on the source's uuid, which
+    // each conversion mints.
+    const shown = (registry) => {
+        const info = JSON.parse(registry.info('baseline'));
+        return {
+            metrics: JSON.parse(registry.metrics('baseline', null)),
+            range: [info.minTime, info.maxTime],
+            query: JSON.parse(registry.query_range(
+                'baseline', 'irate(ops[2s])', info.minTime, info.maxTime, 1, 'grid', null,
+            )),
+        };
+    };
+
+    test('a .rez or parquet upload is converted as recording upgrade converts it', () => {
         const parquet = new Uint8Array(fs.readFileSync(
             path.join(repoRoot, 'tests/fixtures/legacy/simple_capture.parquet')));
-        for (const [bytes, name] of [
-            [committedRez('v3.rez'), 'old.rez'],
-            [committedRez('v2.rez'), 'tar.rez'],
-            [parquet, 'run.parquet'],
+        for (const [bytes, name, upgradedName] of [
+            [committedRez('v3.rez'), 'old.rez', 'v3.dendro'],
+            [committedRez('v2.rez'), 'tar.rez', 'v2.dendro'],
+            [parquet, 'run.parquet', 'simple_capture.dendro'],
         ]) {
-            const registry = new WasmCaptureRegistry();
-            assert.throws(
-                () => registry.attach('baseline', bytes, name),
-                (e) => String(e).includes(`rezolus recording upgrade ${name}`),
-                name,
+            const converted = new WasmCaptureRegistry();
+            converted.attach('baseline', bytes, name);
+            const notices = JSON.parse(converted.notices());
+            assert.ok(
+                notices.some((n) => n.includes('converted to a .dendro in the browser')),
+                `${name}: ${JSON.stringify(notices)}`,
             );
-            assert.equal(registry.has('baseline'), false, name);
+            const want = new WasmCaptureRegistry();
+            want.attach('baseline', upgraded(upgradedName), upgradedName);
+            assert.deepEqual(shown(converted), shown(want), name);
         }
+    });
+
+    test('a file that is not a recording is refused', () => {
+        const registry = new WasmCaptureRegistry();
+        assert.throws(
+            () => registry.attach('baseline', new TextEncoder().encode('not a recording'), 'x.dendro'),
+            (e) => String(e).includes('not a recording'),
+        );
+        assert.equal(registry.has('baseline'), false);
     });
 
     // The fixture's recordings are of one run (one time range), so they

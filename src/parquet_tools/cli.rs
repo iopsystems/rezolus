@@ -973,8 +973,9 @@ mod help {
     pub(super) const UPGRADE_LONG: &str =
         "Write a new .dendro archive holding a recording an earlier release wrote:\n\
                          a v1, v2 or v3 `.rez`, a standalone `.parquet`, or a `.parquet.ab.tar`\n\
-                         A/B tarball. Every other command opens .dendro archives only and refuses\n\
-                         these with this command.\n\n\
+                         A/B tarball. `view` converts these to a temporary .dendro when it opens\n\
+                         one; every other command opens .dendro archives only and refuses these\n\
+                         with this command.\n\n\
                          A v3 `.rez`'s recordings become sources and its tables streams; segment,\n\
                          WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings\n\
                          become sources with their labels, metadata, clock anchor and `complete`\n\

@@ -899,6 +899,19 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
+- **The viewers convert a `.rez` or `.parquet` recording when they open it.**
+  `rezolus view` converts a `.rez` (v1, v2 or v3), a `.parquet` or a
+  `.parquet.ab.tar`, given on the command line, uploaded or loaded from a
+  URL, to a temporary `.dendro` with `recording upgrade`'s converter, and
+  removes it on exit. The static-site viewer converts a `.rez` or a
+  single-source `.parquet` of up to 640 MiB in the browser and shows a
+  notice saying so; Save as Report then writes a `.dendro`. Converting a v3
+  `.rez` in the browser peaked at 4.5 to 5.2 times the file's size on files
+  of 36 to 667 MiB, against wasm32's 4 GiB, so a larger file is refused
+  with `rezolus recording upgrade FILE`, as are a combined 5.x parquet file
+  and a `.parquet.ab.tar`. The upload picker offers `.rez` and `.parquet`
+  files. `mcp` and the `recording` tools still refuse these formats with
+  the upgrade command.
 - **An archive holds one source per uuid** (dendro 0.8, metriken-storage
   0.14, metriken-query 0.52, metriken-exposition 0.28, metriken-recorder
   0.16). `recording combine` refuses two inputs that hold the same source (a

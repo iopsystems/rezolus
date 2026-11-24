@@ -104,45 +104,103 @@ fn classify_sources(
     )
 }
 
-/// The refusal of an upload that is not a dendro archive. The browser
-/// cannot convert one: a recording an earlier release wrote is converted on
-/// the user's machine, with the command named here, and the `.dendro`
-/// opened instead.
+/// The refusal of an upload that is neither a dendro archive nor a format
+/// the browser converts ([`rez::legacy::converts`]): an A/B tarball, with
+/// the command that converts it on the user's machine, or any other file.
 fn not_dendro(filename: &str, container: rez::container::Container) -> String {
     if container.is_legacy() {
         format!(
-            "{filename} is a {}, which this viewer does not open. Convert it to a .dendro \
+            "{filename} is a {}, which this viewer does not convert. Convert it to a .dendro \
              on your machine, then open the .dendro:\n  rezolus recording upgrade {}",
             container.name(),
             rez::container::shell_word(filename)
         )
     } else {
-        format!("{filename} is not a recording (a .dendro archive)")
+        format!("{filename} is not a recording (a .dendro archive, a .rez or a .parquet)")
     }
 }
 
-/// Open every recording of a dendro archive held as bytes.
+/// The largest `.rez` or parquet file, in bytes, the browser converts to a
+/// dendro archive when it is opened. Converting holds the SQLite image of a
+/// v3 `.rez`, the archive written from it and that archive's serialized
+/// copies in memory at once: the wasm32 heap peaked at 4.5 to 5.2 times the
+/// file loading v3 `.rez` files of 36 to 667 MiB (3005 MiB for 667 MiB), and
+/// a 1.2 GiB file exhausted wasm32's 4 GiB. A larger file is refused
+/// ([`convert_too_large`]).
+pub const MAX_CONVERT_BYTES: usize = 640 << 20;
+
+/// The refusal of a `size`-byte `container` file over [`MAX_CONVERT_BYTES`]:
+/// the command that converts it on the user's machine.
+fn convert_too_large(filename: &str, container: rez::container::Container, size: usize) -> String {
+    format!(
+        "{filename} is a {} of {} MiB, too large to convert in the browser, which converts \
+         files of up to {} MiB. Convert it to a .dendro on your machine, then open the \
+         .dendro:\n  rezolus recording upgrade {}",
+        container.name(),
+        size >> 20,
+        MAX_CONVERT_BYTES >> 20,
+        rez::container::shell_word(filename)
+    )
+}
+
+/// The note shown when the browser converted an upload to a dendro archive.
+fn converted_notice(filename: &str, container: rez::container::Container) -> String {
+    format!(
+        "{filename} is a {}, converted to a .dendro in the browser for this view. To keep \
+         the .dendro, run `rezolus recording upgrade {}`, or save a report.",
+        container.name(),
+        rez::container::shell_word(filename)
+    )
+}
+
+/// An uploaded file opened as a dendro archive: its recordings, the
+/// archive's bytes (kept for Save as Report) and, when the browser converted
+/// the upload, what it was converted from.
+struct Opened {
+    recordings: rez::reader::LabeledRecordings,
+    archive: Bytes,
+    converted_from: Option<rez::container::Container>,
+}
+
+/// Open every recording of an uploaded file: a dendro archive, or a `.rez`
+/// or parquet file converted to one in memory ([`rez::legacy`]) when it is
+/// at most [`MAX_CONVERT_BYTES`].
 ///
-/// The one place the browser turns an uploaded archive into readers, so both
-/// entry points — a single capture and the two-slot registry — agree on what
-/// the file contains. Any other file is refused ([`not_dendro`]).
-fn open_rez(
-    data: &[u8],
-    filename: &str,
-    pool: Arc<BufferPool>,
-) -> Result<rez::reader::LabeledRecordings, JsValue> {
-    let container = rez::container::Container::of_bytes(data);
-    if container != rez::container::Container::Dendro {
-        return Err(JsValue::from_str(&not_dendro(filename, container)));
-    }
-    let recordings = rez::reader::RezReader::open_recordings_from_bytes(data.to_vec(), pool)
+/// The one place the browser turns an upload into readers, so both entry
+/// points (a single capture and the two-slot registry) agree on what the
+/// file contains. Any other file is refused ([`not_dendro`]). `data` is
+/// taken by value so a conversion can release it as soon as it is read.
+fn open_rez(data: Vec<u8>, filename: &str, pool: Arc<BufferPool>) -> Result<Opened, JsValue> {
+    use rez::container::Container;
+    let container = Container::of_bytes(&data);
+    let (archive, converted_from) = match container {
+        Container::Dendro => (Bytes::from(data), None),
+        c if rez::legacy::converts(c) => {
+            if data.len() > MAX_CONVERT_BYTES {
+                return Err(JsValue::from_str(&convert_too_large(
+                    filename,
+                    c,
+                    data.len(),
+                )));
+            }
+            let converted = rez::legacy::to_dendro_bytes(data, filename, "rezolus")
+                .map_err(|e| JsValue::from_str(&e))?;
+            (Bytes::from(converted.bytes), Some(converted.from))
+        }
+        c => return Err(JsValue::from_str(&not_dendro(filename, c))),
+    };
+    let recordings = rez::reader::RezReader::open_recordings_from_bytes(archive.to_vec(), pool)
         .map_err(|e| JsValue::from_str(&format!("Failed to load {filename}: {e}")))?;
     if recordings.is_empty() {
         return Err(JsValue::from_str(&format!(
             "{filename} holds no recordings"
         )));
     }
-    Ok(recordings)
+    Ok(Opened {
+        recordings,
+        archive,
+        converted_from,
+    })
 }
 
 /// Whether an archive's recordings open as one combined view: more than one
@@ -320,13 +378,17 @@ struct ViewerInfo {
 #[wasm_bindgen]
 impl Viewer {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: &[u8], filename: &str) -> Result<Viewer, JsValue> {
+    pub fn new(data: Vec<u8>, filename: &str) -> Result<Viewer, JsValue> {
         let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
 
         // The archive is recognized by CONTENT, not by the name the browser
         // gives us: a file dragged in may be called anything, and the server
         // viewer sniffs the container the same way.
-        let mut recordings = open_rez(data, filename, Arc::clone(&pool))?;
+        let Opened {
+            mut recordings,
+            archive,
+            ..
+        } = open_rez(data, filename, Arc::clone(&pool))?;
         // An archive of one run is one capture: its recordings joined.
         if opens_combined(&recordings, false) {
             return Ok(Self::combined(recordings, pool));
@@ -346,12 +408,7 @@ impl Viewer {
         let (_, reader) = recordings.remove(0);
         // The archive's bytes are kept: a report of a two-file comparison
         // is built from both captures' archives.
-        Ok(Self::from_source(
-            Arc::new(reader),
-            pool,
-            Bytes::copy_from_slice(data),
-            filename,
-        ))
+        Ok(Self::from_source(Arc::new(reader), pool, archive, filename))
     }
 
     /// One capture over every recording of an archive that opens
@@ -994,22 +1051,28 @@ impl WasmCaptureRegistry {
     fn attach_recordings(
         &mut self,
         capture: &str,
-        data: &[u8],
+        data: Vec<u8>,
         filename: &str,
     ) -> Result<usize, JsValue> {
         self.notices.clear();
         let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
-        let recordings = open_rez(data, filename, Arc::clone(&pool))?;
+        let Opened {
+            recordings,
+            archive,
+            converted_from,
+        } = open_rez(data, filename, Arc::clone(&pool))?;
         let n = recordings.len();
         if let Some(refusal) = self.one_recording_refusal(capture, filename, n) {
             return Err(JsValue::from_str(&refusal));
         }
         self.notices
+            .extend(converted_from.map(|c| converted_notice(filename, c)));
+        self.notices
             .extend(incomplete_notice(&recordings, filename));
         if recordings.len() >= 2 {
             // A report of this capture is a report of THIS archive, kept
             // once the attach has succeeded.
-            let source = Bytes::copy_from_slice(data);
+            let source = archive;
             if opens_combined(&recordings, self.compare_requested) {
                 let viewer = Viewer::combined(recordings, pool);
                 self.others.clear();
@@ -1038,7 +1101,7 @@ impl WasmCaptureRegistry {
         let viewer = Viewer::from_source(
             Arc::new(reader.with_filename(filename.to_string())),
             pool,
-            Bytes::copy_from_slice(data),
+            archive,
             filename,
         );
         self.set_capture(capture, viewer);
@@ -1113,7 +1176,7 @@ impl WasmCaptureRegistry {
     /// recording; it replaces the experiment slot beside a one-recording
     /// baseline or a comparison, and is refused beside a combined view of
     /// several recordings, with the commands that compare two recordings.
-    pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
+    pub fn attach(&mut self, capture: &str, data: Vec<u8>, filename: &str) -> Result<(), JsValue> {
         let archive_before = self.rez_source.is_some();
         let combined = self.attach_recordings(capture, data, filename)?;
         if capture == "baseline" {
@@ -1843,7 +1906,8 @@ mod tests {
         // A baseline of several recordings: its reader is named by its
         // first recording's labels, not by the file.
         let base = archive_bytes(&[("rezolus", "web-01"), ("rezolus", "web-02")]);
-        reg.attach("baseline", &base, "my base.dendro").unwrap();
+        reg.attach("baseline", base.to_vec(), "my base.dendro")
+            .unwrap();
         let refusal = reg
             .one_recording_refusal("experiment", "exp.dendro", 2)
             .unwrap();
@@ -1890,7 +1954,7 @@ mod tests {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach(
             "baseline",
-            &archive_bytes(&[("rezolus", "web-01")]),
+            archive_bytes(&[("rezolus", "web-01")]),
             "a.dendro",
         )
         .unwrap();
@@ -1900,7 +1964,7 @@ mod tests {
         );
         reg.attach(
             "experiment",
-            &archive_bytes(&[("rezolus", "web-09")]),
+            archive_bytes(&[("rezolus", "web-09")]),
             "one.dendro",
         )
         .unwrap();
@@ -1926,21 +1990,68 @@ mod tests {
         std::fs::read(&out).unwrap()
     }
 
-    /// A legacy upload is refused with the command that converts it on the
-    /// user's machine; anything else is named as not a recording. (The
-    /// refusal itself is a `JsValue`, which only a wasm32 build can make.)
+    /// A `.rez` (either container) or parquet upload is converted to a
+    /// dendro archive in the browser: it opens with a notice saying so, and a
+    /// report of it saves as a `.dendro`. The refusals are `JsValue`s, which
+    /// only a wasm32 build can make, so their messages are checked directly:
+    /// an A/B tarball names the upgrade, a file over [`MAX_CONVERT_BYTES`]
+    /// names its size and the upgrade, anything else is not a recording.
     #[test]
-    fn a_legacy_upload_names_the_upgrade() {
+    fn a_legacy_upload_is_converted_with_a_notice() {
         let dir = tempfile::tempdir().unwrap();
-        let bytes = std::fs::read(rez::fixtures::committed_rez("v3.rez", dir.path())).unwrap();
-        let container = rez::container::Container::of_bytes(&bytes);
-        let msg = not_dendro("my run.rez", container);
+        let parquet = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/legacy/simple_capture.parquet");
+        let uploads = [
+            (
+                rez::fixtures::committed_rez("v3.rez", dir.path()),
+                "my run.rez",
+            ),
+            (
+                rez::fixtures::committed_rez("v2.rez", dir.path()),
+                "old.rez",
+            ),
+            (parquet, "capture.parquet"),
+        ];
+        for (path, name) in uploads {
+            let mut reg = WasmCaptureRegistry::new();
+            reg.attach("baseline", std::fs::read(&path).unwrap(), name)
+                .unwrap();
+            assert!(reg.has("baseline"), "{name}");
+            let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
+            assert!(
+                notices[0].contains("converted to a .dendro in the browser")
+                    && notices[0].contains(&format!(
+                        "rezolus recording upgrade {}",
+                        rez::container::shell_word(name)
+                    )),
+                "{name}: {notices:?}"
+            );
+            let out = reg
+                .save_with_selection(r#"{"entries":[],"trim_columns":false}"#)
+                .unwrap();
+            assert!(
+                metriken_storage::DendroCatalog::is_archive_bytes(&out),
+                "{name}"
+            );
+        }
+
+        let ab = not_dendro("ab.parquet.ab.tar", rez::container::Container::AbTar);
         assert!(
-            msg.ends_with("rezolus recording upgrade 'my run.rez'"),
-            "{msg}"
+            ab.ends_with("rezolus recording upgrade ab.parquet.ab.tar"),
+            "{ab}"
         );
         assert!(
             not_dendro("x.txt", rez::container::Container::Unknown).contains("not a recording")
+        );
+        let big = convert_too_large(
+            "big.rez",
+            rez::container::Container::RezV3,
+            MAX_CONVERT_BYTES + 1,
+        );
+        assert!(
+            big.starts_with("big.rez is a v3 .rez archive of 640 MiB, too large to convert")
+                && big.ends_with("rezolus recording upgrade big.rez"),
+            "{big}"
         );
     }
 
@@ -1993,7 +2104,7 @@ mod tests {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach(
             "baseline",
-            &dendro_bytes("acme", &[("service_queries", &carried)]),
+            dendro_bytes("acme", &[("service_queries", &carried)]),
             "rec.dendro",
         )
         .unwrap();
@@ -2017,7 +2128,8 @@ mod tests {
         let carried = titled_template("known", "carried").to_string();
         let bytes = dendro_bytes("known", &[("service_queries", &carried)]);
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "rec.dendro").unwrap();
+        reg.attach("baseline", bytes.to_vec(), "rec.dendro")
+            .unwrap();
         reg.init_templates("baseline", &site_templates()).unwrap();
         assert_eq!(
             rendered(&reg),
@@ -2054,7 +2166,8 @@ mod tests {
             ],
         );
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "rec.dendro").unwrap();
+        reg.attach("baseline", bytes.to_vec(), "rec.dendro")
+            .unwrap();
         reg.init_templates("baseline", &site_templates()).unwrap();
         assert_eq!(
             rendered(&reg),
@@ -2084,7 +2197,7 @@ mod tests {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach(
             "baseline",
-            &dendro_bytes("known", &[("service_queries", r#"{"service_name": 7}"#)]),
+            dendro_bytes("known", &[("service_queries", r#"{"service_name": 7}"#)]),
             "rec.dendro",
         )
         .unwrap();
@@ -2126,7 +2239,8 @@ mod tests {
         let bytes = std::fs::read(&upgraded).unwrap();
 
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "fleet.dendro").unwrap();
+        reg.attach("baseline", bytes.to_vec(), "fleet.dendro")
+            .unwrap();
 
         assert!(
             reg.selection("baseline")
@@ -2151,7 +2265,7 @@ mod tests {
         reg.set_compare_requested(true);
         reg.attach(
             "baseline",
-            &archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
             "fleet.dendro",
         )
         .unwrap();
@@ -2189,12 +2303,8 @@ mod tests {
     fn a_two_recording_rez_fills_both_capture_slots() {
         let mut reg = WasmCaptureRegistry::new();
         reg.set_compare_requested(true);
-        reg.attach(
-            "baseline",
-            &committed_rez_bytes("v3-multi.rez"),
-            "fleet.rez",
-        )
-        .unwrap();
+        reg.attach("baseline", committed_rez_bytes("v3-multi.rez"), "fleet.rez")
+            .unwrap();
         assert!(reg.has("baseline") && reg.has("experiment"));
         assert_eq!(
             reg.slot("baseline").unwrap().alias.as_deref(),
@@ -2232,9 +2342,11 @@ mod tests {
         );
         let bytes = std::fs::read(&path).unwrap();
 
-        let single = Viewer::new(&bytes, "run.dendro").expect("one run opens as one capture");
+        let single =
+            Viewer::new(bytes.to_vec(), "run.dendro").expect("one run opens as one capture");
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "run.dendro").unwrap();
+        reg.attach("baseline", bytes.to_vec(), "run.dendro")
+            .unwrap();
         assert!(!reg.has("experiment"));
         // The archive answers each recording's catalog questions.
         assert!(single.catalog.is_some());
@@ -2341,7 +2453,9 @@ mod tests {
 
         let mut compare = WasmCaptureRegistry::new();
         compare.set_compare_requested(true);
-        compare.attach("baseline", &bytes, "run.dendro").unwrap();
+        compare
+            .attach("baseline", bytes.to_vec(), "run.dendro")
+            .unwrap();
         assert!(compare.has("experiment"));
     }
 
@@ -2376,7 +2490,7 @@ mod tests {
         reg.set_compare_requested(true);
         reg.attach(
             "baseline",
-            &archive_bytes(&[
+            archive_bytes(&[
                 ("redis", "web-01"),
                 ("valkey", "web-01"),
                 ("envoy", "web-01"),
@@ -2427,7 +2541,8 @@ mod tests {
         let snapshot_bytes = committed_rez_bytes("v3-live.rez");
 
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &snapshot_bytes, "live.rez").unwrap();
+        reg.attach("baseline", snapshot_bytes.to_vec(), "live.rez")
+            .unwrap();
         assert!(reg.has("baseline"));
 
         let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
@@ -2451,7 +2566,7 @@ mod tests {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach(
             "baseline",
-            &archive_bytes(&[("redis", "web-01")]),
+            archive_bytes(&[("redis", "web-01")]),
             "one.dendro",
         )
         .unwrap();
@@ -2464,11 +2579,11 @@ mod tests {
     #[test]
     fn the_registry_holds_more_than_two_captures() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &one_recording(), "base.dendro")
+        reg.attach("baseline", one_recording(), "base.dendro")
             .unwrap();
-        reg.attach("redis", &one_recording(), "redis.dendro")
+        reg.attach("redis", one_recording(), "redis.dendro")
             .unwrap();
-        reg.attach("valkey", &one_recording(), "valkey.dendro")
+        reg.attach("valkey", one_recording(), "valkey.dendro")
             .unwrap();
 
         for id in ["baseline", "redis", "valkey"] {
@@ -2508,12 +2623,12 @@ mod tests {
     #[test]
     fn re_attaching_a_capture_by_id_replaces_in_place() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &one_recording(), "base.dendro")
+        reg.attach("baseline", one_recording(), "base.dendro")
             .unwrap();
-        reg.attach("redis", &one_recording(), "old.dendro").unwrap();
-        reg.attach("valkey", &one_recording(), "valkey.dendro")
+        reg.attach("redis", one_recording(), "old.dendro").unwrap();
+        reg.attach("valkey", one_recording(), "valkey.dendro")
             .unwrap();
-        reg.attach("redis", &one_recording(), "new.dendro").unwrap();
+        reg.attach("redis", one_recording(), "new.dendro").unwrap();
 
         assert_eq!(reg.others.len(), 2, "no duplicate redis");
         assert_eq!(
@@ -2530,7 +2645,7 @@ mod tests {
     #[test]
     fn a_single_recording_archive_is_one_capture() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &committed_rez_bytes("v3.rez"), "one.rez")
+        reg.attach("baseline", committed_rez_bytes("v3.rez"), "one.rez")
             .unwrap();
         assert!(reg.has("baseline"));
         assert!(!reg.has("experiment"));
@@ -2541,7 +2656,7 @@ mod tests {
     #[test]
     fn a_one_recording_archive_attaches_to_the_slot_it_was_given() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("experiment", &one_recording(), "capture.dendro")
+        reg.attach("experiment", one_recording(), "capture.dendro")
             .unwrap();
         assert!(reg.has("experiment"));
         assert!(!reg.has("baseline"));
@@ -2552,10 +2667,10 @@ mod tests {
     /// is saved through that archive instead.
     #[test]
     fn a_capture_of_its_own_archive_can_be_saved() {
-        let one = Viewer::new(&one_recording(), "one.dendro").unwrap();
+        let one = Viewer::new(one_recording(), "one.dendro").unwrap();
         assert!(one.can_save());
         let combined = Viewer::new(
-            &archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
             "fleet.dendro",
         )
         .unwrap();
@@ -2594,7 +2709,7 @@ mod tests {
         let body = r#"{"entries":[],"trim_columns":false}"#;
         let saved = |bytes: &[u8], name: &str| {
             let mut reg = WasmCaptureRegistry::new();
-            reg.attach("baseline", bytes, name).unwrap();
+            reg.attach("baseline", bytes.to_vec(), name).unwrap();
             assert_eq!(reg.report_extension(), ".dendro");
             // trim_columns=false keeps every column, so the report is a full
             // copy with the selection embedded — no query engine needed.
@@ -2674,7 +2789,8 @@ mod tests {
     fn loaded(dendro: &[u8], prefer_registry: bool) -> (WasmCaptureRegistry, Vec<String>) {
         let mut reg = WasmCaptureRegistry::new();
         reg.set_prefer_registry_templates(prefer_registry);
-        reg.attach("baseline", dendro, "rec.dendro").unwrap();
+        reg.attach("baseline", dendro.to_vec(), "rec.dendro")
+            .unwrap();
         let notices = reg.init_templates("baseline", "[]").unwrap();
         (reg, serde_json::from_str(&notices).unwrap())
     }
@@ -2774,8 +2890,10 @@ mod tests {
             [(&renamed, &plain, "Processors"), (&plain, &renamed, "CPU")]
         {
             let mut reg = WasmCaptureRegistry::new();
-            reg.attach("baseline", baseline, "a.dendro").unwrap();
-            reg.attach("experiment", experiment, "b.dendro").unwrap();
+            reg.attach("baseline", baseline.to_vec(), "a.dendro")
+                .unwrap();
+            reg.attach("experiment", experiment.to_vec(), "b.dendro")
+                .unwrap();
             reg.init_templates("baseline", "[]").unwrap();
             reg.init_templates("experiment", "[]").unwrap();
             reg.regenerate_combined("[]", None).unwrap();

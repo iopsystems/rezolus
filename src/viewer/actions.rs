@@ -161,8 +161,8 @@ pub async fn upload_parquet(
 }
 
 /// Store an upload and load it as the baseline: a dendro archive, by its
-/// content. Any other file is refused, one an earlier release wrote with the
-/// `recording upgrade` command that converts it.
+/// content, or a recording an earlier release wrote, converted to one
+/// (`legacy_load::stage_upload`). Any other file is refused.
 fn ingest_upload(
     state: &AppState,
     body: &[u8],
@@ -172,16 +172,9 @@ fn ingest_upload(
     if state.live.load(Ordering::Relaxed) {
         return ApiResponse::err("upload is only available in file mode", "bad_request");
     }
-    let container = ::rez::container::Container::of_bytes(body);
-    if container != ::rez::container::Container::Dendro {
-        return ApiResponse::err(
-            ::rez::container::not_dendro(&filename, container, env!("CARGO_BIN_NAME")),
-            "invalid_recording",
-        );
-    }
     let temp_path = baseline_temp_path();
-    if let Err(e) = std::fs::write(&temp_path, body) {
-        return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
+    if let Err(e) = super::legacy_load::stage_upload(body, &filename, &temp_path) {
+        return ApiResponse::err(e, "invalid_recording");
     }
     ingest_rez_from_path(state, temp_path, filename)
 }
@@ -393,7 +386,11 @@ pub fn baseline_temp_path() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    std::env::temp_dir().join(format!("rezolus-viewer-{}-{}", std::process::id(), suffix))
+    std::env::temp_dir().join(format!(
+        "rezolus-viewer-{}-{}.dendro",
+        std::process::id(),
+        suffix
+    ))
 }
 
 fn filename_header(headers: &HeaderMap) -> Option<String> {
@@ -433,7 +430,8 @@ pub async fn attach_experiment(
     on_query_slot(&state, move |state| attach_upload(state, &body, filename)).await
 }
 
-/// Store an uploaded experiment archive and attach it.
+/// Store an uploaded experiment archive, converting a recording an earlier
+/// release wrote (`legacy_load::stage_upload`), and attach it.
 fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
     // Checked again here: another attach can finish during the slot wait, and
     // both would write the same temp file.
@@ -444,8 +442,10 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
         )
             .into_response();
     }
+    // A recording an earlier release wrote is converted when it is stored,
+    // below; anything else is refused here.
     let container = ::rez::container::Container::of_bytes(body);
-    if container != ::rez::container::Container::Dendro {
+    if container != ::rez::container::Container::Dendro && !container.is_legacy() {
         return (
             StatusCode::BAD_REQUEST,
             ::rez::container::not_dendro(&filename, container, env!("CARGO_BIN_NAME")),
@@ -478,12 +478,8 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
     }
     let temp_path =
         std::env::temp_dir().join(format!("rezolus-experiment-{}.dendro", std::process::id()));
-    if let Err(e) = std::fs::write(&temp_path, body) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to store upload: {e}"),
-        )
-            .into_response();
+    if let Err(e) = super::legacy_load::stage_upload(body, &filename, &temp_path) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
     }
 
     let (exp_reader, sysinfo, file_meta) =
@@ -1170,7 +1166,8 @@ mod tests {
         assert!(uploaded.combined_catalog.read().is_none());
 
         let mut reg = viewer::WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "report.dendro").unwrap();
+        reg.attach("baseline", bytes.to_vec(), "report.dendro")
+            .unwrap();
         assert_eq!(reg.selection("baseline").as_deref(), Some(body));
         let meta: serde_json::Value =
             serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
@@ -1286,10 +1283,11 @@ mod tests {
         );
     }
 
-    /// An upload is opened by its content: a dendro archive loads, a `.rez`
-    /// is refused with the upgrade command, whatever either is called.
+    /// An upload is opened by its content, whatever it is called: a `.rez`
+    /// is converted to a dendro archive and loads, a dendro archive loads,
+    /// and a file that is neither is refused.
     #[tokio::test]
-    async fn an_upload_is_a_dendro_archive_and_a_rez_is_refused() {
+    async fn an_upload_is_opened_by_content_and_a_rez_is_converted() {
         let dir = tempfile::tempdir().unwrap();
         let rez = std::fs::read(::rez::fixtures::committed_rez("v3.rez", dir.path())).unwrap();
         let dendro = std::fs::read(crate::parquet_tools::test_support::simple_dendro(
@@ -1310,11 +1308,20 @@ mod tests {
         )
         .await;
         let value = serde_json::to_value(&response.0).unwrap();
+        assert_eq!(value["status"], "success", "{value}");
+        crate::viewer::legacy_load::remove();
+        let response = upload_parquet(
+            State(Arc::clone(&state)),
+            named("notes.dendro"),
+            Bytes::from_static(b"not a recording"),
+        )
+        .await;
+        let value = serde_json::to_value(&response.0).unwrap();
         assert_eq!(value["status"], "error", "{value}");
         assert!(
             value["error"]
                 .as_str()
-                .is_some_and(|e| e.contains("rezolus recording upgrade old.rez")),
+                .is_some_and(|e| e.contains("not a recording")),
             "{value}"
         );
         let response = upload_parquet(State(state), named("x.parquet"), Bytes::from(dendro)).await;

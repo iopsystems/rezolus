@@ -2,7 +2,7 @@
 // Used by both the binary viewer (src/viewer) and the static site (site/viewer).
 //
 // Props:
-//   onFile(file: File)        — called when user selects or drops a recording (.dendro)
+//   onFile(file: File)        — called when user selects or drops a recording (.dendro, .rez or .parquet)
 //   onConnect(url: str)       — called when user enters a live agent URL (optional; hidden if absent)
 //   onLoadUrl(raw: str)       — called with `[alias=]url` to load a recording from a URL (optional; hidden if absent)
 //   urlLoading                — 'direct' | 'proxy' | 'disabled'. Drives the URL input's enabled state and hint text:
@@ -69,12 +69,12 @@ const Dropzone = {
                     m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                     m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                 ]),
-            m('p', label || 'Drag & drop a .dendro recording here'),
+            m('p', label || 'Drag & drop a .dendro, .rez or .parquet recording here'),
             !disabled && !checked && m('label.upload-btn', [
                 'Choose File',
                 m('input', {
                     type: 'file',
-                    accept: '.dendro',
+                    accept: '.dendro,.rez,.parquet',
                     style: 'display:none',
                     onchange: (e) => {
                         const file = e.target.files[0];
@@ -204,13 +204,13 @@ const FileUpload = {
                 m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                 m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
             ]),
-            m('p', 'Drag & drop a .dendro recording here'),
+            m('p', 'Drag & drop a .dendro, .rez or .parquet recording here'),
             m('p.upload-or', 'or'),
             m('label.upload-btn', [
                 'Choose File',
                 m('input', {
                     type: 'file',
-                    accept: '.dendro',
+                    accept: '.dendro,.rez,.parquet',
                     style: 'display:none',
                     onchange: (e) => {
                         const file = e.target.files[0];

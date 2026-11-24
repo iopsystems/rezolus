@@ -43,6 +43,7 @@ pub(crate) mod combined_test;
 #[cfg(test)]
 mod dashboard_queries_test;
 mod follow;
+pub(crate) mod legacy_load;
 mod live;
 pub(crate) mod metadata;
 mod report_save;
@@ -108,8 +109,8 @@ pub fn command() -> Command {
              - a live agent:             rezolus view http://host:4241   (agent 5.21.0+ with snapshot_format = \"v3\"; recorded into a temporary .dendro)\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
              A recording is a .dendro archive. A .rez archive, a .parquet file or a\n\
-             .parquet.ab.tar from an earlier release is refused with the command that\n\
-             converts it: `rezolus recording upgrade FILE`.\n\n\
+             .parquet.ab.tar from an earlier release is converted to a temporary .dendro\n\
+             when it is opened; `rezolus recording upgrade FILE` writes one to keep.\n\n\
              An archive holding several recordings of one run (`rezolus record --endpoint a\n\
              --endpoint b`) opens as ONE combined view: every series carries its recording's\n\
              labels (source, host, record's labels), and each recording renders its own sections, so\n\
@@ -514,9 +515,29 @@ impl TryFrom<ArgMatches> for Config {
     }
 }
 
-pub fn run(config: Config) {
-    let config: Arc<Config> = config.into();
+pub fn run(mut config: Config) {
     let _log_drain = configure_logging(verbosity_to_level(config.verbose));
+    // A recording an earlier release wrote is converted to a temporary
+    // `.dendro` before anything opens it.
+    if let Source::File(path) = &config.source {
+        match legacy_load::dendro_path(path) {
+            Ok(dendro) => config.source = Source::File(dendro),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if let Some(path) = &config.experiment_path {
+        match legacy_load::dendro_path(path) {
+            Ok(dendro) => config.experiment_path = Some(dendro),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let config: Arc<Config> = config.into();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -531,8 +552,10 @@ pub fn run(config: Config) {
     // delivered as a normal key event and handled as a graceful quit.
     if !config.tui {
         ctrlc::set_handler(move || {
-            // `exit` runs no destructors, so the live archive is removed here.
+            // `exit` runs no destructors, so the live archive and any
+            // converted file are removed here.
             live::remove_live_dirs();
+            legacy_load::remove();
             std::process::exit(2)
         })
         .expect("failed to set ctrl-c handler");
@@ -632,6 +655,7 @@ pub fn run(config: Config) {
         // before the thread let go of it.
         drop(rt);
         live::finish_live_sessions(Duration::from_secs(5));
+        legacy_load::remove();
         return;
     }
 
@@ -674,7 +698,8 @@ fn init_file_mode(
 
 /// Open the dendro archive at `path` as the experiment of a two-file
 /// comparison: its one recording, with the systeminfo and metadata the
-/// captures registry keeps. A legacy file is refused with the upgrade
+/// captures registry keeps. A legacy file (converted by the caller,
+/// `legacy_load`) is refused with the upgrade
 /// command, an archive of several recordings with the commands that compare
 /// two of them ([`::rez::container::one_recording_hint`]), which name the
 /// experiment as `name` and the baseline as `baseline`.

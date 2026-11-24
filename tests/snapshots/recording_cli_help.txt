@@ -722,8 +722,9 @@ Options:
 --- stdout
 Write a new .dendro archive holding a recording an earlier release wrote:
 a v1, v2 or v3 `.rez`, a standalone `.parquet`, or a `.parquet.ab.tar`
-A/B tarball. Every other command opens .dendro archives only and refuses
-these with this command.
+A/B tarball. `view` converts these to a temporary .dendro when it opens
+one; every other command opens .dendro archives only and refuses these
+with this command.
 
 A v3 `.rez`'s recordings become sources and its tables streams; segment,
 WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings

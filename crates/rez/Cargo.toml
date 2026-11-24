@@ -10,6 +10,9 @@ publish = false
 [dependencies]
 arrow = "60.0.0"
 bytes = "1"
+# `combined::parquet_source_label` and `keys`, for the parquet conversion
+# `legacy` runs.
+dashboard.workspace = true
 # Reader-only by default (see the workspace entry); `write` below turns
 # dendro's append side on alongside rez's own.
 dendro = { workspace = true, features = ["archive"] }
@@ -19,7 +22,10 @@ metriken-exposition = { workspace = true, optional = true }
 # `archive`: `MetricsSource` for `ArchiveReader` and `eval_timestamps_for`,
 # which the read path needs in every configuration, the wasm viewer's included.
 metriken-query = { workspace = true, features = ["archive"] }
-metriken-storage = { workspace = true, features = ["rez"] }
+# `write` for the converters (`to_dendro`, `ParquetToArchive`), which the
+# viewers run on a `.rez` or parquet file they load (`legacy`). They write an
+# in-memory `ArchiveMut` and spawn no thread, so they run in the browser.
+metriken-storage = { workspace = true, features = ["rez", "write"] }
 parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "simdutf8",
