@@ -210,7 +210,13 @@ target/release/rezolus recording convert rezolus.raw -o out.dendro --interval 25
 target/release/rezolus recording combine web-01.dendro web-02.dendro -o run.dendro   # one archive, a recording per input recording (opens combined)
 target/release/rezolus recording combine a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro  # A/B: stamps arm on each input's recordings
 target/release/rezolus recording combine two.dendro --ab baseline=0 experiment=1 -o ab.dendro   # one archive input: arms by position
-# combine takes .dendro inputs, each copied with dendro's copy_sources_into (live tail sealed, uuids kept). Any output but a
+# combine takes .dendro inputs, each copied with dendro's copy_sources_into (live tail sealed, uuids kept); two inputs
+#   that share a source uuid (a file and a snapshot of it, two dumps of one recording, one file twice) are refused
+#   before copying, naming both (combine.rs `refuse_shared_sources`; Save as Report likewise refuses a comparison of
+#   two copies of one recording). An archive with two sources under one uuid (written before 6.0.0-alpha.169)
+#   reads, and annotate, check --annotate and the MCP event tools edit it in place; snapshot, filter (in place
+#   too), -o edits, combine and Save as Report copy it and are refused (rez::container::duplicate_source).
+#   Any output but a
 #   new .dendro is refused (the 5.x parquet row-merge, .parquet.ab.tar, .rez), as are --pinned, --category and
 #   --bypass-time-check. A conflicting existing arm is refused before copying, naming the input; the viewer
 #   fills the slots by arm value (dashboard::combined::arm_slots): one recording per arm, every other shown
@@ -400,10 +406,10 @@ answers with 5.29.2's.
 `open_recordings_from_bytes`) returns one reader per read group of the
 archive's sources (`crates/rez/src/reader.rs` `read_groups`, over
 metriken-storage's `process::form` and `process::read_groups`): sources sharing
-a uuid (a source and its snapshot, dump or combine copy) or sharing a
-`producer_epoch` with overlapping spans (one agent process recorded twice) are
-one recording, flattened with `ArchiveReader::flatten` and read once; one epoch
-with disjoint spans is two. Every consumer sees these: the viewers' slots and
+a uuid (only an archive written before 6.0.0-alpha.169: dendro 0.8 refuses a
+second source with a uuid) or sharing a `producer_epoch` with overlapping
+spans (one agent process recorded twice) are one recording, flattened with
+`ArchiveReader::flatten` and read once; one epoch with disjoint spans is two. Every consumer sees these: the viewers' slots and
 combined members, MCP `--recording`, `recording check`, and the edits, which
 map a group back to its sources by `reader.sources()[i].catalog_index` and
 write each one.

@@ -1166,9 +1166,9 @@ checksum = "5729f5117e208430e437df2f4843f5e5952997175992d1414f94c57d61e270b4"
 
 [[package]]
 name = "dendro"
-version = "0.7.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7161e14aaeb71d7abea76f62a3e9123755f0fc4990fe3e07563dc5f62048a540"
+checksum = "e23e44db9ce36e914306492c00136a2f27f86941d60a2d1f644e4016d5ea3cdb"
 dependencies = [
  "arrow",
  "bytes",
@@ -2538,9 +2538,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.27.1"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ff56d9cae1a0035cbb8cb591fca39f9544d8ab06fb31ebd4265a2da572a4694"
+checksum = "e8acc9dd48d3e9253582541a6b5b2f608ada25e85290491abc5a36dcdcdc03a1"
 dependencies = [
  "bytes",
  "chrono",
@@ -2575,9 +2575,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.51.0"
+version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78271e7cde9054bc238567d86eb9bbe335124f67fbfca2b887e217504dfe7dde"
+checksum = "141e007b02078eafbb34ecedecdffb7b7dad630fe9ab04243e6d3e05977e0b92"
 dependencies = [
  "arrow",
  "bytes",
@@ -2597,9 +2597,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-recorder"
-version = "0.15.0"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba53e51ed48a4caf83e30aa9934c5ecffead483021176bc5549e2d15ba06a1a4"
+checksum = "3c79669e9730df426adc3645a98ba203a1cc9a88d22c3b40d25b260d23002c3e"
 dependencies = [
  "async-trait",
  "dendro",
@@ -2619,9 +2619,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.13.2"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79af43b055f089757c5d82c12014599e504b286cf1d8336856f7d7590e7ff40b"
+checksum = "d03b4aa349278b84479410ec4b6d859705adce35916f6129d4ca876146454a03"
 dependencies = [
  "arrow",
  "bytes",
@@ -3637,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.168"
+version = "6.0.0-alpha.169"
 dependencies = [
  "allan",
  "anyhow",

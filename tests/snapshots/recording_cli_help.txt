@@ -344,9 +344,8 @@ INDETERMINATE never fail the run. No checks at all is 0, with a note on
 stderr.
 
 MULTI-RECORDING ARCHIVE: with no --recording every recording is checked and
-each line is prefixed with its labels; --recording k=v narrows to one. A
-recording and its copies (one source copied, or recorded twice from one
-agent process) are one recording.
+each line is prefixed with its labels; --recording k=v narrows to one. One
+agent process recorded twice over the same time is one recording.
 
 --annotate writes each FAIL/WARN window into the recording as a range
 event: kind=check, timestamp=window start, duration_ns=span (the event
@@ -434,8 +433,9 @@ Options:
 Assemble two or more .dendro archives into one, a recording per input
 recording, which the viewer opens as one combined view. Requires at least
 two inputs (one archive with --ab, below) and an output (-o) ending in
-.dendro. A recording and its copy (a snapshot, a hindsight dump) given
-together are read as one recording, as `rezolus view` reads them.
+.dendro. Two inputs that hold the same source (a file and a snapshot of
+it, two snapshots or hindsight dumps of one recording, or one file given
+twice) are refused, naming both: an archive holds each source once.
 
 With `--ab baseline=<input> experiment=<input>` each input's recordings
 are labelled arm=baseline or arm=experiment and the viewer opens a
@@ -444,7 +444,7 @@ the other arm is refused, naming the input. With two inputs, each value
 is an input's path or file name. With ONE archive input, each value is
 the position of one of its recordings, from 0,
 as `rezolus mcp describe-recording` prints them (each recording's `(position N)`).
-Every source of a recording, such as a source and its snapshot, takes
+Every source of a recording (one agent process recorded twice) takes
 its arm. That is the way to compare the two recordings of an archive
 combined without --ab, whose labels may be identical.
 

@@ -225,7 +225,8 @@ fn stamped_labels(
 /// is copied: each input's source labels, read from the dendro archive
 /// (`files`, as given). Whether the arms fill a comparison is
 /// checked after the copy (`check_slots`), when the output's recordings are
-/// known: a source and its copy in two inputs are one recording.
+/// known: sources of one agent process in two inputs (one
+/// `producer_epoch`, overlapping spans) are one recording.
 fn check_ab_plan(plan: &AbPlan, files: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
     if *plan == AbPlan::Nothing {
         return Ok(());
@@ -379,9 +380,10 @@ pub(super) fn run(
 /// Every input is a dendro archive (`run` refuses anything else). Each is
 /// copied through
 /// `copy_sources_into` in its own read snapshot, its live tail sealed
-/// (`crate::dendro_copy`), and each source keeps its uuid, so a source and a
-/// copy of it (the same uuid, e.g. a file and its snapshot) stay one
-/// recording to every reader (metriken-storage's process groups).
+/// (`crate::dendro_copy`), and each source keeps its uuid. An archive holds
+/// one source per uuid, so two inputs that share a source (a file and its
+/// snapshot, or one file given twice) are refused before anything is
+/// copied, naming both.
 fn combine_dendro(
     viewer_refuses: &str,
     files: &[PathBuf],
@@ -400,13 +402,19 @@ fn combine_dendro(
         .iter()
         .map(|p| Archive::open(p))
         .collect::<Result<_, _>>()?;
+    refuse_shared_sources(files, &archives)?;
     let mut sources = 0usize;
     let mut counts: Vec<usize> = Vec::with_capacity(archives.len());
 
     let staged = staging.path().join("combined.dendro");
     let mut dst = ArchiveMut::create(&staged)?;
+    // The input being copied, to name it in an error: an archive written
+    // before 6.0.0-alpha.169 can hold two sources with one uuid, and the copy
+    // refuses the second.
+    let mut at = 0;
     dst.transaction(|tx| {
-        for src in &archives {
+        for (i, src) in archives.iter().enumerate() {
+            at = i;
             // The encoder is built in the snapshot the copy reads, so an
             // input still being recorded cannot gain a long stream between
             // the two.
@@ -418,6 +426,17 @@ fn combine_dendro(
             sources += n;
         }
         Ok(())
+    })
+    .map_err(|e| -> Box<dyn std::error::Error> {
+        match e {
+            dendro::Error::DuplicateSource { uuid } => format!(
+                "{}: {}",
+                files[at].display(),
+                ::rez::container::duplicate_source(&uuid)
+            )
+            .into(),
+            e => e.into(),
+        }
     })?;
     // Stamped on the staged copy, so a refusal leaves no output.
     #[cfg(test)]
@@ -445,8 +464,8 @@ fn combine_dendro(
         }
     }
     drop(dst);
-    // Read again after the relabel, which can split a recording (a source
-    // and its copy given different arms). The staged file's sidecars stay
+    // Read again after the relabel, which can split a recording (two
+    // sources of one agent process given different arms). The staged file's sidecars stay
     // in the staging directory.
     let final_groups = read_groups_of(&staged)?;
     let recordings = final_groups.len();
@@ -472,6 +491,32 @@ fn combine_dendro(
             sources,
             files.len()
         );
+    }
+    Ok(())
+}
+
+/// Refuse `files` when two of them hold the same source (a uuid both
+/// carry): a file and a snapshot of it, two snapshots or hindsight dumps of
+/// one recording, or one file given twice. The output could hold only one
+/// of the two, and which one is the caller's choice.
+fn refuse_shared_sources(
+    files: &[PathBuf],
+    archives: &[dendro::archive::Archive],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (i, a) in archives.iter().enumerate() {
+        for (j, b) in archives.iter().enumerate().skip(i + 1) {
+            if let Some(uuid) = dendro::rewrite::shared_sources(a, b)?.first() {
+                return Err(format!(
+                    "{} and {} hold the same source (uuid {uuid}): both are copies of one \
+                     recording (the file, a snapshot or a hindsight dump of it), or one file \
+                     given twice. An archive holds each source once, so they cannot be \
+                     combined. Give only one of them: the one covering the time you need",
+                    files[i].display(),
+                    files[j].display()
+                )
+                .into());
+            }
+        }
     }
     Ok(())
 }
@@ -1025,20 +1070,48 @@ mod tests {
         }
     }
 
-    /// A recording and its snapshot (one uuid) combine into two sources that
-    /// read as one recording, answering as the recording alone: copies are
-    /// read once (metriken-storage process groups), so nothing is counted
-    /// twice.
+    /// A recording and its snapshot hold one source (one uuid), and an
+    /// archive holds a source once: combine refuses the pair before copying,
+    /// naming both inputs, in either order and when one file is given twice,
+    /// and writes nothing.
     #[test]
-    fn a_recording_and_its_copy_combine_into_one_recording() {
-        use metriken_query::MetricsSource;
+    fn inputs_that_share_a_source_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.dendro");
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
         let copy = dir.path().join("copy.dendro");
         crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
         let out = dir.path().join("twice.dendro");
-        run_combine(&[a.clone(), copy], &out).unwrap();
+        for (first, second) in [(&a, &copy), (&copy, &a), (&a, &a)] {
+            let err = run_combine(&[first.clone(), second.clone()], &out)
+                .unwrap_err()
+                .to_string();
+            let named = format!(
+                "{} and {} hold the same source (uuid ",
+                first.display(),
+                second.display()
+            );
+            assert!(err.starts_with(&named), "{err}");
+            assert!(!out.exists(), "nothing is written");
+        }
+    }
+
+    /// An archive a build before 6.0.0-alpha.169 combined from a recording
+    /// and its snapshot holds two sources with one uuid. They read as one
+    /// recording, answering as the recording alone (read once, nothing
+    /// counted twice), and a combine that copies that archive is refused
+    /// naming it.
+    #[test]
+    fn two_sources_with_one_uuid_are_one_recording() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        let b = dir.path().join("b.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 6, true);
+        crate::dendro_copy::fixtures::recorded(&b, 6, true);
+        let out = dir.path().join("twice.dendro");
+        run_combine(&[a.clone(), b.clone()], &out).unwrap();
+        ::rez::fixtures::one_uuid(&out);
 
         let sources = dendro::archive::Archive::open(&out)
             .unwrap()
@@ -1058,6 +1131,23 @@ mod tests {
             .unwrap()
         };
         assert_eq!(answer(&both[0].1), answer(&alone[0].1));
+
+        let c = dir.path().join("c.dendro");
+        crate::dendro_copy::fixtures::recorded(&c, 6, true);
+        let again = dir.path().join("again.dendro");
+        let err = run_combine(&[c, out.clone()], &again)
+            .unwrap_err()
+            .to_string();
+        let uuid = sources[0].uuid.clone().unwrap();
+        assert_eq!(
+            err,
+            format!(
+                "{}: {}",
+                out.display(),
+                ::rez::container::duplicate_source(&uuid)
+            )
+        );
+        assert!(!again.exists(), "nothing is written");
     }
 
     /// metriken-query reads each process group once (since 0.42), and these
@@ -1065,8 +1155,8 @@ mod tests {
     /// whose spans overlap (one agent process recorded twice) are one
     /// recording, answering what either answers alone, not the sum; with
     /// disjoint spans they are two; with different epochs they are two
-    /// (the control); and an archive combined with its own snapshot (the
-    /// same uuid) is one.
+    /// (the control); and two sources with one uuid (an archive an older
+    /// build wrote) are one whatever their epochs.
     #[test]
     fn producer_epoch_decides_which_sources_are_one_recording() {
         use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
@@ -1101,7 +1191,7 @@ mod tests {
             .unwrap()
         };
 
-        let (one_path, one) = open("one.dendro", &[source("E", 0..6)]);
+        let (_, one) = open("one.dendro", &[source("E", 0..6)]);
         let (_, twice) = open("twice.dendro", &[source("E", 0..6), source("E", 0..6)]);
         assert_eq!(
             twice.len(),
@@ -1115,20 +1205,19 @@ mod tests {
         let (_, other) = open("other.dendro", &[source("E", 0..6), source("F", 0..6)]);
         assert_eq!(other.len(), 2, "different epochs: two recordings");
 
-        let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&one_path, &copy, "rezolus").unwrap();
-        let out = dir.path().join("with-copy.dendro");
-        run_combine(&[one_path, copy], &out).unwrap();
-        let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
-        assert_eq!(both.len(), 1, "a source and its copy are one recording");
+        let (uuid_path, _) = open("uuid.dendro", &[source("E", 0..6), source("F", 0..6)]);
+        ::rez::fixtures::one_uuid(&uuid_path);
+        let both = ::rez::reader::RezReader::open_recordings(&uuid_path, pool()).unwrap();
+        assert_eq!(both.len(), 1, "two sources with one uuid are one recording");
         assert_eq!(answer(&both[0].1), answer(&one[0].1));
     }
 
     /// `--ab` positions index the recordings `describe-recording` numbers (the
-    /// read groups), not the archive's sources. An original, its snapshot and
-    /// a later recording are three sources but two recordings: position 0 is
-    /// the original with its copy, and both of its sources take the arm;
-    /// position 1 is the later one; position 2 does not exist.
+    /// read groups), not the archive's sources. One agent process recorded
+    /// twice (one `producer_epoch`, overlapping spans) and a later recording
+    /// are three sources but two recordings: position 0 is the process
+    /// recorded twice, and both of its sources take the arm; position 1 is
+    /// the later one; position 2 does not exist.
     #[test]
     fn ab_positions_name_recordings_not_sources() {
         use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
@@ -1145,13 +1234,16 @@ mod tests {
                 .collect(),
         };
         let a = dir.path().join("a.dendro");
-        write_dendro(&a, &[source("E", 0..6)], None, Finish::Finalized);
-        let copy = dir.path().join("a-copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
+        write_dendro(
+            &a,
+            &[source("E", 0..6), source("E", 0..6)],
+            None,
+            Finish::Finalized,
+        );
         let later = dir.path().join("later.dendro");
         write_dendro(&later, &[source("F", 10..16)], None, Finish::Finalized);
         let three = dir.path().join("three.dendro");
-        run_combine(&[a, copy, later], &three).unwrap();
+        run_combine(&[a, later], &three).unwrap();
         assert_eq!(read_groups_of(&three).unwrap(), [vec![0, 1], vec![2]]);
 
         let err = run_combine_ab(
@@ -1193,7 +1285,7 @@ mod tests {
         assert_eq!(
             readers.len(),
             2,
-            "the original and its copy stay one recording"
+            "the process recorded twice stays one recording"
         );
         // Three sources took an arm, in two recordings, and the report
         // counts recordings.

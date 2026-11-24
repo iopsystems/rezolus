@@ -225,6 +225,28 @@ mod tests {
         assert_eq!(streams, ["memory/meminfo"]);
     }
 
+    /// A report of an archive with two sources under one uuid (written before
+    /// 6.0.0-alpha.169) is refused with the reason: a report is a copy.
+    #[test]
+    fn a_report_of_two_sources_under_one_uuid_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
+        crate::dendro_copy::fixtures::recorded(&a, 6, true);
+        crate::dendro_copy::fixtures::recorded(&b, 6, true);
+        let old = dir.path().join("old.dendro");
+        crate::parquet_tools::combine::run_combine_for_test(&[a, b], &old).unwrap();
+        ::rez::fixtures::one_uuid(&old);
+        let uuid = dendro::archive::Archive::open(&old)
+            .unwrap()
+            .read_sources()
+            .unwrap()[0]
+            .uuid
+            .clone()
+            .unwrap();
+        let err = build_report(&[&old], None, None, None, "{}", None).unwrap_err();
+        assert_eq!(err, ::rez::container::duplicate_source(&uuid));
+    }
+
     /// An untrimmed dendro report copies every stream and carries no report
     /// marker.
     #[test]

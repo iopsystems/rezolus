@@ -382,6 +382,24 @@ pub fn add_rez_metadata(path: &Path, index: usize, extra: &[(&str, &str)]) {
     .unwrap();
 }
 
+/// Give every source of the `.dendro` at `path` the uuid of its first
+/// source, as an archive a build before 6.0.0-alpha.169 wrote when it
+/// combined a recording with its own snapshot. dendro 0.8 refuses to write a
+/// second source with a uuid and creates new archives with a unique index on
+/// `sources(uuid)`, which this drops first.
+pub fn one_uuid(path: &Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS sources_by_uuid;
+         UPDATE sources SET uuid = (SELECT uuid FROM sources ORDER BY id LIMIT 1);",
+    )
+    .unwrap();
+    let uuids: i64 = conn
+        .query_row("SELECT COUNT(DISTINCT uuid) FROM sources", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(uuids, 1, "{} has sources without a uuid", path.display());
+}
+
 /// A V2 snapshot at `ts` holding only `counters`.
 pub fn snap_counters(ts: u64, counters: Vec<Counter>) -> Snapshot {
     snap(ts, counters, Vec::new())

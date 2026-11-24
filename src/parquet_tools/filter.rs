@@ -372,6 +372,36 @@ mod tests {
         );
     }
 
+    /// An in-place filter writes a copy and renames it over the input, so an
+    /// archive with two sources under one uuid (written before
+    /// 6.0.0-alpha.169) is refused, and left as it was.
+    #[test]
+    fn filter_in_place_refuses_two_sources_under_one_uuid() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
+        crate::dendro_copy::fixtures::recorded(&a, 6, true);
+        crate::dendro_copy::fixtures::recorded(&b, 6, true);
+        let old = dir.path().join("old.dendro");
+        crate::parquet_tools::combine::run_combine_for_test(&[a, b], &old).unwrap();
+        ::rez::fixtures::one_uuid(&old);
+        let before = std::fs::read(&old).unwrap();
+        let uuid = dendro::archive::Archive::open(&old)
+            .unwrap()
+            .read_sources()
+            .unwrap()[0]
+            .uuid
+            .clone()
+            .unwrap();
+        let err = filter_dendro(&old, &keep(Some(&set(&["threads"])), None), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&::rez::container::duplicate_source(&uuid)),
+            "{err}"
+        );
+        assert_eq!(std::fs::read(&old).unwrap(), before);
+    }
+
     /// `--samplers` keeps a long table's occupant stream with its table.
     #[test]
     fn filter_dendro_by_sampler_keeps_the_occupant_stream_with_its_table() {

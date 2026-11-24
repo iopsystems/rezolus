@@ -823,6 +823,23 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
+- **An archive holds one source per uuid** (dendro 0.8, metriken-storage
+  0.14, metriken-query 0.52, metriken-exposition 0.28, metriken-recorder
+  0.16). `recording combine` refuses two inputs that hold the same source (a
+  file and a snapshot of it, two snapshots or hindsight dumps of one
+  recording, or one file given twice), naming both, and Save as Report
+  refuses a comparison of two copies of one recording. An archive a build
+  before 6.0.0-alpha.169 wrote with two sources under one uuid (a recording
+  combined with a copy of it) still reads as one recording, and `recording
+  annotate`, `check --annotate` and the MCP event tools edit it in place.
+  `recording snapshot`, `filter` (in place or with `-o`), an edit into a new
+  file, `combine` and Save as Report each write a copy, and refuse it.
+- **Writing to an archive leaves an empty `<archive>-lock` file beside it**:
+  `record`, and an in-place `recording annotate`, `check --annotate` or MCP
+  edit (`add_event`, `remove_events`, `run_checks` with `annotate=true`).
+  dendro takes an advisory lock on that file so that two processes cannot
+  write one archive; the second is refused. The file holds no data, a copy
+  does not need it, and nothing removes it.
 - **A `drivehealth` or `memory_cgroup` read that finishes a full interval
   or more after its dispatch is followed by an idle interval with no read.**
   Otherwise the next read is due one interval after the previous dispatch.
@@ -1231,9 +1248,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
     Rezolus builds on metriken-storage 0.5 read such a segment as holding
     the names of its table's first segment, so a metric that first appears
     in a later segment is not listed or returned there.
-  - A recording and its copies, or two recorders of one agent, combine
-    their histograms per source: each span reads the finest source that
-    covers it, where it read one source for the whole range. Where a finer
+  - Sources of one recording (one agent process recorded twice, or copies
+    in an archive written before 6.0.0-alpha.169) combine their histograms
+    per source: each span reads the finest source that covers it, where
+    it read one source for the whole range. Where a finer
     source's run sits inside a coarser one's, the group can count less
     than the coarser source alone.
   - Where two such sources sample at the same spacing, the one whose
@@ -1338,15 +1356,14 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   timestamp read does not add the segments it opens to the segment cache
   (metriken-storage 0.5.4), so it does not evict segments that chart
   queries cached.
-- **A recording and its copies are read once.** metriken-query 0.42 forms
-  process groups: sources that share a uuid (a source and its snapshot or
-  hindsight dump), or share a `producer_epoch` and overlap in time (one agent
+- **One agent process recorded twice is read once.** metriken-query 0.42 forms
+  process groups: sources that share a uuid (in an archive written before
+  6.0.0-alpha.169), or share a `producer_epoch` and overlap in time (one agent
   process recorded twice), are one recording; one epoch with disjoint spans
   is two. `rezolus view`, `mcp` (its `--recording` selectors and
   `describe-recording`), `recording check` and `annotate` list and select
   these recordings, and an edit of one is written to each of its sources.
-  `recording combine` no longer refuses inputs that share a source uuid. A
-  query's `__recording__` is the archive index of a recording's first
+  A query's `__recording__` is the archive index of a recording's first
   source.
 - **Archives written are dendro schema 5** (dendro 0.6, metriken-storage
   0.4, metriken-query 0.41, metriken-exposition 0.24, metriken-recorder
