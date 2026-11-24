@@ -290,6 +290,20 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Fixed
 
+- **In V3 snapshots, `network_ethtool` publishes an ENA allowance counter
+  that is zero.** The five `network_ena_*_allowance_exceeded` counters declared
+  no acquisition group, and the V3 builder skips a zero entry of an undeclared
+  counter group. An interface whose allowance was never exceeded therefore had
+  no series, which reads the same as a host with no ENA interface. Releases
+  from 5.21.0 through 5.32.0 and the 6.0 prereleases have this. The counters
+  are now in the group `network_ethtool_interfaces`, with one member per
+  tracked interface. On a V3 agent the dashboard's AWS ENA section therefore
+  appears for every host whose ENA driver reports allowance counters,
+  including one where no allowance was exceeded. With
+  `snapshot_format = "v2"` a zero entry is still omitted. A failing interface
+  no longer stops the interfaces after it from updating, and an interface
+  whose stats stop being readable is logged at warn, and at info when they can
+  be read again. (#1727)
 - **The `cpu_cores` sampler no longer exits the agent on a read error from
   `/sys/devices/system/cpu/online` or a line it cannot parse.** It skips that
   refresh. Releases from 4.0.0 on exit with status 101 on that error. (#1043)

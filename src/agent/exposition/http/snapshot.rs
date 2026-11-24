@@ -2728,6 +2728,63 @@ mod tests {
         );
     }
 
+    /// #1727: an ENA allowance counter at zero is published as zero. In the
+    /// default group it was skipped, so an interface whose allowance was never
+    /// exceeded had no series, which reads the same as no ENA interface.
+    ///
+    /// Reaches the sampler's statics through the registry because its `stats`
+    /// module is private. Slot 0 of the receive counter is written only here.
+    #[test]
+    fn ena_allowance_counter_at_zero_is_published() {
+        const METRIC: &str = "network_ena_bandwidth_allowance_exceeded";
+        let sampler = crate::agent::samplers::bpf_sampler_name("network_ethtool");
+        let group = crate::agent::samplers::ACQUISITION_GROUPS
+            .iter()
+            .copied()
+            .find(|g| g.sampler == sampler && g.name == "network_ethtool_interfaces")
+            .expect("ENA allowance group registered");
+
+        let receive = metriken::metrics()
+            .static_metrics()
+            .iter()
+            .find(|m| m.name() == METRIC && m.metadata().get("direction") == Some("receive"))
+            .expect("receive counter registered");
+        let counters = receive
+            .as_any()
+            .and_then(|a| a.downcast_ref::<metriken::CounterGroup>())
+            .expect("receive counter is a CounterGroup");
+
+        group.set_member_bound(1);
+        let guard = group.acquire();
+        let _ = counters.set(0, 0);
+        guard.finish();
+
+        let mut cache = v3_builder();
+        let Snapshot::V3(s) = create_v3(Duration::from_secs(1), vec![], &mut cache, (0, 0)) else {
+            panic!("expected V3")
+        };
+
+        let found: Vec<Option<u64>> = s
+            .groups
+            .iter()
+            .flat_map(|g| {
+                let schema = g.schema.as_ref().expect("schema present");
+                schema
+                    .counters
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, d)| {
+                        d.metadata.get("metric").map(String::as_str) == Some(METRIC)
+                            && d.metadata.get("direction").map(String::as_str) == Some("receive")
+                            && d.metadata.get("id").map(String::as_str) == Some("0")
+                    })
+                    .map(|(i, _)| g.counters[i])
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(found, vec![Some(0)], "slot 0 published once, as zero");
+    }
+
     // Dedicated metric, no `acq_group` — routes to the shared
     // "unattributed/main" default group like every other undeclared metric
     // in this test binary (module-based sampler attribution gives test

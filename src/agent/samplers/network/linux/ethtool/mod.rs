@@ -162,6 +162,8 @@ struct TrackedInterface {
     slot: usize,
     n_stats: u32,
     stats: Vec<TrackedStat>,
+    /// Whether the last read succeeded, so a change is logged once.
+    reading: bool,
 }
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -211,7 +213,7 @@ impl Sampler for Ethtool {
     async fn refresh(&self) {
         let mut inner = self.inner.lock().await;
 
-        let _ = inner.refresh();
+        inner.refresh();
     }
 }
 
@@ -290,6 +292,11 @@ impl EthtoolInner {
             }
             return Ok(None);
         }
+
+        // Slots are assigned from 0 in order, so the prefix bound is exact. The
+        // interface set is fixed at init. A sampler that does not come up is
+        // bounded to zero by `bound_groups_without_a_live_sampler`.
+        ENA_ALLOWANCE_ACQ.set_member_bound(interfaces.len());
 
         Ok(Some(Self { fd, interfaces }))
     }
@@ -386,15 +393,42 @@ impl EthtoolInner {
             slot: 0,
             n_stats,
             stats: tracked_stats,
+            reading: true,
         }))
     }
 
-    pub fn refresh(&mut self) -> Result<(), std::io::Error> {
-        for iface in &self.interfaces {
-            self.read_stats(iface)?;
+    /// Read every interface's stats inside one acquisition window. With
+    /// several interfaces, one whose read fails keeps its previous values under
+    /// a window the others stamped, the device-visit cost principle 18 accepts.
+    pub fn refresh(&mut self) {
+        let guard = ENA_ALLOWANCE_ACQ.acquire();
+        let mut read_any = false;
+        for i in 0..self.interfaces.len() {
+            let result = self.read_stats(&self.interfaces[i]);
+            let iface = &mut self.interfaces[i];
+            match result {
+                Ok(()) => {
+                    if !iface.reading {
+                        info!("{NAME}: {}: stats can be read again", iface.name);
+                    }
+                    iface.reading = true;
+                    read_any = true;
+                }
+                Err(e) => {
+                    if iface.reading {
+                        warn!("{NAME}: {}: stats can no longer be read: {e}", iface.name);
+                    }
+                    iface.reading = false;
+                }
+            }
         }
-
-        Ok(())
+        // With no interface read, no value is from inside this window, and
+        // stamping it would present the old values as fresh.
+        if read_any {
+            guard.finish();
+        } else {
+            guard.discard();
+        }
     }
 
     fn read_stats(&self, iface: &TrackedInterface) -> Result<(), std::io::Error> {
