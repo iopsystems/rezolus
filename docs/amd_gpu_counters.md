@@ -290,6 +290,10 @@ power level; at the default `auto` level they read 0 (or free-run with garbage).
 The globally-accumulated counters (GRBM, `SQ_WAVES`, `SQ_BUSY_CYCLES`) and the
 GL2C/SQC counters work regardless. See finding #3 below for details.
 
+The sampler publishes a counter whose total is 0 as 0, so at the `auto` level
+these SQ counters have series at 0. A 0 there means the counter did not count
+in that power state, not that the GPU ran no instructions.
+
 ## Configuring the counter events
 
 Configuring counters happens in two phases because rocprofiler-sdk imposes
