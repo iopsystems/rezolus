@@ -20,7 +20,7 @@
 use std::path::Path;
 
 use dendro::archive::{Archive, ArchiveMut};
-use dendro::rewrite::{copy_sources_into, CopySpec};
+use dendro::rewrite::{copy_sources_into_as_copies, CopySpec};
 
 fn err(e: dendro::Error) -> String {
     e.to_string()
@@ -47,10 +47,10 @@ pub(crate) fn copy(src: &Archive, dest: &Path, spec: &CopySpec<'_>) -> Result<us
 /// read snapshot sees it, so a spec that depends on the stream list agrees
 /// with what is copied.
 ///
-/// An archive holds one source per uuid, so an archive holding two sources
+/// An archive holds one source per uuid. An archive holding two sources
 /// with one uuid (which a build before 6.0.0-alpha.169 wrote when it
-/// combined a recording with a copy of it) cannot be copied, and the error
-/// says so (`rez::container::duplicate_source`).
+/// combined a recording with a copy of it) is copied with the second kept
+/// under a fresh uuid, its origin the first's, so it reads as before.
 pub(crate) fn copy_with<'s, S: std::borrow::Borrow<CopySpec<'s>>>(
     src: &Archive,
     dest: &Path,
@@ -62,10 +62,10 @@ pub(crate) fn copy_with<'s, S: std::borrow::Borrow<CopySpec<'s>>>(
             src.read_snapshot(|src| {
                 let spec = spec(src).map_err(dendro::Error::Message)?;
                 let encoder = metriken_storage::writer::Encoder::for_archive(src)?;
-                copy_sources_into(src, tx, spec.borrow(), &encoder)
+                copy_sources_into_as_copies(src, tx, spec.borrow(), &encoder)
             })
         })
-        .map_err(::rez::container::copy_error)?;
+        .map_err(err)?;
     drop(dst);
     Ok(copied)
 }
@@ -209,10 +209,11 @@ mod tests {
     use super::*;
 
     /// An archive with two sources under one uuid (written before
-    /// 6.0.0-alpha.169 by a combine of a recording and its snapshot) is not
-    /// copied, and the error names the uuid and the cause.
+    /// 6.0.0-alpha.169 by a combine of a recording and its snapshot) is
+    /// copied with the second under a fresh uuid, its origin the first's,
+    /// and the copy reads as one recording, as the archive does.
     #[test]
-    fn an_archive_with_two_sources_under_one_uuid_is_not_copied() {
+    fn an_archive_with_two_sources_under_one_uuid_is_copied() {
         use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
         let dir = tempfile::tempdir().unwrap();
         let source = || Source {
@@ -231,8 +232,13 @@ mod tests {
         let src = Archive::open(&old).unwrap();
         let uuid = src.read_sources().unwrap()[0].uuid.clone().unwrap();
         let dest = dir.path().join("copy.dendro");
-        let err = copy(&src, &dest, &CopySpec::everything()).unwrap_err();
-        assert!(err == ::rez::container::duplicate_source(&uuid), "{err}");
+        assert_eq!(copy(&src, &dest, &CopySpec::everything()).unwrap(), 2);
+        let rows = Archive::open(&dest).unwrap().read_sources().unwrap();
+        assert_eq!(rows[0].uuid.as_deref(), Some(&*uuid));
+        assert_eq!(rows[1].origin.as_deref(), Some(&*uuid));
+        let pool = || metriken_storage::BufferPool::new(16 << 20);
+        let readers = ::rez::reader::RezReader::open_recordings(&dest, pool()).unwrap();
+        assert_eq!(readers.len(), 1);
     }
 
     /// A copy of an archive left with rows in its WAL is fully sealed, and

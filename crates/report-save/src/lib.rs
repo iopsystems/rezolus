@@ -241,26 +241,16 @@ pub fn build_report(
 
 /// `baseline` and `experiment` joined into one in-memory archive, every
 /// source of each copied whole (its live tail sealed) and labelled
-/// `arm=baseline` or `arm=experiment`. Refused when the two files share a
-/// source (both copies of one recording): an archive holds each source
-/// once.
+/// `arm=baseline` or `arm=experiment`. A source both files hold (both copies
+/// of one recording) is kept twice, the experiment's under a fresh uuid with
+/// the baseline's as its origin.
 fn arms(
     baseline: &dendro::archive::Archive,
     experiment: &dendro::archive::Archive,
 ) -> Result<dendro::archive::ArchiveMut, String> {
     use dendro::archive::ArchiveMut;
-    use dendro::rewrite::{copy_sources_into, CopySpec};
-    let err = rez::container::copy_error;
-    if let Some(uuid) = dendro::rewrite::shared_sources(baseline, experiment)
-        .map_err(err)?
-        .first()
-    {
-        return Err(format!(
-            "the baseline and experiment files hold the same source (uuid {uuid}): both \
-             are copies of one recording. A report holds each source once, so it cannot \
-             hold this comparison"
-        ));
-    }
+    use dendro::rewrite::{copy_sources_into_as_copies, CopySpec};
+    let err = |e: dendro::Error| e.to_string();
     let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
     let mut arm_of = Vec::new();
     for (src, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
@@ -268,7 +258,7 @@ fn arms(
             .transaction(|tx| {
                 src.read_snapshot(|src| {
                     let encoder = metriken_storage::Encoder::for_archive(src)?;
-                    copy_sources_into(src, tx, &CopySpec::everything(), &encoder)
+                    copy_sources_into_as_copies(src, tx, &CopySpec::everything(), &encoder)
                 })
             })
             .map_err(err)?;
@@ -330,9 +320,9 @@ fn build_dendro_report(
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     use dendro::archive::ArchiveMut;
-    use dendro::rewrite::{copy_sources_into, ColumnFilter, CopySpec};
+    use dendro::rewrite::{copy_sources_into_as_copies, ColumnFilter, CopySpec};
     use rez::occupants::table_of;
-    let err = rez::container::copy_error;
+    let err = |e: dendro::Error| e.to_string();
 
     let mut names = Vec::new();
     for s in src.read_sources().map_err(err)? {
@@ -365,7 +355,7 @@ fn build_dendro_report(
     dst.transaction(|tx| {
         src.read_snapshot(|src| {
             let encoder = metriken_storage::Encoder::for_archive(src)?;
-            copy_sources_into(src, tx, &spec, &encoder)
+            copy_sources_into_as_copies(src, tx, &spec, &encoder)
         })
     })
     .map_err(err)?;
@@ -1000,13 +990,15 @@ mod tests {
         );
     }
 
-    /// A comparison of a file with a copy of it (one source) is refused:
-    /// a report holds a source once.
+    /// A comparison of a file with a copy of it (one source) saves: the
+    /// experiment's copy is kept under a fresh uuid, its origin the
+    /// baseline's, and the report opens as the comparison, one recording an
+    /// arm.
     #[test]
-    fn a_comparison_of_a_file_with_its_copy_is_refused() {
+    fn a_comparison_of_a_file_with_its_copy_saves() {
         let a = dendro(&rez_test_parquet("redis", "cpu_usage", "cpu_cycles"));
         let copy = joined(&[(&a, Some(&[("source", "redis"), ("env", "prod")]))], None);
-        let err = build_report(
+        let out = build_report(
             ReportSource::Compare {
                 baseline: &a,
                 experiment: &copy,
@@ -1017,10 +1009,17 @@ mod tests {
             "{}",
             None,
         )
-        .unwrap_err();
+        .unwrap();
+        let opened = rez::reader::RezReader::open_recordings_from_bytes(
+            out,
+            metriken_storage::BufferPool::new(8 << 20),
+        )
+        .unwrap();
+        let labels: Vec<_> = opened.iter().map(|(l, _)| l.clone()).collect();
+        assert_eq!(labels.len(), 2, "{labels:?}");
         assert!(
-            err.starts_with("the baseline and experiment files hold the same source (uuid "),
-            "{err}"
+            dashboard::combined::arm_slots(&labels).is_ok(),
+            "{labels:?}"
         );
     }
 

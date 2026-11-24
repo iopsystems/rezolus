@@ -732,7 +732,8 @@ layers, either way.
 
 `annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
 copy, given `-o`). A recording read from several sources (one agent process
-recorded twice, combined) takes each metadata key from the first source
+recorded twice, or a recording and a snapshot of it, combined) takes each
+metadata key from the first source
 holding it, so removing KPIs from one file with `--undo` does not remove
 them from a combined recording whose other source still has them: annotate
 the combined recording instead, which edits every source. A new output is

@@ -861,9 +861,10 @@ mod help {
     pub(super) const COMBINE_LONG: &str = "Assemble two or more .dendro archives into one, a recording per input\n\
                          recording, which the viewer opens as one combined view. Requires at least\n\
                          two inputs (one archive with --ab, below) and an output (-o) ending in\n\
-                         .dendro. Two inputs that hold the same source (a file and a snapshot of\n\
-                         it, two snapshots or hindsight dumps of one recording, or one file given\n\
-                         twice) are refused, naming both: an archive holds each source once.\n\n\
+                         .dendro. Two inputs that are copies of one recording (a file and a\n\
+                         snapshot of it, or two snapshots or hindsight dumps of one buffer) are\n\
+                         read as one recording, gaps and overlap included; one file given twice\n\
+                         is refused.\n\n\
                          With `--ab baseline=<input> experiment=<input>` each input's recordings\n\
                          are labelled arm=baseline or arm=experiment and the viewer opens a\n\
                          baseline/experiment comparison; an input recording that already carries\n\

@@ -214,12 +214,12 @@ target/release/rezolus recording convert rezolus.raw -o out.dendro --interval 25
 target/release/rezolus recording combine web-01.dendro web-02.dendro -o run.dendro   # one archive, a recording per input recording (opens combined)
 target/release/rezolus recording combine a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro  # A/B: stamps arm on each input's recordings
 target/release/rezolus recording combine two.dendro --ab baseline=0 experiment=1 -o ab.dendro   # one archive input: arms by position
-# combine takes .dendro inputs, each copied with dendro's copy_sources_into (live tail sealed, uuids kept); two inputs
-#   that share a source uuid (a file and a snapshot of it, two dumps of one recording, one file twice) are refused
-#   before copying, naming both (combine.rs `refuse_shared_sources`; Save as Report likewise refuses a comparison of
-#   two copies of one recording). An archive with two sources under one uuid (written before 6.0.0-alpha.169)
-#   reads, and annotate, check --annotate and the MCP event tools edit it in place; snapshot, filter (in place
-#   too), -o edits, combine and Save as Report copy it and are refused (rez::container::duplicate_source).
+# combine takes .dendro inputs, each copied with dendro's copy_sources_into_as_copies (live tail sealed, uuids kept,
+#   except that a source the output already holds -- a file and a snapshot of it, two dumps of one buffer -- is kept
+#   under a fresh uuid with the one it copies as its `origin`, and metriken-storage reads it as a copy of that
+#   source, so they are one recording); one file given twice is refused (combine.rs `refuse_one_file_twice`). Every
+#   other copy (snapshot, filter, -o edits, upgrade -o, Save as Report) copies the same way, so an archive with two
+#   sources under one uuid (written before 6.0.0-alpha.169) copies too.
 #   Any output but a
 #   new .dendro is refused (the 5.x parquet row-merge, .parquet.ab.tar, .rez), as are --pinned, --category and
 #   --bypass-time-check. A conflicting existing arm is refused before copying, naming the input; the viewer
