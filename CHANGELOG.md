@@ -774,15 +774,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Removed
 
-- **Breaking: every command but `rezolus recording upgrade` opens
+- **Breaking: `mcp` and every `recording` subcommand but `upgrade` open
   `.dendro` archives only.** A `.rez` archive (v1, v2 or v3), a standalone
-  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by
-  `view` (a file, a browser upload, a URL load and an attached
-  experiment), the static-site viewer, `mcp` (CLI and stdio), Save as
-  Report and every other `recording` subcommand, with the command that
-  converts the file: `rezolus recording upgrade FILE`, which writes
-  `FILE`'s name with a `.dendro` extension. Nothing converts a recording
-  when it is opened, in memory or into a temporary file. `upgrade` now
+  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by `mcp`
+  (CLI and stdio) and every other `recording` subcommand, with the command
+  that converts the file: `rezolus recording upgrade FILE`, which writes
+  `FILE`'s name with a `.dendro` extension. The viewers convert one when
+  they open it (see Changed). `upgrade` now
   also converts a `.parquet.ab.tar` into a two-recording `.dendro`
   labelled `arm=baseline`/`arm=experiment`, which the viewer opens as the
   comparison; the tarball's aliases and category are not carried over. The
