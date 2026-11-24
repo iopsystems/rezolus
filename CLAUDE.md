@@ -168,7 +168,8 @@ target/release/rezolus view a.dendro b.dendro                       # two-file A
 target/release/rezolus view fleet.dendro --baseline host=web-01 --experiment host=web-02  # pick two arms
 #   Every input (file, upload, URL load, attached experiment, the WASM viewer) is opened as a .dendro: a .rez,
 #   .parquet or .parquet.ab.tar is converted to one when it is opened. The server converts with `recording
-#   upgrade`'s converter into a temporary directory (src/viewer/legacy_load.rs, removed on exit). The WASM viewer
+#   upgrade`'s converter into a temporary directory (src/viewer/legacy_load.rs; removed when `run` returns, from a
+#   panic hook `run` chains, by `exit_viewer` and by the ctrl-c handlers). The WASM viewer
 #   converts in memory (rez::legacy::to_dendro_bytes) a .rez or a single-source .parquet of at most
 #   MAX_CONVERT_BYTES (640 MiB; the wasm32 heap peaked at 4.5-5.2x the file) and says so in a notice; a larger file,
 #   a combined 5.x parquet and a .parquet.ab.tar are refused with `rezolus recording upgrade FILE`. The experiment of a two-file comparison is one recording; the baseline is one
@@ -342,7 +343,7 @@ File-level metadata keys are defined in `crates/dashboard/src/keys.rs` (the keys
 
 ### `.rez` Archive Format
 
-The `.rez` format, which only `rezolus recording upgrade` reads now (metriken-storage's `src/rez/`: `rez.rs`, `rez_sqlite.rs`, `open.rs`), is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
+The `.rez` format, which `rezolus recording upgrade` and the viewers (converting on load) read (metriken-storage's `src/rez/`: `rez.rs`, `rez_sqlite.rs`, `open.rs`), is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
 
 - **v2 (tar)** — a tar archive with `manifest.json` and one table per sampler (`<recording>/<sampler>.parquet`).
 - **v3 (SQLite)** — a SQLite container (metriken-storage's `src/rez/rez_sqlite.rs`; the writer was removed in 0.5) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what a 5.x `hindsight` maintains as its rolling buffer (6.x keeps a `.dendro`), and it is readable live while a writer is still appending.
@@ -366,7 +367,7 @@ A `.dendro` (and a `.rez` from a 5.x recorder) holds any number of endpoints, re
 refuse anything else, and `rez::container` names the container
 (`Container::of_path`/`of_bytes`) and words the refusal (`not_dendro`,
 `require_dendro`). The `.rez` format is `metriken-storage`'s (feature `rez`; with `write`, the
-`.rez`-to-dendro converters), read in rezolus only by `recording upgrade`: container (v2 tar, v3 SQLite `RezDb`) and opening
+`.rez`-to-dendro converters), read in rezolus by `recording upgrade` and the viewers' conversion on load: container (v2 tar, v3 SQLite `RezDb`) and opening
 an archive by content (`metriken_storage::rez::open`). metriken-storage 0.5 has
 no `.rez` writer. The converters (0.5.1) are `to_dendro::convert_path` (any
 `.rez` or a parquet file to a new `.dendro`, by path), `ParquetToArchive` and
@@ -419,8 +420,9 @@ map a group back to its sources by `reader.sources()[i].catalog_index` and
 write each one.
 
 **The `write` feature (default on) is what separates the two halves.** With it
-off, `crates/rez` is a *reader*: container, catalog, WAL-tail materialization,
-`RezReader`. That configuration is the one that compiles for
+off, `crates/rez` reads archives (container, catalog, WAL-tail materialization,
+`RezReader`) and converts a `.rez` or parquet file in memory (`legacy`), with
+no ingest path. That configuration is the one that compiles for
 `wasm32-unknown-unknown`, and the reason it has to exist is narrow: `metriken`'s
 registry (`metriken-core`) declares a `linkme` distributed slice, and `linkme`
 gates on a fixed `target_os` list that `unknown` is not in. Storage's read path
@@ -449,7 +451,7 @@ The WASM crate lives at `crates/viewer/`. It targets `wasm32-unknown-unknown` an
 
 **It opens `.dendro` archives, and converts a `.rez` or `.parquet` to one in memory.** A recording is recognized by content, not by filename, exactly as the CLI recognizes it. `rez::legacy::to_dendro_bytes` converts a `.rez` (either container) or a single-source `.parquet` as `recording upgrade` does, when it is at most `MAX_CONVERT_BYTES` (640 MiB, `crates/viewer/src/lib.rs`: converting holds the SQLite image, the new archive and its serialized copies at once, and the wasm32 heap peaked at 4.5-5.2x the file); the converted bytes replace the upload (Save as Report copies them) and a notice says the file was converted. A larger file, a combined 5.x parquet and a `.parquet.ab.tar` are refused with a message naming `rezolus recording upgrade FILE`, to run locally. The experiment slot takes a one-recording `.dendro`. A multi-recording archive opens as `rezolus view` opens it: one combined capture (`Viewer::new` and `WasmCaptureRegistry::attach` alike) unless it is a comparison by `dashboard::combined::layout`, or `WasmCaptureRegistry::set_compare_requested(true)` asks for one (the server's `--baseline`/`--experiment`), when its recordings fill the A/B slots and the rest attach after.
 
-Save-as-Report writes a `.dendro` (`report_save::build_report`, one function for both viewers; `crates/report-save`'s `ReportSource::{Dendro, Compare}`): a dendro source is copied (`build_dendro_report`, which seals the live tail with metriken-storage's `Encoder`, available without a feature gate on wasm32), and a two-file comparison copies both archives into one in-memory `ArchiveMut`, labelled `arm=baseline`/`arm=experiment` so it reopens as the comparison. A legacy source cannot reach it, since neither viewer opens one; given legacy bytes it refuses them.
+Save-as-Report writes a `.dendro` (`report_save::build_report`, one function for both viewers; `crates/report-save`'s `ReportSource::{Dendro, Compare}`): a dendro source is copied (`build_dendro_report`, which seals the live tail with metriken-storage's `Encoder`, available without a feature gate on wasm32), and a two-file comparison copies both archives into one in-memory `ArchiveMut`, labelled `arm=baseline`/`arm=experiment` so it reopens as the comparison. A legacy source cannot reach it, since the viewers convert one on load and keep the converted archive; given legacy bytes it refuses them.
 
 One thing the browser cannot have: SQLite's `-wal` **sidecar**. An archive carries its own unsealed rows in a WAL table inside the file, and those travel with an upload — but SQLite also commits into a sidecar file not yet checkpointed into the archive, and an upload is one file. `rezolus view archive.dendro` opens by path with the sidecar beside it and sees further. This only differs for a copy taken from under a running recorder. `rezolus recording snapshot <archive> -o out.dendro` reads through the sidecar for an exact copy, without pausing the writer. The viewer says when a copy may be short rather than rendering short in silence: `RezReader::complete()` is false for an unfinalized archive, and `WasmCaptureRegistry::notices()` reports it.
 

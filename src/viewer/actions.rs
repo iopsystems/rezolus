@@ -1309,7 +1309,6 @@ mod tests {
         .await;
         let value = serde_json::to_value(&response.0).unwrap();
         assert_eq!(value["status"], "success", "{value}");
-        crate::viewer::legacy_load::remove();
         let response = upload_parquet(
             State(Arc::clone(&state)),
             named("notes.dendro"),

@@ -30,7 +30,7 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     const wasmJsCopy = path.join(tmpDir, 'wasm_viewer.mjs');
     fs.copyFileSync(pkgJs, wasmJsCopy);
 
-    const { initSync, WasmCaptureRegistry } = await import(pathToFileURL(wasmJsCopy).href);
+    const { initSync, WasmCaptureRegistry, upload_refusal } = await import(pathToFileURL(wasmJsCopy).href);
     initSync({ module: fs.readFileSync(pkgWasm) });
 
     // The dendro archive is written by the format crate's fixture builder,
@@ -87,6 +87,13 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
             want.attach('baseline', upgraded(upgradedName), upgradedName);
             assert.deepEqual(shown(converted), shown(want), name);
         }
+    });
+
+    test('the page refuses a .rez too large to convert from its first bytes', () => {
+        const head = committedRez('v3.rez').slice(0, 4096);
+        const refusal = upload_refusal(head, 2 ** 40, 'big.rez');
+        assert.ok(refusal && refusal.endsWith('rezolus recording upgrade big.rez'), refusal);
+        assert.equal(upload_refusal(head, head.length, 'small.rez') ?? null, null);
     });
 
     test('a file that is not a recording is refused', () => {

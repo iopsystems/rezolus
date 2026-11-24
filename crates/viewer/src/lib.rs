@@ -123,31 +123,48 @@ fn not_dendro(filename: &str, container: rez::container::Container) -> String {
 /// The largest `.rez` or parquet file, in bytes, the browser converts to a
 /// dendro archive when it is opened. Converting holds the SQLite image of a
 /// v3 `.rez`, the archive written from it and that archive's serialized
-/// copies in memory at once: the wasm32 heap peaked at 4.5 to 5.2 times the
-/// file loading v3 `.rez` files of 36 to 667 MiB (3005 MiB for 667 MiB), and
-/// a 1.2 GiB file exhausted wasm32's 4 GiB. A larger file is refused
-/// ([`convert_too_large`]).
+/// copies in memory at once: in node (V8) the wasm32 heap peaked at 4.5 to
+/// 5.2 times the file loading v3 `.rez` files of 36 to 667 MiB and parquet
+/// files of about 70 MiB (3005 MiB for 667 MiB), and a 1.2 GiB file exhausted
+/// wasm32's 4 GiB. Other browsers were not measured: one that caps wasm
+/// memory below 4 GiB can run out of memory converting a file under this
+/// limit. A larger file is refused
+/// ([`convert_too_large`]), and Save as Report has its own, lower limit
+/// ([`MAX_REPORT_SOURCE_BYTES`]).
 pub const MAX_CONVERT_BYTES: usize = 640 << 20;
 
-/// The refusal of a `size`-byte `container` file over [`MAX_CONVERT_BYTES`]:
+/// The refusal of a `size`-byte `container` file over the conversion limit
+/// `limit` ([`MAX_CONVERT_BYTES`]):
 /// the command that converts it on the user's machine.
-fn convert_too_large(filename: &str, container: rez::container::Container, size: usize) -> String {
+fn convert_too_large(
+    filename: &str,
+    container: rez::container::Container,
+    size: usize,
+    limit: usize,
+) -> String {
     format!(
         "{filename} is a {} of {} MiB, too large to convert in the browser, which converts \
          files of up to {} MiB. Convert it to a .dendro on your machine, then open the \
          .dendro:\n  rezolus recording upgrade {}",
         container.name(),
         size >> 20,
-        MAX_CONVERT_BYTES >> 20,
+        limit >> 20,
         rez::container::shell_word(filename)
     )
 }
 
-/// The note shown when the browser converted an upload to a dendro archive.
-fn converted_notice(filename: &str, container: rez::container::Container) -> String {
+/// The note shown when the browser converted an upload to a dendro archive
+/// of `size` bytes. Save as Report keeps the converted archive too, when it
+/// is at most [`MAX_REPORT_SOURCE_BYTES`].
+fn converted_notice(filename: &str, container: rez::container::Container, size: usize) -> String {
+    let or_report = if size <= MAX_REPORT_SOURCE_BYTES {
+        ", or save a report"
+    } else {
+        ""
+    };
     format!(
         "{filename} is a {}, converted to a .dendro in the browser for this view. To keep \
-         the .dendro, run `rezolus recording upgrade {}`, or save a report.",
+         the .dendro, run `rezolus recording upgrade {}`{or_report}.",
         container.name(),
         rez::container::shell_word(filename)
     )
@@ -171,36 +188,53 @@ struct Opened {
 /// file contains. Any other file is refused ([`not_dendro`]). `data` is
 /// taken by value so a conversion can release it as soon as it is read.
 fn open_rez(data: Vec<u8>, filename: &str, pool: Arc<BufferPool>) -> Result<Opened, JsValue> {
+    open_upload(data, filename, pool, MAX_CONVERT_BYTES).map_err(|e| JsValue::from_str(&e))
+}
+
+/// [`open_rez`] with the conversion limit `limit`, its refusals as text (a
+/// `JsValue` can only be made in a wasm32 build).
+fn open_upload(
+    data: Vec<u8>,
+    filename: &str,
+    pool: Arc<BufferPool>,
+    limit: usize,
+) -> Result<Opened, String> {
     use rez::container::Container;
     let container = Container::of_bytes(&data);
     let (archive, converted_from) = match container {
         Container::Dendro => (Bytes::from(data), None),
         c if rez::legacy::converts(c) => {
-            if data.len() > MAX_CONVERT_BYTES {
-                return Err(JsValue::from_str(&convert_too_large(
-                    filename,
-                    c,
-                    data.len(),
-                )));
+            if data.len() > limit {
+                return Err(convert_too_large(filename, c, data.len(), limit));
             }
-            let converted = rez::legacy::to_dendro_bytes(data, filename, "rezolus")
-                .map_err(|e| JsValue::from_str(&e))?;
+            let converted = rez::legacy::to_dendro_bytes(data, filename, "rezolus")?;
             (Bytes::from(converted.bytes), Some(converted.from))
         }
-        c => return Err(JsValue::from_str(&not_dendro(filename, c))),
+        c => return Err(not_dendro(filename, c)),
     };
     let recordings = rez::reader::RezReader::open_recordings_from_bytes(archive.to_vec(), pool)
-        .map_err(|e| JsValue::from_str(&format!("Failed to load {filename}: {e}")))?;
+        .map_err(|e| format!("Failed to load {filename}: {e}"))?;
     if recordings.is_empty() {
-        return Err(JsValue::from_str(&format!(
-            "{filename} holds no recordings"
-        )));
+        return Err(format!("{filename} holds no recordings"));
     }
     Ok(Opened {
         recordings,
         archive,
         converted_from,
     })
+}
+
+/// The refusal of an upload of `size` bytes whose first bytes are `head`,
+/// named `filename`, when it is a format the browser converts and is over
+/// [`MAX_CONVERT_BYTES`]: the page asks before it reads the whole file into
+/// memory, which for a file near 4 GiB would fail before any refusal.
+/// `None` when the upload may be read; the attach then decides.
+#[wasm_bindgen]
+pub fn upload_refusal(head: &[u8], size: f64, filename: &str) -> Option<String> {
+    let container = rez::container::Container::of_bytes(head);
+    let size = size as usize;
+    (rez::legacy::converts(container) && size > MAX_CONVERT_BYTES)
+        .then(|| convert_too_large(filename, container, size, MAX_CONVERT_BYTES))
 }
 
 /// Whether an archive's recordings open as one combined view: more than one
@@ -265,9 +299,16 @@ fn comparison_order(
 fn incomplete_notice(
     recordings: &rez::reader::LabeledRecordings,
     filename: &str,
+    converted: bool,
 ) -> Option<String> {
     if recordings.iter().all(|(_, r)| r.complete()) {
         return None;
+    }
+    if converted {
+        return Some(format!(
+            "{filename} was not finalized when it was written: it reads up to its last \
+             checkpoint, and any ticks after that are not in the file."
+        ));
     }
     Some(format!(
         "{filename} was not cleanly finalized: it reads up to its last checkpoint, and any \
@@ -962,22 +1003,26 @@ fn serialize_lean_section(mut value: serde_json::Value) -> Option<String> {
     serde_json::to_string(&value).ok()
 }
 
-/// The largest recording, in bytes, the browser saves a report of. A report
-/// is built in memory: the upload, the archive converted from it and the
-/// report's bytes, about three times the recording, against wasm32's 4 GiB
-/// address space. Above it the save is refused ([`report_too_large`]).
-pub const MAX_REPORT_SOURCE_BYTES: usize = 1 << 30;
+/// The largest archive, in bytes, the browser saves a report of. A report is
+/// built in memory beside the loaded archive, against wasm32's 4 GiB address
+/// space: in node, after loading a `.dendro` of 289 or 406 MiB the heap
+/// reached 2335 and 3169 MiB once a report of it was saved, and the save of a
+/// 583 MiB one ran out of memory at 3881 MiB. Above it the save is refused
+/// ([`report_too_large`]).
+pub const MAX_REPORT_SOURCE_BYTES: usize = 400 << 20;
 
 /// The refusal for a Save as Report of a `size`-byte recording, when it is
 /// over [`MAX_REPORT_SOURCE_BYTES`].
 fn report_too_large(size: usize) -> Option<String> {
     (size > MAX_REPORT_SOURCE_BYTES).then(|| {
         format!(
-            "this recording is {:.1} GiB; the browser saves a report of at most 1 GiB, \
-             since it holds about three copies in memory. Save the report from `rezolus \
-             view` (the server viewer reads the file from disk), or convert the file with \
-             `rezolus recording upgrade` and shrink it with `rezolus recording filter` first",
-            size as f64 / (1u64 << 30) as f64
+            "this recording is {} MiB; the browser saves a report of at most {} MiB, \
+             since the report is built in memory beside the recording. Save the report from \
+             `rezolus view` (the server viewer reads the file from disk), or convert the file \
+             with `rezolus recording upgrade` and shrink it with `rezolus recording filter` \
+             first",
+            size >> 20,
+            MAX_REPORT_SOURCE_BYTES >> 20
         )
     })
 }
@@ -1066,9 +1111,12 @@ impl WasmCaptureRegistry {
             return Err(JsValue::from_str(&refusal));
         }
         self.notices
-            .extend(converted_from.map(|c| converted_notice(filename, c)));
-        self.notices
-            .extend(incomplete_notice(&recordings, filename));
+            .extend(converted_from.map(|c| converted_notice(filename, c, archive.len())));
+        self.notices.extend(incomplete_notice(
+            &recordings,
+            filename,
+            converted_from.is_some(),
+        ));
         if recordings.len() >= 2 {
             // A report of this capture is a report of THIS archive, kept
             // once the attach has succeeded.
@@ -2047,11 +2095,67 @@ mod tests {
             "big.rez",
             rez::container::Container::RezV3,
             MAX_CONVERT_BYTES + 1,
+            MAX_CONVERT_BYTES,
         );
         assert!(
             big.starts_with("big.rez is a v3 .rez archive of 640 MiB, too large to convert")
                 && big.ends_with("rezolus recording upgrade big.rez"),
             "{big}"
+        );
+    }
+
+    /// The conversion limit: a `.rez` over it is refused, naming its size and
+    /// the upgrade, and one at it converts; the page's check of a file's
+    /// first bytes refuses a `.rez` over [`MAX_CONVERT_BYTES`] and passes a
+    /// `.dendro` of any size and a `.rez` under the limit.
+    #[test]
+    fn a_rez_over_the_conversion_limit_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let rez = std::fs::read(rez::fixtures::committed_rez("v3.rez", dir.path())).unwrap();
+        let size = rez.len();
+        let pool = || BufferPool::new(8 << 20);
+        let err = open_upload(rez.clone(), "big.rez", pool(), size - 1)
+            .err()
+            .unwrap();
+        assert!(
+            err.starts_with("big.rez is a v3 .rez archive of")
+                && err.ends_with("rezolus recording upgrade big.rez"),
+            "{err}"
+        );
+        let opened = open_upload(rez.clone(), "big.rez", pool(), size).unwrap();
+        assert!(opened.converted_from.is_some());
+
+        let head = &rez[..4096.min(size)];
+        let over = (MAX_CONVERT_BYTES + 1) as f64;
+        assert!(
+            upload_refusal(head, over, "big.rez")
+                .unwrap()
+                .ends_with("rezolus recording upgrade big.rez")
+        );
+        assert!(upload_refusal(head, size as f64, "big.rez").is_none());
+        let dendro = one_recording();
+        assert!(upload_refusal(&dendro[..4096.min(dendro.len())], over, "big.dendro").is_none());
+    }
+
+    /// A converted `.rez` that was not finalized says so, without the advice
+    /// about a copy taken from under a running recorder, which applies to a
+    /// `.dendro` (`recording snapshot` does not take a `.rez`).
+    #[test]
+    fn a_converted_unfinalized_rez_says_it_was_not_finalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = std::fs::read(rez::fixtures::committed_rez("v3-live.rez", dir.path())).unwrap();
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", live, "live.rez").unwrap();
+        let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
+        assert_eq!(notices.len(), 2, "{notices:?}");
+        assert!(
+            notices[0].contains("converted to a .dendro in the browser"),
+            "{notices:?}"
+        );
+        assert!(
+            notices[1].starts_with("live.rez was not finalized when it was written")
+                && !notices[1].contains("snapshot"),
+            "{notices:?}"
         );
     }
 
@@ -2690,10 +2794,11 @@ mod tests {
         assert_eq!(json, "[]");
     }
 
-    /// Save as Report refuses a recording over 1 GiB, naming the server
-    /// viewer and the tools that make it smaller, and takes one at the limit.
+    /// Save as Report refuses a recording over [`MAX_REPORT_SOURCE_BYTES`],
+    /// naming the server viewer and the tools that make it smaller, and
+    /// takes one at the limit.
     #[test]
-    fn a_report_of_a_recording_over_a_gib_is_refused() {
+    fn a_report_of_a_recording_over_the_limit_is_refused() {
         assert!(report_too_large(MAX_REPORT_SOURCE_BYTES).is_none());
         let refusal = report_too_large(MAX_REPORT_SOURCE_BYTES + 1).unwrap();
         assert!(refusal.contains("rezolus view"), "{refusal}");
