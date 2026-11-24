@@ -53,7 +53,7 @@ dashboard = { path = "crates/dashboard" }
 # source per uuid (`Error::DuplicateSource`), and each writing handle holds an
 # advisory lock on an `<archive>-lock` file beside the archive. 0.8.2 adds
 # `ArchiveMut::replace_segment_index`, which metriken-storage 0.14.1's
-# `reindex` (`recording reindex`) uses.
+# `reindex` (`recording upgrade` of a `.dendro`) uses.
 dendro = { version = "0.8.2", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
@@ -63,7 +63,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.172"
+version = "6.0.0-alpha.173"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

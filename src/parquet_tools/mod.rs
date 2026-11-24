@@ -16,7 +16,7 @@ pub(crate) mod select;
 #[allow(unused_imports)]
 pub use cli::{
     AnnotateArgs, CheckArgs, CombineArgs, ConvertArgs, FilterArgs, Host, MetadataArgs, Recording,
-    ReindexArgs, SnapshotArgs, TableFlag, UpgradeArgs,
+    SnapshotArgs, TableFlag, UpgradeArgs,
 };
 
 /// Copy a dendro archive that may still be written into one complete
@@ -48,64 +48,165 @@ pub(crate) fn snapshot_rez(
     Ok(())
 }
 
-/// Rewrite the names index of every sealed segment of the dendro archive at
-/// `path` in place, as this release's writer writes them
-/// (`metriken_storage::reindex`): each table segment's index then holds what
-/// opening its table reads, so the viewer opens the table without fetching
-/// the segment. No segment is re-encoded.
+/// A test's hook on an in-place copying upgrade.
+#[cfg(test)]
+type UpgradeHook = Box<dyn FnOnce(&std::path::Path)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Called with the input of an in-place copying upgrade after the copy is
+    /// re-indexed and before it is renamed over the input.
+    static BEFORE_RENAME: std::cell::RefCell<Option<UpgradeHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// What [`upgrade_dendro`] did.
+#[derive(Debug)]
+pub(crate) struct DendroUpgrade {
+    /// The archive's schema version before the upgrade.
+    pub(crate) schema: i64,
+    /// Whether the archive was copied into the current layout.
+    pub(crate) copied: bool,
+    /// The re-index of the archive, or of its copy.
+    pub(crate) reindexed: metriken_storage::reindex::Reindexed,
+}
+
+/// Bring the dendro archive at `path` to what this release writes: each
+/// sealed segment's names index rewritten as this release's writer writes
+/// it (`metriken_storage::reindex`), so the viewer opens a table from its
+/// segments' indexes without fetching the segments.
 ///
-/// Refuses any file but a dendro archive, an archive before schema 5 (where
-/// reading a segment's index reads the segment), naming the `snapshot` that
-/// copies it into a current one, and an archive another connection has open
-/// (a viewer, a recording): the re-index needs the file to itself, and a
-/// viewer cannot open it while the re-index runs.
-pub(crate) fn reindex_dendro(
+/// - Without `output`, a schema 5 archive is re-indexed in place, with no
+///   segment's data rewritten. A schema 4 archive, where reading a
+///   segment's index reads the segment, is copied into the current layout,
+///   the copy re-indexed, and the copy renamed over it.
+/// - With `output`, which must end in `.dendro` and not exist, the archive
+///   is copied there and the copy re-indexed; the input is not changed.
+///
+/// Changing the input in place is refused while another connection has it
+/// open (a viewer, a recording, an edit), and holds the file exclusively
+/// until the re-index is done, or until just before the copy is renamed
+/// over it, so a viewer cannot open it while the upgrade runs. In place, a
+/// symlink's target is upgraded, and a copy that replaces it takes its
+/// permissions.
+pub(crate) fn upgrade_dendro(
     path: &std::path::Path,
+    output: Option<&std::path::Path>,
     program: &str,
-) -> Result<metriken_storage::reindex::Reindexed, Box<dyn std::error::Error>> {
-    ::rez::container::require_dendro(path, program)?;
+) -> Result<DendroUpgrade, Box<dyn std::error::Error>> {
     let shown = path.display().to_string();
+    let copy =
+        format!("write an upgraded copy with `{program} recording upgrade {shown} -o NEW.dendro`");
     let in_use = |e: Box<dyn std::error::Error>| -> Box<dyn std::error::Error> {
-        match e.downcast_ref::<dendro::Error>() {
-            Some(dendro::Error::InUse { .. }) => format!(
+        match (e.downcast_ref::<dendro::Error>(), output) {
+            (Some(dendro::Error::InUse { .. }), None) => format!(
                 "{shown} is open in another process (a viewer, an MCP server, a recording \
-                 or an edit); re-index it once that process closes it, or re-index a \
-                 `{program} recording snapshot` of it"
+                 or an edit); upgrade it once that process closes it, or, while a viewer, an \
+                 MCP server or a recording has it open, {copy}"
             )
             .into(),
+            // A copy reads the input, which only an exclusive holder refuses.
+            (Some(dendro::Error::InUse { .. }), Some(_)) => format!(
+                "{shown} is held by an edit or an in-place upgrade; run this once it finishes"
+            )
+            .into(),
+            (Some(dendro::Error::ReadOnly(_)), _) => {
+                format!("{shown} is not writable; {copy}").into()
+            }
             _ => e,
         }
     };
+    if let Some(output) = output {
+        legacy::check_new_dendro(output)?;
+    }
     let schema = dendro::archive::Archive::open(path)
         .and_then(|a| a.schema_version())
         .map_err(|e| in_use(e.into()))?;
-    if schema < 5 {
-        let file = ::rez::container::shell_word(&shown);
-        return Err(format!(
-            "{shown} is an archive of schema {schema}, where reading a segment's index \
-             reads the whole segment; copy it into a current archive and re-index the \
-             copy:\n    {program} recording snapshot {file} -o NEW.dendro\n    \
-             {program} recording reindex NEW.dendro"
-        )
-        .into());
+    let upgrade = if output.is_none() && schema >= 5 {
+        let reindexed = metriken_storage::reindex::reindex(path).map_err(in_use)?;
+        DendroUpgrade {
+            schema,
+            copied: false,
+            reindexed,
+        }
+    } else {
+        // In place, the copy replaces the file a symlink names, and the
+        // input is held exclusively from before the copy until the rename,
+        // so no writer, edit or viewer opens the file the rename unlinks.
+        let target = match output {
+            Some(_) => path.to_path_buf(),
+            None => std::fs::canonicalize(path)?,
+        };
+        let held = match output {
+            Some(_) => None,
+            None => Some(dendro::archive::ArchiveMut::open(&target).map_err(|e| in_use(e.into()))?),
+        };
+        let opened;
+        let src: &dendro::archive::Archive = match &held {
+            Some(held) => held,
+            None => {
+                opened = dendro::archive::Archive::open(path).map_err(|e| in_use(e.into()))?;
+                &opened
+            }
+        };
+        let dest = output.unwrap_or(&target);
+        let staging = legacy::staging_dir(dest)?;
+        let staged = staging.path().join("upgraded.dendro");
+        crate::dendro_copy::copy(src, &staged, &dendro::rewrite::CopySpec::everything())?;
+        let reindexed = metriken_storage::reindex::reindex(&staged)?;
+        #[cfg(test)]
+        BEFORE_RENAME.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(&target)
+            }
+        });
+        match output {
+            Some(output) => legacy::publish(&staged, output)?,
+            None => {
+                let permissions = std::fs::metadata(&target)?.permissions();
+                std::fs::set_permissions(&staged, permissions)?;
+                drop(held);
+                std::fs::rename(&staged, &target)?;
+            }
+        }
+        DendroUpgrade {
+            schema,
+            copied: true,
+            reindexed,
+        }
+    };
+    let r = &upgrade.reindexed;
+    if !upgrade.copied && r.replaced == 0 {
+        println!(
+            "{shown} is current: {} segments, nothing to upgrade",
+            r.segments
+        );
+    } else {
+        let from = if upgrade.schema < 5 {
+            format!(" from schema {} to the current layout", upgrade.schema)
+        } else {
+            String::new()
+        };
+        let to = output.map_or(String::new(), |o| format!(" into {}", o.display()));
+        println!(
+            "upgraded {shown}{from}{to}: {} of {} segments re-indexed, {} already current, \
+             {} left as they were",
+            r.replaced, r.segments, r.current, r.left
+        );
     }
-    let report = metriken_storage::reindex::reindex(path).map_err(in_use)?;
-    println!(
-        "Re-indexed {shown}: {} of {} segments rewritten, {} already current, {} left as \
-         they were",
-        report.replaced, report.segments, report.current, report.left
-    );
-    Ok(report)
+    Ok(upgrade)
 }
 
-/// Convert the legacy recording at `path` (any `.rez`, a parquet file, or a
-/// `.parquet.ab.tar`) into a new dendro archive at `output`, or beside
-/// `path` with a `.dendro` extension. Never in place and never over an
-/// existing file.
+/// Bring the recording at `path` to what this release writes. A dendro
+/// archive is upgraded by [`upgrade_dendro`]. A legacy recording (any
+/// `.rez`, a parquet file, or a `.parquet.ab.tar`) is converted into a new
+/// dendro archive at `output`, or beside `path` with a `.dendro` extension,
+/// never in place and never over an existing file.
 fn upgrade_to_dendro(
     path: &std::path::Path,
     output: Option<&std::path::Path>,
     to: &str,
+    program: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if to != "dendro" {
         return Err(format!(
@@ -117,11 +218,7 @@ fn upgrade_to_dendro(
         return Err(format!("{}: no such file", path.display()).into());
     }
     if legacy::Container::of_path(path) == legacy::Container::Dendro {
-        return Err(format!(
-            "{} is already a dendro archive; there is nothing to upgrade",
-            path.display()
-        )
-        .into());
+        return upgrade_dendro(path, output, program).map(|_| ());
     }
     let output = output
         .map(std::path::Path::to_path_buf)
@@ -310,7 +407,7 @@ mod upgrade_to_dendro_tests {
         let dir = tempfile::tempdir().unwrap();
         let src = tar_rez(dir.path());
         let dest = dir.path().join("out.dendro");
-        upgrade_to_dendro(&src, Some(&dest), "dendro").unwrap();
+        upgrade_to_dendro(&src, Some(&dest), "dendro", "rezolus").unwrap();
 
         // Before anything opens the output: a reader's connection leaves
         // `-wal`/`-shm` files of its own, and the claim here is that the
@@ -338,7 +435,7 @@ mod upgrade_to_dendro_tests {
         let src = tar_rez(dir.path());
         let dest = dir.path().join("out.dendro");
         std::fs::write(&dest, b"keep me").unwrap();
-        let err = upgrade_to_dendro(&src, Some(&dest), "dendro")
+        let err = upgrade_to_dendro(&src, Some(&dest), "dendro", "rezolus")
             .unwrap_err()
             .to_string();
         assert!(err.contains("already exists"), "{err}");
@@ -351,9 +448,11 @@ mod upgrade_to_dendro_tests {
     fn the_default_output_is_beside_the_input_and_v3_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let src = tar_rez(dir.path());
-        let err = upgrade_to_dendro(&src, None, "v3").unwrap_err().to_string();
+        let err = upgrade_to_dendro(&src, None, "v3", "rezolus")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("converts to dendro"), "{err}");
-        upgrade_to_dendro(&src, None, "dendro").unwrap();
+        upgrade_to_dendro(&src, None, "dendro", "rezolus").unwrap();
         assert!(dir.path().join("v2.dendro").exists());
     }
 
@@ -367,7 +466,7 @@ mod upgrade_to_dendro_tests {
         for name in ["v2.rez", "v3.rez", "v3-live.rez", "v3-multi.rez"] {
             let src = ::rez::fixtures::committed_rez(name, dir.path());
             let dest = dir.path().join(format!("{name}.dendro"));
-            upgrade_to_dendro(&src, Some(&dest), "dendro").unwrap();
+            upgrade_to_dendro(&src, Some(&dest), "dendro", "rezolus").unwrap();
             let a = metriken_storage::rez::open::open_recordings(&src, pool()).unwrap();
             let b = ::rez::reader::RezReader::open_recordings(&dest, pool()).unwrap();
             assert_eq!(a.len(), b.len(), "{name}");
@@ -389,7 +488,7 @@ mod upgrade_to_dendro_tests {
 
 #[cfg(test)]
 mod dendro_command_tests {
-    use super::{reindex_dendro, snapshot_rez, upgrade_to_dendro};
+    use super::{snapshot_rez, upgrade_dendro, upgrade_to_dendro};
     use crate::dendro_copy::fixtures;
     use dendro::archive::Archive;
 
@@ -443,77 +542,205 @@ mod dendro_command_tests {
             .collect()
     }
 
-    /// `reindex` of an archive an earlier release wrote replaces its table
-    /// segments' indexes, and every query answers as before; a second run
-    /// finds every index current.
-    #[test]
-    fn reindex_replaces_earlier_indexes_and_answers_as_before() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = earlier(dir.path());
-        let (before, old) = (answers(&path), indexes(&path));
-
-        let first = reindex_dendro(&path, "rezolus").unwrap();
-        assert!(first.replaced > 0, "{first:?}");
-        assert_eq!(first.segments, first.replaced + first.current + first.left);
-        assert_ne!(indexes(&path), old);
-        assert_eq!(answers(&path), before);
-
-        let again = reindex_dendro(&path, "rezolus").unwrap();
-        assert_eq!(
-            (again.replaced, again.current),
-            (0, first.replaced + first.current),
-            "{again:?}"
-        );
-    }
-
-    /// `reindex` refuses an archive before schema 5, naming the snapshot
-    /// that copies it into a current one, and leaves it as it was.
-    #[test]
-    fn reindex_refuses_a_schema_4_archive_with_the_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("old.dendro");
+    /// A copy in `dir` of `tests/fixtures/released/v5.29.2.dendro`, a 5.x
+    /// archive (schema 4).
+    fn schema_4(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("old.dendro");
         std::fs::copy(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/released/v5.29.2.dendro"),
             &path,
         )
         .unwrap();
-        let bytes = std::fs::read(&path).unwrap();
-        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
-        assert!(err.contains("schema 4"), "{err}");
-        assert!(err.contains("tool recording snapshot"), "{err}");
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        path
     }
 
-    /// `reindex` refuses an archive a reader holds open (as the viewer
-    /// keeps one), saying another process has it open.
+    /// `upgrade` of an archive an earlier 6.0 build wrote re-indexes it in
+    /// place, and every query answers as before; a second upgrade finds it
+    /// current and changes nothing.
     #[test]
-    fn reindex_refuses_an_archive_open_for_reading() {
+    fn upgrade_reindexes_an_earlier_archive_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let path = earlier(dir.path());
-        let held = Archive::open(&path).unwrap();
-        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
-        assert!(err.contains("is open in another process"), "{err}");
-        drop(held);
+        let (before, old) = (answers(&path), indexes(&path));
+
+        let first = upgrade_dendro(&path, None, "rezolus").unwrap();
+        assert!(!first.copied && first.schema == 5, "{first:?}");
+        let r = first.reindexed;
+        assert!(r.replaced > 0, "{r:?}");
+        assert_eq!(r.segments, r.replaced + r.current + r.left);
+        assert_ne!(indexes(&path), old);
+        assert_eq!(answers(&path), before);
+
+        let bytes = std::fs::read(&path).unwrap();
+        let again = upgrade_dendro(&path, None, "rezolus").unwrap().reindexed;
+        assert_eq!(
+            (again.replaced, again.current),
+            (0, r.replaced + r.current),
+            "{again:?}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            bytes,
+            "a current archive is left as it is"
+        );
     }
 
-    /// `reindex` refuses an archive another connection holds exclusively (an
+    /// `upgrade -o` of a dendro archive writes an upgraded copy there and
+    /// leaves the input as it was; an existing output is refused.
+    #[test]
+    fn upgrade_to_an_output_leaves_the_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = earlier(dir.path());
+        let (bytes, before) = (std::fs::read(&path).unwrap(), answers(&path));
+        let out = dir.path().join("new.dendro");
+        let up = upgrade_dendro(&path, Some(&out), "rezolus").unwrap();
+        assert!(up.copied, "{up:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(answers(&out), before);
+        let r = metriken_storage::reindex::reindex(&out).unwrap();
+        assert_eq!(r.replaced, 0, "the copy is current: {r:?}");
+        assert!(
+            upgrade_dendro(&path, Some(&out), "rezolus").is_err(),
+            "never over a file"
+        );
+    }
+
+    /// `upgrade` of a 5.x archive (schema 4) copies it into the current
+    /// layout in place: the file becomes schema 5 with current indexes, and
+    /// every query answers as before.
+    #[test]
+    fn upgrade_copies_a_schema_4_archive_into_the_current_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = schema_4(dir.path());
+        let before = answers(&path);
+        let up = upgrade_dendro(&path, None, "rezolus").unwrap();
+        assert!(up.copied && up.schema == 4, "{up:?}");
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = dir.path().join(format!("old.dendro{suffix}"));
+            assert!(
+                !sidecar.exists(),
+                "{} beside the renamed copy",
+                sidecar.display()
+            );
+        }
+        assert_eq!(Archive::open(&path).unwrap().schema_version().unwrap(), 5);
+        assert_eq!(answers(&path), before);
+        let again = upgrade_dendro(&path, None, "rezolus").unwrap();
+        assert!(!again.copied && again.reindexed.replaced == 0, "{again:?}");
+    }
+
+    /// A schema 4 upgrade in place holds the input from before the copy
+    /// until the rename: neither a reader nor an edit can open it between
+    /// the re-index of the copy and the rename.
+    #[test]
+    fn upgrade_holds_a_schema_4_input_until_the_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = schema_4(dir.path());
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        super::BEFORE_RENAME.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |input: &std::path::Path| {
+                let read = Archive::open(input).is_ok();
+                let edit = dendro::archive::ArchiveMut::open(input).is_ok();
+                record.borrow_mut().push((read, edit));
+            }))
+        });
+        upgrade_dendro(&path, None, "rezolus").unwrap();
+        assert_eq!(*seen.borrow(), [(false, false)]);
+    }
+
+    /// `upgrade` in place of a symlink upgrades the file it names, keeping
+    /// the link and the file's permissions.
+    #[cfg(unix)]
+    #[test]
+    fn upgrade_in_place_follows_a_symlink_and_keeps_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = schema_4(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = dir.path().join("link.dendro");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        upgrade_dendro(&link, None, "rezolus").unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(Archive::open(&path).unwrap().schema_version().unwrap(), 5);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+    }
+
+    /// `upgrade` in place of a read-only archive says it is not writable and
+    /// names `-o`, which writes an upgraded copy.
+    #[cfg(unix)]
+    #[test]
+    fn upgrade_of_a_read_only_archive_names_the_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = earlier(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let err = upgrade_dendro(&path, None, "tool").unwrap_err().to_string();
+        assert_eq!(
+            err,
+            format!(
+                "{0} is not writable; write an upgraded copy with `tool recording upgrade {0} \
+                 -o NEW.dendro`",
+                path.display()
+            )
+        );
+        let out = dir.path().join("copy.dendro");
+        upgrade_dendro(&path, Some(&out), "tool").unwrap();
+    }
+
+    /// `upgrade` in place refuses an archive a reader holds open (as the
+    /// viewer keeps one), saying another process has it open, for schema 5
+    /// and schema 4 alike, and leaves it as it was.
+    #[test]
+    fn upgrade_refuses_an_archive_open_for_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        for path in [earlier(dir.path()), schema_4(dir.path())] {
+            let bytes = std::fs::read(&path).unwrap();
+            let held = Archive::open(&path).unwrap();
+            let err = upgrade_dendro(&path, None, "tool").unwrap_err().to_string();
+            assert!(err.contains("is open in another process"), "{err}");
+            drop(held);
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    /// `upgrade` refuses an archive another connection holds exclusively (an
     /// in-place edit), at the schema read, saying another process has it
     /// open.
     #[test]
-    fn reindex_refuses_an_archive_an_edit_holds() {
+    fn upgrade_refuses_an_archive_an_edit_holds() {
         let dir = tempfile::tempdir().unwrap();
         let path = earlier(dir.path());
         let edit = dendro::archive::ArchiveMut::open(&path).unwrap();
-        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
-        assert!(err.contains("is open in another process"), "{err}");
+        let err = upgrade_dendro(&path, None, "tool").unwrap_err().to_string();
+        assert!(
+            err.ends_with(&format!(
+                "upgrade it once that process closes it, or, while a viewer, an MCP server \
+                 or a recording has it open, write an upgraded copy with `tool recording \
+                 upgrade {} -o NEW.dendro`",
+                path.display()
+            )),
+            "{err}"
+        );
+        let err = upgrade_dendro(&path, Some(&dir.path().join("c.dendro")), "tool")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.ends_with("is held by an edit or an in-place upgrade; run this once it finishes"),
+            "{err}"
+        );
         drop(edit);
     }
 
-    /// `reindex` refuses an archive a writer holds, saying another process
-    /// has it open.
+    /// `upgrade` in place refuses an archive a writer holds, saying another
+    /// process has it open.
     #[test]
-    fn reindex_refuses_an_archive_being_written() {
+    fn upgrade_refuses_an_archive_being_written() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live.dendro");
         let writer = metriken_storage::ArchiveWriter::create(
@@ -521,7 +748,7 @@ mod dendro_command_tests {
             metriken_storage::WriterConfig::default(),
         )
         .unwrap();
-        let err = reindex_dendro(&path, "tool").unwrap_err().to_string();
+        let err = upgrade_dendro(&path, None, "tool").unwrap_err().to_string();
         assert!(err.contains("is open in another process"), "{err}");
         drop(writer);
     }
@@ -559,16 +786,16 @@ mod dendro_command_tests {
         );
     }
 
-    /// `upgrade` names a dendro input for what it is.
+    /// `upgrade` of an archive this release recorded finds it current and
+    /// leaves it as it is.
     #[test]
-    fn upgrade_names_a_dendro_input() {
+    fn upgrade_finds_a_current_dendro_input_current() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rec.dendro");
         fixtures::recorded(&path, 4, true);
-        let err = upgrade_to_dendro(&path, Some(&dir.path().join("out.dendro")), "dendro")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("already a dendro archive"), "{err}");
+        let bytes = std::fs::read(&path).unwrap();
+        upgrade_to_dendro(&path, None, "dendro", "rezolus").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
 
     /// `snapshot` of a `.rez` is refused, naming the upgrade, and writes
@@ -589,7 +816,7 @@ mod dendro_command_tests {
     fn upgrade_converts_an_ab_tarball() {
         let dir = tempfile::tempdir().unwrap();
         let tar = super::ab_tarball::tests::ab_tarball(dir.path());
-        upgrade_to_dendro(&tar, None, "dendro").unwrap();
+        upgrade_to_dendro(&tar, None, "dendro", "rezolus").unwrap();
         let out = dir.path().join("combined.dendro");
         let sources = Archive::open(&out).unwrap().read_sources().unwrap();
         let arms: Vec<_> = sources
