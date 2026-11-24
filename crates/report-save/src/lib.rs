@@ -299,7 +299,7 @@ fn anchored<'a, T>(
 }
 
 /// A dendro report of `src`, in memory: every source copied through dendro's
-/// `copy_sources_into` (trimmed with metriken-storage's `KeepMetrics` when
+/// `copy_sources_into_as_copies` (trimmed with metriken-storage's `KeepMetrics` when
 /// `keep_metrics` is `Some`, which keeps a long table long and its occupant
 /// stream whole), each stream's live tail sealed with metriken-storage's
 /// `Encoder`, and segments re-encoded with the writer's properties. An

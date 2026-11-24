@@ -484,15 +484,31 @@ fn combine_dendro(
     Ok(())
 }
 
-/// Refuse `files` when two of them are one file, by any spelling or link:
-/// its every source would be read twice over the same span.
+/// Refuse `files` when two of them are one file, by any spelling or link
+/// (a hard link compared by device and inode on Unix): its every source
+/// would be read twice over the same span.
 fn refuse_one_file_twice(files: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
-    let canonical = files
-        .iter()
-        .map(std::fs::canonicalize)
-        .collect::<Result<Vec<_>, _>>()?;
-    for (i, path) in canonical.iter().enumerate() {
-        if let Some(j) = canonical[..i].iter().position(|p| p == path) {
+    let same = |a: &Path, b: &Path| -> std::io::Result<bool> {
+        if std::fs::canonicalize(a)? == std::fs::canonicalize(b)? {
+            return Ok(true);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let (a, b) = (std::fs::metadata(a)?, std::fs::metadata(b)?);
+            return Ok((a.dev(), a.ino()) == (b.dev(), b.ino()));
+        }
+        #[allow(unreachable_code)]
+        Ok(false)
+    };
+    for i in 0..files.len() {
+        if let Some(j) = (0..i)
+            .map(|j| same(&files[j], &files[i]).map(|s| s.then_some(j)))
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .next()
+        {
             return Err(format!(
                 "{} and {} are the same file; give it once",
                 files[j].display(),
@@ -1056,8 +1072,9 @@ mod tests {
     /// A recording and its snapshot (one source) combine in either order
     /// into two sources, the second under a fresh uuid with the first's as
     /// its origin, that read as one recording answering as the recording
-    /// alone. One file given twice, by one spelling or two, is refused and
-    /// nothing is written.
+    /// alone; with `--ab` each is an arm answering as the recording alone.
+    /// One file given twice, by one spelling, a symbolic link or a hard
+    /// link, is refused and nothing is written.
     #[test]
     fn a_recording_and_its_copy_combine_into_one_recording() {
         use metriken_query::MetricsSource;
@@ -1090,9 +1107,27 @@ mod tests {
             assert_eq!(answer(&both[0].1), answer(&alone[0].1), "{name}");
         }
 
+        // With --ab, the recording and its snapshot are the two arms: two
+        // recordings, each answering as the recording alone.
+        let ab = dir.path().join("ab.dendro");
+        run_combine_ab(
+            &[a.clone(), copy.clone()],
+            &ab,
+            &["baseline=a.dendro", "experiment=copy.dendro"],
+        )
+        .unwrap();
+        let arms = ::rez::reader::RezReader::open_recordings(&ab, pool()).unwrap();
+        assert_eq!(arms.len(), 2, "one recording an arm");
+        for (labels, reader) in &arms {
+            assert!(labels.contains_key("arm"), "{labels:?}");
+            assert_eq!(answer(reader), answer(&alone[0].1), "{labels:?}");
+        }
+
         let out = dir.path().join("twice.dendro");
         let again = dir.path().join(".").join("a.dendro");
-        for second in [&a, &again] {
+        let link = dir.path().join("hard.dendro");
+        std::fs::hard_link(&a, &link).unwrap();
+        for second in [&a, &again, &link] {
             let err = run_combine(&[a.clone(), second.clone()], &out)
                 .unwrap_err()
                 .to_string();

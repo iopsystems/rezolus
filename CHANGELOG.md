@@ -934,8 +934,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   source (dendro 0.8.3, metriken-storage 0.14.2). So two copies of one
   recording (a file and a snapshot of it, or two snapshots or hindsight
   dumps of one buffer) combine into one recording, gaps and overlap
-  included, with or without `--ab`, and Save as Report saves a comparison
-  of two such files. One file given twice to `recording combine` is
+  included; with `--ab` each becomes its own arm. Save as Report saves a
+  comparison of two such files. One file given twice to `recording combine` is
   refused. An archive a build before 6.0.0-alpha.169 wrote with two sources
   under one uuid (a recording combined with a copy of it) reads as one
   recording, and `recording snapshot`, `filter`, an edit into a new file,

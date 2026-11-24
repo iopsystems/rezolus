@@ -1,7 +1,7 @@
 //! Copies of a dendro archive: a snapshot of a live one, a hindsight dump,
 //! and the `recording` tools that rewrite one.
 //!
-//! dendro's `copy_sources_into` copies sealed segments as they are, the
+//! dendro's `copy_sources_into_as_copies` copies sealed segments as they are, the
 //! clock offsets and caller rows, and encodes each stream's live WAL tail
 //! into a final segment, all in one read snapshot of the source. The tail is
 //! encoded with metriken-storage's `Encoder`, built from each source's

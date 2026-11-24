@@ -112,7 +112,7 @@ fn filter(
 }
 
 /// Filter a dendro archive by sampler and/or by metric column, through
-/// dendro's `copy_sources_into` (`crate::dendro_copy`).
+/// dendro's `copy_sources_into_as_copies` (`crate::dendro_copy`).
 ///
 /// - `keep_samplers` keeps a stream when its sampler is named; an occupant
 ///   stream (`<table>/occupants`) counts as its table's, so it goes with it.
