@@ -835,7 +835,7 @@ fn agent_worker_loop(
             None => break, // state gone — shutting down
             Some(Err(e)) => {
                 if accumulating {
-                    crate::warn!("gpu_amd_pmu: GPU {idx}: counters stopped accumulating: {e}");
+                    crate::warn!("gpu_amd_pmu: GPU {idx}: counters are not accumulating: {e}");
                     accumulating = false;
                 }
                 // Back off a little before retrying so we don't spin on errors.
@@ -871,7 +871,7 @@ fn agent_worker_loop(
             None => break,
             Some(Err(e)) => {
                 if accumulating {
-                    crate::warn!("gpu_amd_pmu: GPU {idx}: counters stopped accumulating: {e}");
+                    crate::warn!("gpu_amd_pmu: GPU {idx}: counters are not accumulating: {e}");
                     accumulating = false;
                 }
             }
