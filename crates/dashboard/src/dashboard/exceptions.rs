@@ -98,22 +98,43 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     let time = throttle.subgroup("Throttled Time");
     time.describe(
-        "Time cgroups spent waiting on the CFS bandwidth quota. \
+        "Time cgroup runqueues spent throttled by the CFS bandwidth quota, summed over \
+         CPUs, so a cgroup throttled on several CPUs at once records more than 1s/s. \
          Sustained non-zero values mean quota is the bottleneck.",
     );
     time.plot_promql(
-        PlotOpts::counter("Throttled Time", "cgroup-throttled-time", Unit::Percentage)
-            .with_unit_system("percentage"),
-        "sum(irate(cgroup_cpu_throttled_time[5m])) / 1000000000".to_string(),
+        PlotOpts::counter("Throttled Time", "cgroup-throttled-time", Unit::Time)
+            .with_unit_system("time"),
+        "sum(irate(cgroup_cpu_throttled_time[5m]))".to_string(),
+    );
+    time.plot_promql(
+        PlotOpts::counter(
+            "Throttled Time (Per-Cgroup)",
+            "cgroup-throttled-time-per-cgroup",
+            Unit::Time,
+        )
+        .with_unit_system("time")
+        .with_style("multi"),
+        "sum by (name) (irate(cgroup_cpu_throttled_time[5m]))".to_string(),
     );
     time.plot_promql(
         PlotOpts::counter(
             "Bandwidth Throttled Time",
             "cgroup-bw-throttled-time",
-            Unit::Percentage,
+            Unit::Time,
         )
-        .with_unit_system("percentage"),
-        "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m])) / 1000000000".to_string(),
+        .with_unit_system("time"),
+        "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m]))".to_string(),
+    );
+    time.plot_promql(
+        PlotOpts::counter(
+            "Bandwidth Throttled Time (Per-Cgroup)",
+            "cgroup-bw-throttled-time-per-cgroup",
+            Unit::Time,
+        )
+        .with_unit_system("time")
+        .with_style("multi"),
+        "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_time[5m]))".to_string(),
     );
 
     view.group(throttle);
