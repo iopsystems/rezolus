@@ -5,6 +5,11 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Security
 
+- url 2.5.9, for RUSTSEC-2026-0592 (GHSA-hrj5-67jp-wqp9): `Url::origin()`
+  on a URL with deeply nested `blob:` prefixes overflows the stack in 2.5.8
+  and earlier. Rezolus does not call `Url::origin()` or `url::quirks::origin()`,
+  and neither do reqwest, tower-http or metriken-recorder, the crates through
+  which it depends on `url`.
 - The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx
   (CVE-2026-45249), an XSS in the Lines series tooltip. The viewer draws no
   Lines series, so it was not exposed. The charts set the drag-to-zoom
