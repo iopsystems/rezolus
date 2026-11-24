@@ -152,26 +152,36 @@ impl Sampler for AmdPmu {
         // by per-GPU background worker threads (which bracket each window with
         // start/stop); this is just a cheap in-memory read, no GPU I/O.
         //
-        // One acquisition for every GPU. A GPU whose read fails keeps its
-        // previous values under a window the others stamped, the device-visit
-        // cost principle 18 accepts.
-        let guard = GPU_AMD_PMU_ACQ.acquire();
-        let mut read_any = false;
-        for idx in 0..self.rocp.num_agents() {
-            match self.rocp.sample(idx) {
-                Ok(sums) => {
-                    publish(idx, &sums);
-                    read_any = true;
+        let samples: Vec<_> = (0..self.rocp.num_agents())
+            .filter_map(|idx| match self.rocp.sample(idx) {
+                Ok(sample) => Some((idx, sample)),
+                Err(e) => {
+                    debug!("{NAME}: GPU {idx}: read failed: {e}");
+                    None
                 }
-                Err(e) => debug!("{NAME}: GPU {idx}: read failed: {e}"),
-            }
+            })
+            .collect();
+
+        // The totals changed when a worker last added a window, before this
+        // copy, and a worker whose windows keep failing leaves them unchanged.
+        // The window therefore begins no later than the oldest such time.
+        GPU_AMD_PMU_ACQ.values_fixed_at(
+            samples
+                .iter()
+                .filter_map(|(_, s)| s.accumulated_at_ns)
+                .min(),
+        );
+
+        let guard = GPU_AMD_PMU_ACQ.acquire();
+        for (idx, sample) in &samples {
+            publish(*idx, &sample.sums);
         }
-        // With no GPU read, no value is from inside this window, and stamping
-        // it would present the old values as fresh.
-        if read_any {
-            guard.finish();
-        } else {
+        // `sample` fails only when rocprofiler is shutting down. With no GPU
+        // read, stamping would present the old values as fresh.
+        if samples.is_empty() {
             guard.discard();
+        } else {
+            guard.finish();
         }
     }
 }
@@ -180,8 +190,8 @@ impl Sampler for AmdPmu {
 /// metrics. Each value is a monotonic running total: the sum of per-window
 /// deltas the worker thread has accumulated since the agent started.
 fn publish(id: usize, sums: &std::collections::HashMap<String, f64>) {
-    // Metric groups are sized for `MAX_GPUS`; a higher id would be silently
-    // dropped by `CounterGroup::add` (returns Err). Skip it and warn once.
+    // Metric groups are sized for `MAX_GPUS`; a higher id would be dropped by
+    // `CounterGroup::set` (returns false). Skip it and warn once.
     if id >= super::MAX_GPUS {
         use std::sync::atomic::{AtomicBool, Ordering};
         static WARNED: AtomicBool = AtomicBool::new(false);
@@ -264,6 +274,16 @@ mod tests {
         advance_to(&metric, 0, f64::NAN);
         advance_to(&metric, 0, f64::INFINITY);
         assert_eq!(metric.value(0), None);
+    }
+
+    /// `publish` stores a total of zero. Uses the last slot, which no host
+    /// reaches, so it cannot meet a real GPU's values.
+    #[test]
+    fn publish_stores_a_total_of_zero() {
+        let id = super::super::MAX_GPUS - 1;
+        let sums = std::collections::HashMap::from([("GRBM_COUNT".to_string(), 0.0)]);
+        publish(id, &sums);
+        assert_eq!(GPU_GRBM_COUNT.value(id), Some(0));
     }
 
     /// Every `gpmu_*` metric is in the declared group, which publishes a zero

@@ -415,16 +415,16 @@ impl AcquisitionGroup {
         self.begin_guard()
     }
 
-    /// For a reader-stamped group: some members' values were fixed at `ns`
-    /// (on the source's timeline, as `anchored_ts` gives it) by a step that
-    /// runs before the read, and stay so until the next such step. Every
-    /// window published after this begins no later than `ns`. `None` says
-    /// no member's value is fixed early.
+    /// Some members' values were fixed at `ns` (on the source's timeline, as
+    /// `anchored_ts` gives it) by a step that runs before the read, and stay
+    /// so until the next such step. Every window published after this begins
+    /// no later than `ns`. `None` says no member's value is fixed early.
     ///
     /// `cpu_usage` calls it from the sweep that moves `process_table`'s
     /// counts into `process_cpu_usage`: a process holding an entry has the
-    /// value of that move until the next one.
-    // Only called from the Linux `cpu_usage` sampler.
+    /// value of that move until the next one. `gpu_amd_pmu` calls it with the
+    /// oldest time a GPU worker last added to its running totals.
+    // Only called from Linux samplers.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn values_fixed_at(&self, ns: Option<u64>) {
         self.values_fixed_ns

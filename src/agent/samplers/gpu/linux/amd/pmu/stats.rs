@@ -17,9 +17,11 @@ use linkme::distributed_slice;
 use super::super::MAX_GPUS;
 
 /// Every counter below, one member per GPU agent. Single writer: `refresh` in
-/// `mod.rs`, which reads every GPU's running totals under one acquisition.
+/// `mod.rs`, which copies every GPU's running totals under one acquisition.
 /// One group for all fourteen because one `sample` call per GPU returns them
-/// together: principle 18's device-visit sweep.
+/// together. The totals are accumulated by per-GPU worker threads, so the
+/// window begins no later than the oldest worker's last accumulation
+/// (`values_fixed_at`).
 ///
 /// Declared so that a counter at zero is published as zero; the default group
 /// skips a zero-valued `CounterGroup` entry.
