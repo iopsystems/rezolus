@@ -65,15 +65,17 @@ Two signals decompose "my workload is queueing":
 
 ## CPU throttling vs scheduling pressure
 
-`cgroup_cpu_throttled` and `cgroup_scheduler_runqueue_wait` answer different questions for a single cgroup:
+`cgroup_cpu_throttled_time` and `cgroup_scheduler_runqueue_wait` overlap for a single cgroup. The runqueue sampler times a task from enqueue to switch-in with no check for throttling, so time a task spends on a runqueue throttled by `cpu.max` is counted as runqueue wait. The two are not equal: `cgroup_cpu_throttled_time` counts each throttled runqueue once, and runqueue wait counts each task waiting on it.
+
+Runqueue wait is charged to the task's own cgroup, and throttled time to the cgroup whose quota ran out. With quotas at more than one level (a pod and its containers), compare against the ancestors' throttled time too.
 
 | Pattern | Interpretation |
 |---|---|
 | `cgroup_cpu_throttled` non-zero, `cgroup_cpu_bandwidth_throttled_time` rising | CFS quota is the bottleneck — workload is ready to run but blocked by `cpu.max`. Raise the quota or remove it |
-| `cgroup_scheduler_runqueue_wait` rising, throttling near zero | Cgroup has quota to spare, but is competing with co-located cgroups for actual CPU. Check sibling cgroups' usage |
-| Both rising together | Both: quota is too tight *and* co-located workloads are competing |
+| `cgroup_scheduler_runqueue_wait` rising, throttled time near zero for the cgroup and its ancestors | Cgroup has quota to spare, but is competing with co-located cgroups for actual CPU. Check sibling cgroups' usage |
+| Both rising together | Throttling accounts for at least part of the wait. Runqueue wait counts every task on a throttled runqueue, so it can exceed throttled time with no contention. Raise the quota and see whether the wait falls with the throttling |
 
-These are often confused. Throttling is *policy* — quota enforcement. Runqueue wait is *contention* — multiple runnable threads sharing a CPU.
+A host-level `scheduler_runqueue_wait` spike can come from one cgroup at its CPU limit while CPUs are idle. Check whether it coincides with a rise in `cgroup_cpu_throttled_time` before reading it as contention for CPUs.
 
 ## ENA allowance limits (AWS)
 
@@ -114,6 +116,5 @@ Yields 0..N where N is the number of CPUs the cgroup had threads on — total wa
 | Pattern | Interpretation |
 |---|---|
 | High off-CPU, low CPU usage | Workload is IO- or lock-bound. Look at `blockio_latency`, `tcp_packet_latency`, syscall latency by class |
-| High off-CPU, paired with `cgroup_cpu_throttled` rising | Quota throttling is the off-CPU cause |
 | High off-CPU, paired with high steal | Host preemption is part of the off-CPU cause |
 | High off-CPU, none of the above | Self-induced blocking — application logic, lock contention. Profiling territory |

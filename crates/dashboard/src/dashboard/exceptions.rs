@@ -141,14 +141,25 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if throttled_time || bandwidth_time {
         let time = throttle.subgroup("Throttled Time");
         time.describe(
-            "Time cgroups spent waiting on the CFS bandwidth quota. \
+            "Time cgroup runqueues spent throttled by the CFS bandwidth quota, summed over \
+             CPUs, so a cgroup throttled on several CPUs at once records more than 1s/s. \
              Sustained non-zero values mean quota is the bottleneck.",
         );
         if throttled_time {
             time.plot_promql(
-                Plot::counter("Throttled Time", "cgroup-throttled-time", Unit::Percentage)
-                    .with_unit_system(Unit::Percentage),
-                "sum(irate(cgroup_cpu_throttled_time[5m])) / 1000000000".to_string(),
+                Plot::counter("Throttled Time", "cgroup-throttled-time", Unit::Time)
+                    .with_unit_system(Unit::Time),
+                "sum(irate(cgroup_cpu_throttled_time[5m]))".to_string(),
+            );
+            time.plot_promql(
+                Plot::counter(
+                    "Throttled Time (Per-Cgroup)",
+                    "cgroup-throttled-time-per-cgroup",
+                    Unit::Time,
+                )
+                .with_unit_system(Unit::Time)
+                .with_style(ChartStyle::Multi),
+                "sum by (name) (irate(cgroup_cpu_throttled_time[5m]))".to_string(),
             );
         }
         if bandwidth_time {
@@ -156,10 +167,20 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Plot::counter(
                     "Bandwidth Throttled Time",
                     "cgroup-bw-throttled-time",
-                    Unit::Percentage,
+                    Unit::Time,
                 )
-                .with_unit_system(Unit::Percentage),
-                "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m])) / 1000000000".to_string(),
+                .with_unit_system(Unit::Time),
+                "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m]))".to_string(),
+            );
+            time.plot_promql(
+                Plot::counter(
+                    "Bandwidth Throttled Time (Per-Cgroup)",
+                    "cgroup-bw-throttled-time-per-cgroup",
+                    Unit::Time,
+                )
+                .with_unit_system(Unit::Time)
+                .with_style(ChartStyle::Multi),
+                "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_time[5m]))".to_string(),
             );
         }
     }

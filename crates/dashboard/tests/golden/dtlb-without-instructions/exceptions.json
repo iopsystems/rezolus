@@ -231,7 +231,7 @@
         },
         {
           "name": "Throttled Time",
-          "description": "Time cgroups spent waiting on the CFS bandwidth quota. Sustained non-zero values mean quota is the bottleneck.",
+          "description": "Time cgroup runqueues spent throttled by the CFS bandwidth quota, summed over CPUs, so a cgroup throttled on several CPUs at once records more than 1s/s. Sustained non-zero values mean quota is the bottleneck.",
           "plots": [
             {
               "data": [],
@@ -242,13 +242,31 @@
                 "format": {
                   "x_axis_label": null,
                   "y_axis_label": null,
-                  "unit_system": "percentage",
+                  "unit_system": "time",
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
                 }
               },
-              "promql_query": "sum(irate(cgroup_cpu_throttled_time[5m])) / 1000000000"
+              "promql_query": "sum(irate(cgroup_cpu_throttled_time[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Throttled Time (Per-Cgroup)",
+                "id": "cgroup-throttled-time-per-cgroup",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (irate(cgroup_cpu_throttled_time[5m]))"
             },
             {
               "data": [],
@@ -259,13 +277,31 @@
                 "format": {
                   "x_axis_label": null,
                   "y_axis_label": null,
-                  "unit_system": "percentage",
+                  "unit_system": "time",
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
                 }
               },
-              "promql_query": "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m])) / 1000000000"
+              "promql_query": "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Bandwidth Throttled Time (Per-Cgroup)",
+                "id": "cgroup-bw-throttled-time-per-cgroup",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (irate(cgroup_cpu_bandwidth_throttled_time[5m]))"
             }
           ]
         }

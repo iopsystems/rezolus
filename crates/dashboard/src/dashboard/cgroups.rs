@@ -167,6 +167,43 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_cpu_throttled_time"),
     );
 
+    plot(
+        group,
+        Plot::counter(
+            "CPU Throttle Events",
+            format!("{prefix}-cpu-throttle-events"),
+            Unit::Rate,
+        )
+        .with_description(
+            "Throttles of the cgroup's per-CPU runqueues per second. A cgroup throttled \
+             on N CPUs in one period counts N; Throttled Periods on the Exceptions page \
+             counts it once.",
+        ),
+        rate("cgroup_cpu_throttled"),
+    );
+
+    // Throttled time over throttle events: separates many short throttles
+    // from a few long ones, which the throttled time alone cannot.
+    plot(
+        group,
+        Plot::counter(
+            "Average Throttle Duration",
+            format!("{prefix}-cpu-throttle-duration"),
+            Unit::Time,
+        )
+        .with_description(
+            "Throttled time divided by throttle events, per CPU runqueue. A throttle is \
+             counted when it starts and its time is added when it ends, so an interval can \
+             show more than any one throttle lasted, 0 while throttles are in progress, or \
+             a gap when throttles end and none start.",
+        ),
+        format!(
+            "{} / {}",
+            rate("cgroup_cpu_throttled_time"),
+            rate("cgroup_cpu_throttled")
+        ),
+    );
+
     // A quota summed over cgroups is not a limit on anything, so only the
     // individual side has it. `> 0` drops cgroups with no quota, which report
     // -1.
