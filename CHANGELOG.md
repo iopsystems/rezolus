@@ -331,9 +331,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   `gpu_amd_pmu_devices`, with one member per GPU, and carry an acquisition
   window that begins no later than the oldest time a GPU's totals last
   changed. Dashboard panels that plot these counters' rates now show 0 where
-  they were empty. A GPU whose counters are not accumulating is logged at warn, and at
-  info when they resume. With `snapshot_format = "v2"` a zero entry is still
-  omitted.
+  they were empty. A GPU whose counters are not accumulating is logged at
+  warn, and at info when they resume. With `snapshot_format = "v2"` a zero
+  entry is still omitted.
 - **In V3 snapshots, `network_ethtool` publishes an ENA allowance counter
   that is zero.** The five `network_ena_*_allowance_exceeded` counters declared
   no acquisition group, and the V3 builder skips a zero entry of an undeclared
