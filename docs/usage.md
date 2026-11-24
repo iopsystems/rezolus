@@ -700,11 +700,12 @@ tarballs 5.x wrote, which every other subcommand refuses with that command.
   release writes them, so the viewer opens a table from the indexes instead
   of reading every segment, and a table's first chart takes less time. A
   recording this release records needs none, and neither does the output of
-  `filter --metrics`; any other copy of an older recording (`snapshot`,
-  `combine`, `filter` without `--metrics`) keeps its indexes and needs one.
+  `filter --metrics`. A recording an earlier 6.0 build wrote, and any copy of
+  one (`snapshot`, `combine`, `filter` without `--metrics`), keeps the earlier
+  indexes and needs one.
   It refuses a file another process has open (a viewer, a recording), and an
-  archive from before the current layout (schema 5), which `snapshot` copies
-  into the current one first. While it runs, the viewer cannot open the
+  archive from before the current layout (schema 4, which 5.x wrote), which
+  `snapshot` copies into the current one first. While it runs, the viewer cannot open the
   file.
 
 On a recording with identity layers, `annotate --queries` (also spelled

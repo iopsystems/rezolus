@@ -1023,9 +1023,9 @@ mod help {
                          table takes less time. No segment's data is rewritten: each segment is\n\
                          read once to build its index.\n\n\
                          A recording this release records needs no re-index, and neither does\n\
-                         a filter that keeps named metrics. Any other copy of an older recording\n\
-                         (a snapshot, a combine, a filter of whole tables) keeps its indexes and\n\
-                         needs one.\n\n\
+                         a filter that keeps named metrics. A recording an earlier 6.0 build\n\
+                         wrote, and any copy of one (a snapshot, a combine, a filter of whole\n\
+                         tables), keeps the earlier indexes and needs one.\n\n\
                          An archive another process has open (a viewer, a recording) is\n\
                          refused; re-index it once that process closes it, or re-index a\n\
                          `{program} recording snapshot` of it. While the re-index runs, the\n\
@@ -1034,7 +1034,7 @@ mod help {
                          into the current one.\n\n\
                          EXAMPLES:\n    \
                          {program} recording reindex run.dendro\n\n    \
-                         # An older archive: copy it, then re-index the copy\n    \
+                         # A 5.x archive (schema 4): copy it, then re-index the copy\n    \
                          {program} recording snapshot old.dendro -o current.dendro\n    \
                          {program} recording reindex current.dendro";
 

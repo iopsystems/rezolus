@@ -852,9 +852,9 @@ table takes less time. No segment's data is rewritten: each segment is
 read once to build its index.
 
 A recording this release records needs no re-index, and neither does
-a filter that keeps named metrics. Any other copy of an older recording
-(a snapshot, a combine, a filter of whole tables) keeps its indexes and
-needs one.
+a filter that keeps named metrics. A recording an earlier 6.0 build
+wrote, and any copy of one (a snapshot, a combine, a filter of whole
+tables), keeps the earlier indexes and needs one.
 
 An archive another process has open (a viewer, a recording) is
 refused; re-index it once that process closes it, or re-index a
@@ -866,7 +866,7 @@ into the current one.
 EXAMPLES:
     rezolus recording reindex run.dendro
 
-    # An older archive: copy it, then re-index the copy
+    # A 5.x archive (schema 4): copy it, then re-index the copy
     rezolus recording snapshot old.dendro -o current.dendro
     rezolus recording reindex current.dendro
 

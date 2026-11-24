@@ -379,7 +379,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- reindex -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>reindex</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Rewrite a recording's segment indexes in place, as this release writes them, so the viewer opens a table from the indexes instead of reading every segment. A recording this release records needs none, nor does the output of <code>filter --metrics</code>; a <code>snapshot</code> or <code>combine</code> of an older recording, or a <code>filter</code> of it without <code>--metrics</code>, keeps its indexes and needs one. Refuses a file another process has open, and an archive before schema 5, which <code>snapshot</code> copies into the current layout first.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Rewrite a recording's segment indexes in place, as this release writes them, so the viewer opens a table from the indexes instead of reading every segment. A recording this release records needs none, nor does the output of <code>filter --metrics</code>. A recording an earlier 6.0 build wrote, and any copy of one (<code>snapshot</code>, <code>combine</code>, <code>filter</code> without <code>--metrics</code>), keeps the earlier indexes and needs one. Refuses a file another process has open, and a 5.x archive (schema 4), which <code>snapshot</code> copies into the current layout first.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The archive to re-index (.dendro), in place</span></div>
 </div>

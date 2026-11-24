@@ -228,6 +228,7 @@ target/release/rezolus recording upgrade in.parquet -o out.dendro     # (metrike
 target/release/rezolus recording upgrade ab.parquet.ab.tar            # A/B tarball -> two recordings, arm=baseline/experiment
 #   (src/parquet_tools/ab_tarball.rs; the tarball's aliases and category are not carried over)
 target/release/rezolus recording snapshot live.dendro -o incident.dendro   # complete copy of an archive still being written
+target/release/rezolus recording reindex run.dendro   # rewrite sealed segments' names indexes in place (schema >= 5; refused while open elsewhere)
 # A parquet upgraded to .dendro has no acquisition windows, so its recording is WINDOWLESS (no rate band).
 
 # MCP - AI analysis server or CLI commands

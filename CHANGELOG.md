@@ -45,12 +45,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   (metriken #438) reading the earlier indexes; this release reading an
   archive that was not re-indexed was not measured. A recording this
   release records (`record`, hindsight) needs no re-index, and neither does
-  the output of `filter --metrics`, which now indexes its output. Any other
-  copy of an older recording (`snapshot`, `combine`, `filter` without
-  `--metrics`) keeps its indexes and needs one. An archive before schema 5
-  is refused with the `recording snapshot` that copies it into the current
-  layout, and an archive another process has open (a viewer, a recording)
-  is refused; while it runs, the viewer cannot open the file.
+  the output of `filter --metrics`, which now indexes its output. A
+  recording an earlier 6.0 build wrote, and any copy of one (`snapshot`,
+  `combine`, `filter` without `--metrics`), keeps the earlier indexes and
+  can be re-indexed in place. A 5.x archive (schema 4) is refused with the
+  `recording snapshot` that copies it into the current layout, and an
+  archive another process has open (a viewer, a recording) is refused;
+  while it runs, the viewer cannot open the file.
 
 - **`memory_cgroup` reads each cgroup's limits and memory events.**
   `cgroup_memory_max` and `cgroup_memory_high` are `memory.max` and
@@ -855,10 +856,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   `recording snapshot`, `filter` (in place or with `-o`), an edit into a new
   file, `combine` and Save as Report each write a copy, and refuse it.
 - **Writing to an archive leaves an empty `<archive>-lock` file beside it**:
-  `record`, and an in-place `recording annotate`, `check --annotate` or MCP
-  edit (`add_event`, `remove_events`, `run_checks` with `annotate=true`),
-  and `recording reindex`. dendro takes an advisory lock on that file so that two processes cannot
-  write one archive; the second is refused. The file holds no data, a copy
+  `record`, `recording reindex`, and an in-place `recording annotate`,
+  `check --annotate` or MCP edit (`add_event`, `remove_events`, `run_checks`
+  with `annotate=true`). dendro takes an advisory lock on that file so that
+  two processes cannot write one archive; the second is refused. The file holds no data, a copy
   does not need it, and nothing removes it.
 - **A `drivehealth` or `memory_cgroup` read that finishes a full interval
   or more after its dispatch is followed by an idle interval with no read.**
