@@ -219,7 +219,9 @@ pub fn duplicate_source(uuid: &str) -> String {
         "the archive holds two sources with uuid {uuid}, which a build before \
          6.0.0-alpha.169 wrote when it combined a recording with a copy of it. A new \
          archive holds each source once, so this one cannot be copied: `snapshot`, \
-         `filter`, an edit with -o, `combine` and Save as Report refuse it; `annotate`, \
+         `filter`, an edit with -o, `upgrade -o`, `combine` and Save as Report refuse \
+         it; `upgrade` in place re-indexes one in the current layout (a 5.x-layout one \
+         is copied, so it is refused too), and `annotate`, \
          `check --annotate` and the MCP event tools edit it in place"
     )
 }

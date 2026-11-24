@@ -671,8 +671,9 @@ browser would.
 ## Recording tools
 
 `rezolus recording` inspects and transforms `.dendro` recordings; `upgrade`
-converts the `.rez` archives, `.parquet` files and `.parquet.ab.tar` A/B
-tarballs 5.x wrote, which every other subcommand refuses with that command.
+brings any recording an earlier release wrote up to date, and converts the
+`.rez` archives, `.parquet` files and `.parquet.ab.tar` A/B tarballs 5.x
+wrote, which every other subcommand refuses with that command.
 `parquet` remains a compatibility alias for the command. Check `rezolus recording <subcommand>
 --help` for each one's flags.
 
@@ -691,24 +692,29 @@ tarballs 5.x wrote, which every other subcommand refuses with that command.
   is detected from the file's contents, not its name.
 - **Filter** — keep the named samplers (`--samplers`) or metrics
   (`--metrics`).
-- **Upgrade** — convert a `.rez` archive (v1, v2 or v3), a `.parquet` file or a
-  `.parquet.ab.tar` A/B tarball into a `.dendro` (`<name>.dendro` beside it
-  without `-o`). A tarball becomes two recordings labelled `arm=baseline` and
-  `arm=experiment`, which the viewer opens as the comparison.
+- **Upgrade** — bring a recording an earlier release wrote up to what this
+  release writes.
+  - A `.rez` archive (v1, v2 or v3), a `.parquet` file or a `.parquet.ab.tar`
+    A/B tarball becomes a new `.dendro` (`<name>.dendro` beside it without
+    `-o`). A tarball becomes two recordings labelled `arm=baseline` and
+    `arm=experiment`, which the viewer opens as the comparison.
+  - A `.dendro` is upgraded in place, or into a new file with `-o`: each
+    sealed segment's index is rewritten as this release writes it, so the
+    viewer opens a table from the indexes instead of reading every segment,
+    and a table's first chart takes less time. One an earlier 6.0 build wrote
+    is re-indexed without rewriting any segment's data. A 5.x `.dendro`
+    (schema 4) is copied into the current layout and the copy renamed over
+    it, which needs free space for one copy; 5.x cannot open the result. A
+    current one is left as it is.
+    A recording this release records is current, and so is the output of
+    `filter --metrics`; a `snapshot`, `combine` or `filter` without
+    `--metrics` of an older recording keeps its indexes and needs an
+    upgrade. Upgrading in place is refused while another process has the
+    file open (a viewer, a recording), and while it runs the viewer cannot
+    open the file.
 - **Snapshot** — copy an archive that is still being written consistently,
   including committed data in SQLite's sidecar, into a `.dendro`. Prefer this
   over copying an active file with `cp`.
-- **Reindex** — rewrite a recording's segment indexes in place, as this
-  release writes them, so the viewer opens a table from the indexes instead
-  of reading every segment, and a table's first chart takes less time. A
-  recording this release records needs none, and neither does the output of
-  `filter --metrics`. A recording an earlier 6.0 build wrote, and any copy of
-  one (`snapshot`, `combine`, `filter` without `--metrics`), keeps the earlier
-  indexes and needs one.
-  It refuses a file another process has open (a viewer, a recording), and an
-  archive from before the current layout (schema 4, which 5.x wrote), which
-  `snapshot` copies into the current one first. While it runs, the viewer cannot open the
-  file.
 
 On a recording with identity layers, `annotate --queries` (also spelled
 `--template`) and `--systeminfo` append one user-layer entry by `annotate`:
@@ -746,7 +752,7 @@ rezolus recording combine rezolus.dendro service.dendro -o combined.dendro
 rezolus recording convert rezolus.raw.zst              # writes rezolus.dendro
 rezolus recording filter run.dendro --samplers cpu_usage -o slim.dendro
 rezolus recording snapshot live.dendro -o incident.dendro
-rezolus recording reindex run.dendro
+rezolus recording upgrade run.dendro                    # a .dendro, in place
 rezolus recording upgrade capture.rez -o capture.dendro
 ```
 
