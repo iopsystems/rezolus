@@ -741,20 +741,20 @@ A converted input is never changed. -o defaults to the input's name with
 .dendro for its extension (x.parquet.ab.tar becomes x.dendro), and an
 existing output is refused.
 
-A .dendro archive is upgraded IN PLACE unless -o names a new file. Each
+A .dendro archive is upgraded in place unless -o names a new file. Each
 sealed segment's index is rewritten as this release writes it, so the
 viewer opens a table from its segments' indexes instead of reading every
 segment, and a table's first chart takes less time. An archive an earlier
 6.0 build wrote is re-indexed with no segment's data rewritten. A 5.x
 archive (schema 4) is copied into the current layout first, the copy
 re-indexed and renamed over the input, which needs free space for one
-copy. An archive already current is reported and left as it is. With -o,
-the archive is copied there and the copy upgraded; the input is not
-changed.
+copy; 5.x cannot open the result. An archive already current is reported
+and left as it is. With -o, the archive is copied there and the copy
+upgraded; the input is not changed.
 
 Upgrading in place is refused while another process has the archive
-open (a viewer, a recording); upgrade a `rezolus recording snapshot` of
-one still being written. While it runs, the viewer cannot open the file.
+open (a viewer, a recording); upgrade one still being written with -o.
+While it runs, the viewer cannot open the file.
 
 EXAMPLES:
     # Writes old.dendro beside old.rez

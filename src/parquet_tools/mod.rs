@@ -48,6 +48,18 @@ pub(crate) fn snapshot_rez(
     Ok(())
 }
 
+/// A test's hook on an in-place copying upgrade.
+#[cfg(test)]
+type UpgradeHook = Box<dyn FnOnce(&std::path::Path)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Called with the input of an in-place copying upgrade after the copy is
+    /// re-indexed and before it is renamed over the input.
+    static BEFORE_RENAME: std::cell::RefCell<Option<UpgradeHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// What [`upgrade_dendro`] did.
 #[derive(Debug)]
 pub(crate) struct DendroUpgrade {
@@ -72,8 +84,10 @@ pub(crate) struct DendroUpgrade {
 ///   is copied there and the copy re-indexed; the input is not changed.
 ///
 /// Changing the input in place is refused while another connection has it
-/// open (a viewer, a recording, an edit): it takes the file exclusively,
-/// so a viewer cannot open it while the upgrade runs.
+/// open (a viewer, a recording, an edit), and holds the file exclusively
+/// until the re-index is done or the copy replaces it, so a viewer cannot
+/// open it while the upgrade runs. In place, a symlink's target is
+/// upgraded, and a copy that replaces it takes its permissions.
 pub(crate) fn upgrade_dendro(
     path: &std::path::Path,
     output: Option<&std::path::Path>,
@@ -84,8 +98,8 @@ pub(crate) fn upgrade_dendro(
         match e.downcast_ref::<dendro::Error>() {
             Some(dendro::Error::InUse { .. }) => format!(
                 "{shown} is open in another process (a viewer, an MCP server, a recording \
-                 or an edit); upgrade it once that process closes it, or upgrade a \
-                 `{program} recording snapshot` of it"
+                 or an edit); upgrade it once that process closes it, or write an upgraded \
+                 copy with `{program} recording upgrade {shown} -o NEW.dendro`"
             )
             .into(),
             _ => e,
@@ -105,21 +119,44 @@ pub(crate) fn upgrade_dendro(
             reindexed,
         }
     } else {
-        if output.is_none() {
-            // The copy replaces the input, so nothing may hold it: a writer
-            // would go on appending to the file the rename unlinks.
-            drop(dendro::archive::ArchiveMut::open(path).map_err(|e| in_use(e.into()))?);
-        }
-        let dest = output.unwrap_or(path);
+        // In place, the copy replaces the file a symlink names, and the
+        // input is held exclusively from before the copy until the rename,
+        // so no writer, edit or viewer opens the file the rename unlinks.
+        let target = match output {
+            Some(_) => path.to_path_buf(),
+            None => std::fs::canonicalize(path)?,
+        };
+        let held = match output {
+            Some(_) => None,
+            None => Some(dendro::archive::ArchiveMut::open(&target).map_err(|e| in_use(e.into()))?),
+        };
+        let opened;
+        let src: &dendro::archive::Archive = match &held {
+            Some(held) => held,
+            None => {
+                opened = dendro::archive::Archive::open(path).map_err(|e| in_use(e.into()))?;
+                &opened
+            }
+        };
+        let dest = output.unwrap_or(&target);
         let staging = legacy::staging_dir(dest)?;
         let staged = staging.path().join("upgraded.dendro");
-        let src = dendro::archive::Archive::open(path).map_err(|e| in_use(e.into()))?;
-        crate::dendro_copy::copy(&src, &staged, &dendro::rewrite::CopySpec::everything())?;
-        drop(src);
+        crate::dendro_copy::copy(src, &staged, &dendro::rewrite::CopySpec::everything())?;
         let reindexed = metriken_storage::reindex::reindex(&staged)?;
+        #[cfg(test)]
+        BEFORE_RENAME.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(&target)
+            }
+        });
         match output {
             Some(output) => legacy::publish(&staged, output)?,
-            None => std::fs::rename(&staged, path)?,
+            None => {
+                let permissions = std::fs::metadata(&target)?.permissions();
+                std::fs::set_permissions(&staged, permissions)?;
+                drop(held);
+                std::fs::rename(&staged, &target)?;
+            }
         }
         DendroUpgrade {
             schema,
@@ -580,6 +617,48 @@ mod dendro_command_tests {
         assert_eq!(answers(&path), before);
         let again = upgrade_dendro(&path, None, "rezolus").unwrap();
         assert!(!again.copied && again.reindexed.replaced == 0, "{again:?}");
+    }
+
+    /// A schema 4 upgrade in place holds the input from before the copy
+    /// until the rename: neither a reader nor an edit can open it between
+    /// the re-index of the copy and the rename.
+    #[test]
+    fn upgrade_holds_a_schema_4_input_until_the_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = schema_4(dir.path());
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        super::BEFORE_RENAME.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |input: &std::path::Path| {
+                record.borrow_mut().push((
+                    Archive::open(input).is_ok(),
+                    dendro::archive::ArchiveMut::open(input).is_ok(),
+                ));
+            }))
+        });
+        upgrade_dendro(&path, None, "rezolus").unwrap();
+        assert_eq!(*seen.borrow(), [(false, false)]);
+    }
+
+    /// `upgrade` in place of a symlink upgrades the file it names, keeping
+    /// the link and the file's permissions.
+    #[cfg(unix)]
+    #[test]
+    fn upgrade_in_place_follows_a_symlink_and_keeps_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = schema_4(dir.path());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = dir.path().join("link.dendro");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        upgrade_dendro(&link, None, "rezolus").unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(Archive::open(&path).unwrap().schema_version().unwrap(), 5);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
     }
 
     /// `upgrade` in place refuses an archive a reader holds open (as the

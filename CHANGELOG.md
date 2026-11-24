@@ -57,7 +57,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   indexes instead of reading every segment. An archive an earlier 6.0 build
   wrote is re-indexed with no segment's data rewritten. A 5.x archive
   (schema 4), which `upgrade` refused as already a dendro archive, is copied
-  into the current layout and the copy renamed over it. A current archive is
+  into the current layout and the copy renamed over it, after which 5.x
+  cannot open it; `-o` writes the copy elsewhere and leaves the input. A current archive is
   reported and left as it is. On a 9.6 h recording of 5,874 segments, copied
   into a current archive, the re-index took 5.5 s and 207 MB peak RSS (one
   run, release build, Apple M4 Max). On a re-indexed copy of the same

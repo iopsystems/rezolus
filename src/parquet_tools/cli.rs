@@ -975,19 +975,19 @@ mod help {
                          A converted input is never changed. -o defaults to the input's name with\n\
                          .dendro for its extension (x.parquet.ab.tar becomes x.dendro), and an\n\
                          existing output is refused.\n\n\
-                         A .dendro archive is upgraded IN PLACE unless -o names a new file. Each\n\
+                         A .dendro archive is upgraded in place unless -o names a new file. Each\n\
                          sealed segment's index is rewritten as this release writes it, so the\n\
                          viewer opens a table from its segments' indexes instead of reading every\n\
                          segment, and a table's first chart takes less time. An archive an earlier\n\
                          6.0 build wrote is re-indexed with no segment's data rewritten. A 5.x\n\
                          archive (schema 4) is copied into the current layout first, the copy\n\
                          re-indexed and renamed over the input, which needs free space for one\n\
-                         copy. An archive already current is reported and left as it is. With -o,\n\
-                         the archive is copied there and the copy upgraded; the input is not\n\
-                         changed.\n\n\
+                         copy; 5.x cannot open the result. An archive already current is reported\n\
+                         and left as it is. With -o, the archive is copied there and the copy\n\
+                         upgraded; the input is not changed.\n\n\
                          Upgrading in place is refused while another process has the archive\n\
-                         open (a viewer, a recording); upgrade a `{program} recording snapshot` of\n\
-                         one still being written. While it runs, the viewer cannot open the file.\n\n\
+                         open (a viewer, a recording); upgrade one still being written with -o.\n\
+                         While it runs, the viewer cannot open the file.\n\n\
                          EXAMPLES:\n    \
                          # Writes old.dendro beside old.rez\n    \
                          {program} recording upgrade old.rez\n\n    \
