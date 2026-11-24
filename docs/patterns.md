@@ -65,16 +65,17 @@ Two signals decompose "my workload is queueing":
 
 ## CPU throttling vs scheduling pressure
 
-`cgroup_cpu_throttled_time` and `cgroup_scheduler_runqueue_wait` overlap for a single cgroup. The runqueue sampler times a task from enqueue to switch-in with no check for throttling, so time a task spends on a runqueue throttled by `cpu.max` is counted as runqueue wait. The two are not equal: throttled time counts each throttled runqueue once, and runqueue wait counts each task waiting on it.
+`cgroup_cpu_throttled_time` and `cgroup_scheduler_runqueue_wait` overlap for a single cgroup. The runqueue sampler times a task from enqueue to switch-in with no check for throttling, so time a task spends on a runqueue throttled by `cpu.max` is counted as runqueue wait. The two are not equal: `cgroup_cpu_throttled_time` counts each throttled runqueue once, and runqueue wait counts each task waiting on it.
+
+Runqueue wait is charged to the task's own cgroup, and throttled time to the cgroup whose quota ran out. With quotas at more than one level (a pod and its containers), compare against the ancestors' throttled time too.
 
 | Pattern | Interpretation |
 |---|---|
 | `cgroup_cpu_throttled` non-zero, `cgroup_cpu_bandwidth_throttled_time` rising | CFS quota is the bottleneck — workload is ready to run but blocked by `cpu.max`. Raise the quota or remove it |
-| `cgroup_scheduler_runqueue_wait` rising, throttling near zero | Cgroup has quota to spare, but is competing with co-located cgroups for actual CPU. Check sibling cgroups' usage |
-| Both rising together, runqueue wait close to throttled time | Quota throttling accounts for the wait. Treat it as the first row |
-| Both rising, runqueue wait well above throttled time | Quota is too tight, and the remainder of the wait is contention with co-located workloads |
+| `cgroup_scheduler_runqueue_wait` rising, throttled time near zero for the cgroup and its ancestors | Cgroup has quota to spare, but is competing with co-located cgroups for actual CPU. Check sibling cgroups' usage |
+| Both rising together | Throttling accounts for at least part of the wait. Runqueue wait counts every task on a throttled runqueue, so it can exceed throttled time with no contention. Raise the quota and see whether the wait falls with the throttling |
 
-A host-level `scheduler_runqueue_wait` spike can come from one cgroup at its CPU limit while CPUs are idle. Compare it with the sum of `cgroup_cpu_throttled_time` before reading it as CPU contention.
+A host-level `scheduler_runqueue_wait` spike can come from one cgroup at its CPU limit while CPUs are idle. Check whether it coincides with a rise in `cgroup_cpu_throttled_time` before reading it as contention for CPUs.
 
 ## ENA allowance limits (AWS)
 

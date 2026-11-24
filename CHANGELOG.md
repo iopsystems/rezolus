@@ -77,7 +77,7 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   Exceptions section's CPU Throttling group plots Throttled Time and Bandwidth
   Throttled Time per cgroup. A recording from an agent that predates this
   change and sends its section template (6.0.0-alpha.62 on) shows these plots
-  only with `rezolus view --registry-templates`. (#1739, #1738)
+  only with `rezolus view --registry-templates`. (#1738, #1739)
 
 - **`cpu_isolated`, from the `cpu_cores` sampler on Linux: the number of
   online CPUs in `/sys/devices/system/cpu/isolated`** (`isolcpus=`, `domain`
@@ -323,7 +323,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 - **The Scheduler section's Runqueue Wait and Runqueue Latency descriptions
   say the wait includes time throttled by a cgroup CPU quota.** Runqueue Wait
   called values above 1s/s an indicator of scheduler pressure, but one cgroup
-  at its CPU limit produces the same value with CPUs idle. A recording from an
+  at its CPU limit produces the same value with CPUs idle. Releases from 5.12.0
+  through 5.32.0 and the 6.0 prereleases have this. A recording from an
   agent that predates this change and sends its section template
   (6.0.0-alpha.62 on) shows the old descriptions unless viewed with `rezolus
   view --registry-templates`. (#1737)
