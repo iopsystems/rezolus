@@ -12,19 +12,19 @@
   a quota. The Scheduler section plots `scheduler_discarded_samples` when the
   recording has it (agents from 5.18.0 on), and the Exceptions section plots
   Throttled Time and Bandwidth Throttled Time per cgroup. Backported from 6.0
-  (#1732, #1751) in #PRNUM. (#1186, #1738, #1739)
+  (#1732, #1751) in #1752. (#1186, #1738, #1739)
 
 ### Fixed
 
 - The Exceptions section plots Throttled Time and Bandwidth Throttled Time as
   time per second. Releases from 5.13.0 through 5.32.0 drew seconds per second
   as a percentage, so 1.5 s/s read as 150%. Backported from 6.0 (#1751) in
-  #PRNUM. (#1738)
+  #1752. (#1738)
 - The Scheduler section's Runqueue Wait and Runqueue Latency descriptions say
   the wait includes time throttled by a cgroup CPU quota. Releases from 5.12.0
   through 5.32.0 called Runqueue Wait above 1s/s an indicator of scheduler
   pressure, but one cgroup at its CPU limit produces the same value with CPUs
-  idle. Backported from 6.0 (#1751) in #PRNUM. (#1737)
+  idle. Backported from 6.0 (#1751) in #1752. (#1737)
 
 ## [5.32.0] - 2026-11-15
 
