@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Security
+
+- url 2.5.9 (form_urlencoded 1.2.3), for RUSTSEC-2026-0592: `Url::origin()`
+  on a URL with deeply nested `blob:` prefixes overflows the stack in 2.5.8
+  and earlier. Rezolus does not call `Url::origin()` or
+  `url::quirks::origin()`, and neither do reqwest or tower-http, the crates
+  through which it depends on `url`. No `Cargo.toml` requirement changes.
+  Backported from 6.0 (#1746) in #1755.
+
 ### Added
 
 - The Cgroups section plots scheduling, CPU quota and throttling per cgroup.
