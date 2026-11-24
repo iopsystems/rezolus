@@ -25,7 +25,7 @@
       "subgroups": [
         {
           "name": "Runqueue Latency",
-          "description": "How long tasks waited on the runqueue before getting CPU time.",
+          "description": "How long tasks waited on the runqueue before getting CPU time, including time throttled by a cgroup CPU quota.",
           "plots": [
             {
               "rate_mean": {
@@ -48,7 +48,7 @@
         },
         {
           "name": "Runqueue Wait",
-          "description": "Accumulated runqueue wait time, averaged across CPUs and broken out per-CPU. A value of 1s/s means one task was waiting for the entire interval; values above 1s/s mean multiple tasks were queued concurrently — an indicator of scheduler pressure.",
+          "description": "Accumulated runqueue wait time, averaged across CPUs and broken out per-CPU. A value of 1s/s means one task was waiting for the entire interval; values above 1s/s mean multiple tasks were queued concurrently. The wait includes time a task spent on a runqueue throttled by its cgroup's CPU quota, so a high value can come from one cgroup at its CPU limit rather than from contention for CPUs. Compare with CPU Throttled Time on the Cgroups page.",
           "plots": [
             {
               "split": {

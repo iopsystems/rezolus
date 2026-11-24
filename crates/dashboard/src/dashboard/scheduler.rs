@@ -16,7 +16,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut scheduler = Group::new("Scheduler", "scheduler");
 
     let queueing = scheduler.subgroup("Runqueue Latency");
-    queueing.describe("How long tasks waited on the runqueue before getting CPU time.");
+    queueing.describe("How long tasks waited on the runqueue before getting CPU time, including time throttled by a cgroup CPU quota.");
     queueing.histogram_rate_mean(
         "Runqueue",
         "scheduler-runqueue-latency",
@@ -35,7 +35,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     wait.describe(
         "Accumulated runqueue wait time, averaged across CPUs and broken out per-CPU. \
          A value of 1s/s means one task was waiting for the entire interval; values above \
-         1s/s mean multiple tasks were queued concurrently — an indicator of scheduler pressure.",
+         1s/s mean multiple tasks were queued concurrently. The wait includes time a task \
+         spent on a runqueue throttled by its cgroup's CPU quota, so a high value can come \
+         from one cgroup at its CPU limit rather than from contention for CPUs. Compare with \
+         CPU Throttled Time on the Cgroups page.",
     );
     if multi_cpu {
         wait.plot_promql(

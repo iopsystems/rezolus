@@ -68,6 +68,22 @@
             },
             {
               "kind": "counter",
+              "title": "CPU Throttle Events",
+              "id": "aggregate-cpu-throttle-events",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_cpu_throttled{name!~\"__SELECTED_CGROUPS__\"}[5m]))",
+              "description": "Throttles of the cgroup's per-CPU runqueues per second. A cgroup throttled on N CPUs in one period counts N; Throttled Periods on the Exceptions page counts it once."
+            },
+            {
+              "kind": "counter",
+              "title": "Average Throttle Duration",
+              "id": "aggregate-cpu-throttle-duration",
+              "unit": "time",
+              "query": "sum(irate(cgroup_cpu_throttled_time{name!~\"__SELECTED_CGROUPS__\"}[5m])) / sum(irate(cgroup_cpu_throttled{name!~\"__SELECTED_CGROUPS__\"}[5m]))",
+              "description": "Throttled time divided by throttle events, per CPU runqueue. A throttle is counted when it starts and its time is added when it ends, so an interval can show more than any one throttle lasted, 0 while throttles are in progress, or a gap when throttles end and none start."
+            },
+            {
+              "kind": "counter",
               "title": "Runqueue Wait",
               "id": "aggregate-runqueue-wait",
               "unit": "time",
@@ -507,6 +523,24 @@
               "style": "multi",
               "unit": "time",
               "query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "CPU Throttle Events",
+              "id": "individual-cpu-throttle-events",
+              "style": "multi",
+              "unit": "rate",
+              "query": "sum by (name) (irate(cgroup_cpu_throttled{name=~\"__SELECTED_CGROUPS__\"}[5m]))",
+              "description": "Throttles of the cgroup's per-CPU runqueues per second. A cgroup throttled on N CPUs in one period counts N; Throttled Periods on the Exceptions page counts it once."
+            },
+            {
+              "kind": "counter",
+              "title": "Average Throttle Duration",
+              "id": "individual-cpu-throttle-duration",
+              "style": "multi",
+              "unit": "time",
+              "query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_throttled{name=~\"__SELECTED_CGROUPS__\"}[5m]))",
+              "description": "Throttled time divided by throttle events, per CPU runqueue. A throttle is counted when it starts and its time is added when it ends, so an interval can show more than any one throttle lasted, 0 while throttles are in progress, or a gap when throttles end and none start."
             },
             {
               "kind": "gauge",
