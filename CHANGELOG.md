@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.33.0] - 2026-11-24
+
 ### Security
 
 - url 2.5.9 (form_urlencoded 1.2.3), for RUSTSEC-2026-0592: `Url::origin()`
@@ -2281,7 +2283,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.32.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.33.0...HEAD
+[5.33.0]: https://github.com/iopsystems/rezolus/compare/v5.32.0...v5.33.0
 [5.32.0]: https://github.com/iopsystems/rezolus/compare/v5.31.0...v5.32.0
 [5.31.0]: https://github.com/iopsystems/rezolus/compare/v5.30.0...v5.31.0
 [5.30.0]: https://github.com/iopsystems/rezolus/compare/v5.29.2...v5.30.0
