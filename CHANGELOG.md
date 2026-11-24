@@ -6,7 +6,8 @@
   on a URL with deeply nested `blob:` prefixes overflows the stack in 2.5.8
   and earlier. Rezolus does not call `Url::origin()` or
   `url::quirks::origin()`, and neither do reqwest or tower-http, the crates
-  through which it depends on `url`. No `Cargo.toml` requirement changes. Backported from 6.0 (#1746) in #PRNUM.
+  through which it depends on `url`. No `Cargo.toml` requirement changes.
+  Backported from 6.0 (#1746) in #1755.
 
 ## [5.32.0] - 2026-11-15
 
