@@ -1432,15 +1432,15 @@ fn scoped_labels(
         .filter(|t| table_passes(&extras.of(t).inner, matchers) != Some(false))
         .flat_map(|t| table_labels(t, extras.of(t), kind, name))
         .filter(|l| matchers.iter().all(|m| m.matches(l)))
-        // The sources of one read group (a recording and its copy) carry one
-        // label set, so their tables list a series once each; it is listed
-        // once, as the archive's own listing does.
+        // Sources of one read group (one agent process recorded twice)
+        // usually carry one label set, so their tables list a series once
+        // each; it is listed once, as the archive's own listing does.
         .filter(|l| seen.insert(l.clone()))
         .collect()
 }
 
-/// The engine scope reading the sources with `uuids` (each with its copies),
-/// or `None` for none: a scope naming no source would read nothing.
+/// The engine scope reading the sources with `uuids`, or `None` for none:
+/// a scope naming no source would read nothing.
 pub fn scope_of(uuids: &[String]) -> Option<Arc<metriken_query::Scope>> {
     let mut uuids: Vec<&String> = uuids.iter().collect();
     uuids.sort_unstable();

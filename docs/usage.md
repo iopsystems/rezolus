@@ -712,12 +712,12 @@ and remove the metadata keys themselves.
 layers, either way.
 
 `annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
-copy, given `-o`). A recording read from several sources (a recording and its snapshot,
-combined) takes each metadata key from the first source holding it, so
-removing KPIs from one copy with `--undo` does not remove them from a
-combined recording whose other source still has them: annotate the combined
-recording instead, which edits every source. A new output is written in a
-directory beside it,
+copy, given `-o`). A recording read from several sources (one agent process
+recorded twice, combined) takes each metadata key from the first source
+holding it, so removing KPIs from one file with `--undo` does not remove
+them from a combined recording whose other source still has them: annotate
+the combined recording instead, which edits every source. A new output is
+written in a directory beside it,
 `.<output>.rezolus-staging.<pid>.<random>`, and appears only once it is
 complete; it never replaces a file that exists, except an in-place `filter`
 (which replaces its input) and `convert --force`. A command killed part way

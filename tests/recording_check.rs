@@ -526,32 +526,66 @@ fn an_invalid_check_in_the_queries_file_is_refused() {
     assert!(stderr(&out).contains("exactly one"), "{}", stderr(&out));
 }
 
-/// A recording read from a source and its snapshot carries a key only one
-/// of them holds: KPIs annotated onto the snapshot are the recording's
-/// whichever order the two are combined in, and `recording check` runs them.
+/// `recording combine` refuses a recording and its snapshot (one source,
+/// which an archive holds once), naming both files. A recording read from
+/// two sources with one uuid (an archive a build before 6.0.0-alpha.169
+/// combined from a recording and its snapshot) carries a key only one of
+/// them holds: KPIs annotated onto the second are the recording's whichever
+/// order the two were combined in, and `recording check` runs them.
 #[test]
-fn kpis_on_a_snapshot_are_the_combined_recordings() {
+fn kpis_on_one_source_are_the_recordings() {
     let dir = tempfile::tempdir().unwrap();
     let a = dendro_fixture(dir.path());
-    let copy = dir.path().join("snap.dendro");
+    let snap = dir.path().join("snap.dendro");
     let out = rezolus(&[
         "recording",
         "snapshot",
         a.to_str().unwrap(),
         "-o",
-        copy.to_str().unwrap(),
+        snap.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let refused = dir.path().join("refused.dendro");
+    let out = rezolus(&[
+        "recording",
+        "combine",
+        a.to_str().unwrap(),
+        snap.to_str().unwrap(),
+        "-o",
+        refused.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains(&format!(
+            "{} and {} hold the same source",
+            a.display(),
+            snap.display()
+        )),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!refused.exists());
+
+    // A second upgrade of the same capture is a source with its own uuid.
+    let other = dir.path().join("other.dendro");
+    let out = rezolus(&[
+        "recording",
+        "upgrade",
+        legacy_fixture().to_str().unwrap(),
+        "-o",
+        other.to_str().unwrap(),
     ]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let queries = write_queries(dir.path(), "q.json", FAILING);
     let out = rezolus(&[
         "recording",
         "annotate",
-        copy.to_str().unwrap(),
+        other.to_str().unwrap(),
         "--queries",
         queries.to_str().unwrap(),
     ]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    for (name, first, second) in [("ac.dendro", &a, &copy), ("ca.dendro", &copy, &a)] {
+    for (name, first, second) in [("ao.dendro", &a, &other), ("oa.dendro", &other, &a)] {
         let combined = dir.path().join(name);
         let out = rezolus(&[
             "recording",
@@ -562,6 +596,7 @@ fn kpis_on_a_snapshot_are_the_combined_recordings() {
             combined.to_str().unwrap(),
         ]);
         assert!(out.status.success(), "{name}: {}", stderr(&out));
+        rez::fixtures::one_uuid(&combined);
         let out = rezolus(&["recording", "check", combined.to_str().unwrap()]);
         assert_eq!(out.status.code(), Some(1), "{name}: {}", stderr(&out));
         assert!(

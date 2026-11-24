@@ -209,6 +209,29 @@ fn unused_name(stem: &str, taken: &[&str]) -> String {
         .expect("an unbounded sequence")
 }
 
+/// The refusal for an archive holding two sources with one uuid, which a
+/// build before 6.0.0-alpha.169 wrote when it combined a recording with a
+/// copy of it. dendro holds each source once in an archive, so a copy of
+/// that archive is refused at the second source.
+pub fn duplicate_source(uuid: &str) -> String {
+    format!(
+        "the archive holds two sources with uuid {uuid}, which a build before \
+         6.0.0-alpha.169 wrote when it combined a recording with a copy of it. A new \
+         archive holds each source once, so this one cannot be copied: `snapshot`, \
+         `filter`, an edit with -o, `combine` and Save as Report refuse it; `annotate`, \
+         `check --annotate` and the MCP event tools edit it in place"
+    )
+}
+
+/// `e` as a message, with [`duplicate_source`] for
+/// `dendro::Error::DuplicateSource`: the error a copy of an archive returns.
+pub fn copy_error(e: dendro::Error) -> String {
+    match e {
+        dendro::Error::DuplicateSource { uuid } => duplicate_source(&uuid),
+        e => e.to_string(),
+    }
+}
+
 /// `path` as a command-line argument for a POSIX shell: single-quoted
 /// unless every character is safe bare (letters, digits and `_-.,:/=@%+`),
 /// and prefixed with `./` when it starts with `-`, so it is not read as an

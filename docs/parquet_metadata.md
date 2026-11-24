@@ -530,8 +530,8 @@ target/release/rezolus recording annotate file.parquet --add-events events.json 
   canonical storage is always `u64` nanoseconds.
 
 In a `.dendro` each recording keeps its events in its own metadata. A
-recording read from several sources (a source and its snapshot, which the
-readers present as one recording) shows the union of their events, deduped
+recording read from several sources (one agent process recorded twice,
+which the readers present as one recording) shows the union of their events, deduped
 by `id`; `remove_events` drops an event from each source's own payload.
 
 ## `per_source_metadata`
@@ -645,7 +645,7 @@ mutators are:
 |------|--------------------|
 | `rezolus record --metadata k=v` | Anything written at recording time; `--metadata` sets any top-level key, `node` and `instance` included. (The dedicated `--node`/`--instance` flags were removed — they never wrote anything.) |
 | `rezolus recording annotate` | In each recording of a `.dendro`: adds/replaces `service_queries` (`--queries`) or removes it (`--undo`), sets/replaces `systeminfo` (`--systeminfo PATH`, or `-` for stdin), and appends, inserts or wipes `events` (`--add-events PATH` / `--event KV` / `--clear-events`). |
-| `rezolus recording combine --ab` | Adds the `arm` label to each input's recordings (`--ab baseline=a.dendro experiment=b.dendro`), or, with one archive input, to the recordings at the two positions `rezolus mcp describe-recording` prints (`--ab baseline=0 experiment=1`; every source of a recording, such as a source and its snapshot, takes its arm). |
+| `rezolus recording combine --ab` | Adds the `arm` label to each input's recordings (`--ab baseline=a.dendro experiment=b.dendro`), or, with one archive input, to the recordings at the two positions `rezolus mcp describe-recording` prints (`--ab baseline=0 experiment=1`; every source of a recording, such as one agent process recorded twice, takes its arm). |
 
 6.x has no tool that edits a `.rez` or a parquet file.
 

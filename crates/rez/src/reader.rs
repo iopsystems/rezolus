@@ -99,8 +99,9 @@ impl RezReader {
     /// onto baseline/experiment without cross-recording name collisions.
     ///
     /// A recording is a read group of the archive's sources
-    /// (`ArchiveReader::open_read_groups`): a source and its copies, and
-    /// sources of one producer epoch over overlapping time, are one,
+    /// (`ArchiveReader::open_read_groups`): sources sharing a uuid (which
+    /// only an archive written before 6.0.0-alpha.169 holds), and sources of
+    /// one producer epoch over overlapping time, are one,
     /// labelled with the group's labels, and its metadata is the group's
     /// (`metriken_storage::process::merge_metadata`: the union of the
     /// sources' events, every other key from the first source holding it).

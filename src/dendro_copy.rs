@@ -46,6 +46,11 @@ pub(crate) fn copy(src: &Archive, dest: &Path, spec: &CopySpec<'_>) -> Result<us
 /// [`copy`], with the spec decided by `spec` from the source as the copy's
 /// read snapshot sees it, so a spec that depends on the stream list agrees
 /// with what is copied.
+///
+/// An archive holds one source per uuid, so an archive holding two sources
+/// with one uuid (which a build before 6.0.0-alpha.169 wrote when it
+/// combined a recording with a copy of it) cannot be copied, and the error
+/// says so (`rez::container::duplicate_source`).
 pub(crate) fn copy_with<'s, S: std::borrow::Borrow<CopySpec<'s>>>(
     src: &Archive,
     dest: &Path,
@@ -60,7 +65,7 @@ pub(crate) fn copy_with<'s, S: std::borrow::Borrow<CopySpec<'s>>>(
                 copy_sources_into(src, tx, spec.borrow(), &encoder)
             })
         })
-        .map_err(err)?;
+        .map_err(::rez::container::copy_error)?;
     drop(dst);
     Ok(copied)
 }
@@ -202,6 +207,33 @@ pub(crate) mod fixtures {
 mod tests {
     use super::fixtures;
     use super::*;
+
+    /// An archive with two sources under one uuid (written before
+    /// 6.0.0-alpha.169 by a combine of a recording and its snapshot) is not
+    /// copied, and the error names the uuid and the cause.
+    #[test]
+    fn an_archive_with_two_sources_under_one_uuid_is_not_copied() {
+        use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
+        let dir = tempfile::tempdir().unwrap();
+        let source = || Source {
+            labels: map(&[("source", "rezolus")]),
+            metadata: map(&[]),
+            rows: (0..3u64)
+                .map(|i| {
+                    let ts = ANCHOR + i * 1_000_000_000;
+                    (snap_counters(ts, vec![counter("ops", "s", i, None)]), ts)
+                })
+                .collect(),
+        };
+        let old = dir.path().join("old.dendro");
+        write_dendro(&old, &[source(), source()], None, Finish::Finalized);
+        ::rez::fixtures::one_uuid(&old);
+        let src = Archive::open(&old).unwrap();
+        let uuid = src.read_sources().unwrap()[0].uuid.clone().unwrap();
+        let dest = dir.path().join("copy.dendro");
+        let err = copy(&src, &dest, &CopySpec::everything()).unwrap_err();
+        assert!(err == ::rez::container::duplicate_source(&uuid), "{err}");
+    }
 
     /// A copy of an archive left with rows in its WAL is fully sealed, and
     /// holds every row: the tail becomes the copy's last segments.

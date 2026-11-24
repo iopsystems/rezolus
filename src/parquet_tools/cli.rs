@@ -831,9 +831,8 @@ mod help {
                          INDETERMINATE never fail the run. No checks at all is 0, with a note on\n\
                          stderr.\n\n\
                          MULTI-RECORDING ARCHIVE: with no --recording every recording is checked and\n\
-                         each line is prefixed with its labels; --recording k=v narrows to one. A\n\
-                         recording and its copies (one source copied, or recorded twice from one\n\
-                         agent process) are one recording.\n\n\
+                         each line is prefixed with its labels; --recording k=v narrows to one. One\n\
+                         agent process recorded twice over the same time is one recording.\n\n\
                          --annotate writes each FAIL/WARN window into the recording as a range\n\
                          event: kind=check, timestamp=window start, duration_ns=span (the event\n\
                          ends one step after the last violating point), description=the KPI title,\n\
@@ -862,8 +861,9 @@ mod help {
     pub(super) const COMBINE_LONG: &str = "Assemble two or more .dendro archives into one, a recording per input\n\
                          recording, which the viewer opens as one combined view. Requires at least\n\
                          two inputs (one archive with --ab, below) and an output (-o) ending in\n\
-                         .dendro. A recording and its copy (a snapshot, a hindsight dump) given\n\
-                         together are read as one recording, as {viewer} reads them.\n\n\
+                         .dendro. Two inputs that hold the same source (a file and a snapshot of\n\
+                         it, two snapshots or hindsight dumps of one recording, or one file given\n\
+                         twice) are refused, naming both: an archive holds each source once.\n\n\
                          With `--ab baseline=<input> experiment=<input>` each input's recordings\n\
                          are labelled arm=baseline or arm=experiment and the viewer opens a\n\
                          baseline/experiment comparison; an input recording that already carries\n\
@@ -871,7 +871,7 @@ mod help {
                          is an input's path or file name. With ONE archive input, each value is\n\
                          the position of one of its recordings, from 0,\n\
                          {list_recordings_order}.\n\
-                         Every source of a recording, such as a source and its snapshot, takes\n\
+                         Every source of a recording (one agent process recorded twice) takes\n\
                          its arm. That is the way to compare the two recordings of an archive\n\
                          combined without --ab, whose labels may be identical.\n\n\
                          --pinned, --category and --bypass-time-check applied to the parquet\n\

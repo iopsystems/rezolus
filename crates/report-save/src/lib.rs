@@ -241,14 +241,26 @@ pub fn build_report(
 
 /// `baseline` and `experiment` joined into one in-memory archive, every
 /// source of each copied whole (its live tail sealed) and labelled
-/// `arm=baseline` or `arm=experiment`.
+/// `arm=baseline` or `arm=experiment`. Refused when the two files share a
+/// source (both copies of one recording): an archive holds each source
+/// once.
 fn arms(
     baseline: &dendro::archive::Archive,
     experiment: &dendro::archive::Archive,
 ) -> Result<dendro::archive::ArchiveMut, String> {
     use dendro::archive::ArchiveMut;
     use dendro::rewrite::{copy_sources_into, CopySpec};
-    let err = |e: dendro::Error| e.to_string();
+    let err = rez::container::copy_error;
+    if let Some(uuid) = dendro::rewrite::shared_sources(baseline, experiment)
+        .map_err(err)?
+        .first()
+    {
+        return Err(format!(
+            "the baseline and experiment files hold the same source (uuid {uuid}): both \
+             are copies of one recording. A report holds each source once, so it cannot \
+             hold this comparison"
+        ));
+    }
     let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
     let mut arm_of = Vec::new();
     for (src, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
@@ -320,7 +332,7 @@ fn build_dendro_report(
     use dendro::archive::ArchiveMut;
     use dendro::rewrite::{copy_sources_into, ColumnFilter, CopySpec};
     use rez::occupants::table_of;
-    let err = |e: dendro::Error| e.to_string();
+    let err = rez::container::copy_error;
 
     let mut names = Vec::new();
     for s in src.read_sources().map_err(err)? {
@@ -898,9 +910,13 @@ mod tests {
         );
     }
 
+    /// An archive's bytes, and the labels to give its sources.
+    type Part<'a> = (&'a [u8], Option<&'a [(&'a str, &'a str)]>);
+
     /// An archive of `parts`' sources, each copied whole, and labelled `labels`
-    /// when given (a copy keeps its source's uuid).
-    fn joined(parts: &[(&[u8], Option<&[(&str, &str)]>)]) -> Vec<u8> {
+    /// when given (a copy keeps its source's uuid), every source's metadata
+    /// holding `producer_epoch` `epoch` when given.
+    fn joined(parts: &[Part<'_>], epoch: Option<&str>) -> Vec<u8> {
         use dendro::archive::{Archive, ArchiveMut};
         use dendro::rewrite::{copy_sources_into, CopySpec};
         let mut dst = ArchiveMut::create_in_memory().unwrap();
@@ -924,12 +940,20 @@ mod tests {
                 }
             }
         }
+        if let Some(epoch) = epoch {
+            for source in dst.read_sources().unwrap() {
+                let mut metadata = source.meta.metadata.clone();
+                metadata.insert("producer_epoch".to_string(), epoch.to_string());
+                dst.update_source_metadata(source.id, &metadata).unwrap();
+            }
+        }
         dst.serialize().unwrap()
     }
 
     /// A side is counted in recordings (read groups), as the viewers count
-    /// them: a source and its copy with an extra label are one recording and
-    /// save; two sources of separate recorders with identical labels are two
+    /// them: one agent process recorded twice (one `producer_epoch`, the
+    /// same span), the second with an extra label, is one recording and
+    /// saves; two sources of separate recorders with identical labels are two
     /// and are refused.
     #[test]
     fn a_compare_side_is_counted_in_recordings() {
@@ -948,10 +972,14 @@ mod tests {
                 None,
             )
         };
-        let copy = joined(&[
-            (&a, None),
-            (&a, Some(&[("source", "redis"), ("env", "prod")])),
-        ]);
+        let again = dendro(&rez_test_parquet("redis", "cpu_usage", "cpu_cycles"));
+        let copy = joined(
+            &[
+                (&a, None),
+                (&again, Some(&[("source", "redis"), ("env", "prod")])),
+            ],
+            Some("E"),
+        );
         let out = save(&copy).unwrap();
         let opened = rez::reader::RezReader::open_recordings_from_bytes(
             out,
@@ -964,10 +992,34 @@ mod tests {
             "{labels:?}"
         );
 
-        let twins = joined(&[(&a, None), (&b, Some(&[("source", "redis")]))]);
+        let twins = joined(&[(&a, None), (&b, Some(&[("source", "redis")]))], None);
         let err = save(&twins).unwrap_err();
         assert!(
             err.starts_with("the baseline file holds 2 recordings"),
+            "{err}"
+        );
+    }
+
+    /// A comparison of a file with a copy of it (one source) is refused:
+    /// a report holds a source once.
+    #[test]
+    fn a_comparison_of_a_file_with_its_copy_is_refused() {
+        let a = dendro(&rez_test_parquet("redis", "cpu_usage", "cpu_cycles"));
+        let copy = joined(&[(&a, Some(&[("source", "redis"), ("env", "prod")]))], None);
+        let err = build_report(
+            ReportSource::Compare {
+                baseline: &a,
+                experiment: &copy,
+            },
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("the baseline and experiment files hold the same source (uuid "),
             "{err}"
         );
     }

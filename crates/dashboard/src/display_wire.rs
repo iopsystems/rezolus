@@ -37,8 +37,9 @@ pub fn parse_rate_mode(s: Option<&str>) -> RateMode {
 }
 
 /// Parse a scope argument: the uuids of the sources a query reads,
-/// separated by commas (a uuid names a source and its copies; one named
-/// twice is read once). Absent reads every source. Present but naming no
+/// separated by commas (a uuid names one source, or in an archive written
+/// before 6.0.0-alpha.169 a source and its copies; one named twice is read
+/// once). Absent reads every source. Present but naming no
 /// source is an error: read as absent it would read every source, and as an
 /// empty scope it would answer with an empty result. Shared by both
 /// backends.
@@ -452,8 +453,8 @@ mod tests {
         assert_eq!(cols[6], vec![1.0]);
     }
 
-    /// A scope argument is uuids separated by commas, each a source and its
-    /// copies, read once however often named; absent reads every source,
+    /// A scope argument is uuids separated by commas, each naming one
+    /// source, read once however often named; absent reads every source,
     /// and present but naming none is refused.
     #[test]
     fn a_scope_is_uuids_separated_by_commas() {

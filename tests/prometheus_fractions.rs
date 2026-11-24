@@ -84,11 +84,13 @@ fn spawn_exporter() -> u16 {
 
 /// The recording both tests read: the exporter recorded for 11 seconds at
 /// 200 ms (`mcp detect-anomalies` refuses less than 10 seconds of data),
-/// made once per test run under `CARGO_TARGET_TMPDIR`.
+/// made once per test process under `CARGO_TARGET_TMPDIR`, in a directory
+/// of the process's own: nextest runs each test in a process.
 fn recording() -> &'static std::path::Path {
     static ARCHIVE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     ARCHIVE.get_or_init(|| {
-        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("prometheus_fractions");
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("prometheus_fractions-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let output = dir.join("fractions.dendro");

@@ -952,39 +952,38 @@ mod tests {
         assert!(appended.counts.nothing_new());
     }
 
-    /// A recording of two sources (a source and its snapshot, each annotated
-    /// alone) shows both sources' events, and removing one event drops it
-    /// from each source's own payload: the copy keeps the event only it
-    /// holds.
+    /// A recording of two sources (one agent process recorded twice: one
+    /// `producer_epoch`, the same span; each file annotated alone) shows
+    /// both sources' events, and removing one event drops it from each
+    /// source's own payload: the second keeps the event only it holds.
     #[test]
     fn a_recordings_sources_keep_their_own_events() {
         use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
         use metriken_query::MetricsSource;
         let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("a.dendro");
-        let rows = (0..4u64)
-            .map(|i| {
-                let ts = ANCHOR + i * 1_000_000_000;
-                let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
-                (snap_counters(ts, vec![counter("ops", "s", i, w)]), ts)
-            })
-            .collect();
-        let source = Source {
+        let source = || Source {
             labels: map(&[("source", "rezolus")]),
-            metadata: map(&[]),
-            rows,
+            metadata: map(&[("producer_epoch", "E")]),
+            rows: (0..4u64)
+                .map(|i| {
+                    let ts = ANCHOR + i * 1_000_000_000;
+                    let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                    (snap_counters(ts, vec![counter("ops", "s", i, w)]), ts)
+                })
+                .collect(),
         };
-        write_dendro(&a, &[source], None, Finish::Finalized);
+        let a = dir.path().join("a.dendro");
+        let b = dir.path().join("b.dendro");
+        write_dendro(&a, &[source()], None, Finish::Finalized);
+        write_dendro(&b, &[source()], None, Finish::Finalized);
         let any = crate::parquet_tools::select::RecordingSelector::default();
         let event = |id: &str| {
             parse_inline_event(&format!("time={},id={id},description={id}", ANCHOR + 1)).unwrap()
         };
         add_events_selected(&a, None, &any, vec![event("E1")], "rezolus").unwrap();
-        let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
-        add_events_selected(&copy, None, &any, vec![event("E2")], "rezolus").unwrap();
+        add_events_selected(&b, None, &any, vec![event("E2")], "rezolus").unwrap();
         let grp = dir.path().join("grp.dendro");
-        crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &grp).unwrap();
+        crate::parquet_tools::combine::run_combine_for_test(&[a, b], &grp).unwrap();
 
         let shown = |path: &Path| -> Vec<String> {
             let readers = ::rez::reader::RezReader::open_recordings(
@@ -992,7 +991,11 @@ mod tests {
                 metriken_storage::BufferPool::new(8 << 20),
             )
             .unwrap();
-            assert_eq!(readers.len(), 1, "a source and its copy are one recording");
+            assert_eq!(
+                readers.len(),
+                1,
+                "one process recorded twice is one recording"
+            );
             readers[0]
                 .1
                 .file_metadata()

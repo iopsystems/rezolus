@@ -158,7 +158,7 @@ pub(crate) fn load_queries(path: &Path) -> Result<String, String> {
 /// The metadata edits one `annotate` invocation applies to the recordings of
 /// a dendro archive. A recording is a read group of the archive's sources
 /// (`RezReader::open_recordings`): an edit of a recording is written into
-/// each of its sources, so a recording and its copy stay alike.
+/// each of its sources, so its sources stay alike.
 pub(crate) struct RezAnnotation<'a> {
     /// The program name refusals spell commands with (`Host::program`).
     pub(crate) program: &'a str,
@@ -1120,17 +1120,20 @@ mod tests {
         assert!(!source_metadata(&path)[0].contains_key(KEY_EVENTS));
     }
 
-    /// A recording and its copy are one recording: an event added to it is
-    /// written into both sources, and reported once.
+    /// Two sources with one uuid (an archive a build before 6.0.0-alpha.169
+    /// combined from a recording and its snapshot) are one
+    /// recording: an event added to it is written into both sources, and
+    /// reported once.
     #[test]
     fn annotate_writes_a_recording_into_each_of_its_sources() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.dendro");
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
-        let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
+        let b = dir.path().join("b.dendro");
+        crate::dendro_copy::fixtures::recorded(&b, 6, true);
         let both = dir.path().join("both.dendro");
-        crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &both).unwrap();
+        crate::parquet_tools::combine::run_combine_for_test(&[a, b], &both).unwrap();
+        ::rez::fixtures::one_uuid(&both);
         assert_eq!(source_metadata(&both).len(), 2, "two sources");
 
         let inline = vec!["timestamp=1700000002000000000,description=marker".to_string()];
