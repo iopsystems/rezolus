@@ -77,6 +77,86 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     group.plot_promql(
         PlotOpts::counter(
+            "CPU Throttle Events",
+            format!("{prefix}-cpu-throttle-events"),
+            Unit::Rate,
+        )
+        .with_description(
+            "Throttles of the cgroup's per-CPU runqueues per second. A cgroup throttled \
+             on N CPUs in one period counts N; Throttled Periods on the Exceptions page \
+             counts it once.",
+        ),
+        rate("cgroup_cpu_throttled"),
+    );
+
+    // Throttled time over throttle events: separates many short throttles
+    // from a few long ones, which the throttled time alone cannot.
+    group.plot_promql(
+        PlotOpts::counter(
+            "Average Throttle Duration",
+            format!("{prefix}-cpu-throttle-duration"),
+            Unit::Time,
+        )
+        .with_description(
+            "Throttled time divided by throttle events, per CPU runqueue. A throttle is \
+             counted when it starts and its time is added when it ends, so an interval can \
+             show more than any one throttle lasted, 0 while throttles are in progress, or \
+             a gap when throttles end and none start.",
+        ),
+        format!(
+            "{} / {}",
+            rate("cgroup_cpu_throttled_time"),
+            rate("cgroup_cpu_throttled")
+        ),
+    );
+
+    // A quota summed over cgroups is not a limit on anything, so only the
+    // individual side has it. A cgroup with no quota reports -1.
+    // metriken-query 0.33 has no comparison operator, so `(q + 1) / (q + 1)`
+    // stands in for `q > 0`: it is 1 for a quota and a division by zero for
+    // -1, which the engine drops, so only cgroups with a quota are plotted.
+    if individual {
+        group.plot_promql(
+            PlotOpts::gauge("CPU Quota (Cores)", "individual-cpu-quota", Unit::Count),
+            format!(
+                "sum by (name) ((cgroup_cpu_bandwidth_quota{{{filter}}} + 1) / (cgroup_cpu_bandwidth_quota{{{filter}}} + 1) * cgroup_cpu_bandwidth_quota{{{filter}}} / cgroup_cpu_bandwidth_period_duration{{{filter}}})"
+            ),
+        );
+    }
+
+    group.plot_promql(
+        PlotOpts::counter(
+            "Runqueue Wait",
+            format!("{prefix}-runqueue-wait"),
+            Unit::Time,
+        ),
+        rate("cgroup_scheduler_runqueue_wait"),
+    );
+
+    group.plot_promql(
+        PlotOpts::counter("Off-CPU Time", format!("{prefix}-offcpu-time"), Unit::Time),
+        rate("cgroup_scheduler_offcpu"),
+    );
+
+    group.plot_promql(
+        PlotOpts::counter(
+            "Involuntary Context Switches",
+            format!("{prefix}-involuntary-cswitch"),
+            Unit::Rate,
+        ),
+        if individual {
+            format!(
+                "sum by (name) (irate(cgroup_scheduler_context_switch{{kind=\"involuntary\",{filter}}}[5m]))"
+            )
+        } else {
+            format!(
+                "sum(irate(cgroup_scheduler_context_switch{{kind=\"involuntary\",{filter}}}[5m]))"
+            )
+        },
+    );
+
+    group.plot_promql(
+        PlotOpts::counter(
             "ext4 Blocked Time",
             format!("{prefix}-ext4-blocked-time"),
             Unit::Time,
