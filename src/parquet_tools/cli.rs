@@ -324,15 +324,11 @@ pub enum Recording {
     // About rendered by `command`: it names the table flag's noun.
     Filter(FilterArgs),
     #[command(
-        about = "Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive"
+        about = "Bring a recording an earlier release wrote up to date: a .rez, .parquet or .parquet.ab.tar to a .dendro archive, or a .dendro archive to the current layout and indexes"
     )]
     Upgrade(UpgradeArgs),
     #[command(about = "Copy an archive that is still being written, without stopping the writer")]
     Snapshot(SnapshotArgs),
-    #[command(
-        about = "Rewrite a .dendro recording's segment indexes in place, so its tables open faster"
-    )]
-    Reindex(ReindexArgs),
 }
 
 // The `Args` structs carry no doc comments: clap derive would turn them into
@@ -608,14 +604,14 @@ pub struct FilterArgs {
 pub struct UpgradeArgs {
     #[arg(
         value_name = "FILE",
-        help = "The recording to convert: a .rez archive, a .parquet file or a .parquet.ab.tar"
+        help = "The recording to upgrade: a .rez archive, a .parquet file, a .parquet.ab.tar, or a .dendro archive (in place without -o)"
     )]
     pub file: PathBuf,
     #[arg(
         short = 'o',
         long = "output",
         value_name = "DENDRO",
-        help = "The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro); must not exist"
+        help = "The .dendro to write (default: for a .dendro input, the input itself; otherwise the input's name with .dendro for its extension, x.parquet.ab.tar becoming x.dendro); must not exist"
     )]
     pub output: Option<PathBuf>,
     #[arg(
@@ -642,15 +638,6 @@ pub struct SnapshotArgs {
         help = "The .dendro to write. Must not already exist."
     )]
     pub output: PathBuf,
-}
-
-#[derive(Args, Debug)]
-pub struct ReindexArgs {
-    #[arg(
-        value_name = "FILE",
-        help = "The archive to re-index (.dendro), in place; not one another process has open"
-    )]
-    pub file: PathBuf,
 }
 
 fn command(host: &Host) -> Command {
@@ -704,7 +691,6 @@ fn command(host: &Host) -> Command {
     .mut_subcommand("snapshot", |c| {
         c.long_about(host.render(help::SNAPSHOT_LONG))
     })
-    .mut_subcommand("reindex", |c| c.long_about(host.render(help::REINDEX_LONG)))
 }
 
 fn run(host: &Host, cmd: Recording) -> i32 {
@@ -724,10 +710,9 @@ fn run(host: &Host, cmd: Recording) -> i32 {
         Recording::Filter(args) => return super::filter::run(host, &args),
         Recording::Metadata(args) => super::metadata::run(host, &args),
         Recording::Upgrade(args) => {
-            super::upgrade_to_dendro(&args.file, args.output.as_deref(), &args.to)
+            super::upgrade_to_dendro(&args.file, args.output.as_deref(), &args.to, host.program)
         }
         Recording::Snapshot(args) => super::snapshot_rez(&args.file, &args.output, host.program),
-        Recording::Reindex(args) => super::reindex_dendro(&args.file, host.program).map(|_| ()),
     };
     match result {
         Ok(()) => 0,
@@ -755,8 +740,7 @@ mod help {
                  convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro\n    \
                  filter     Shrink a recording to the {table_noun} or metrics named\n    \
                  snapshot   Copy an archive that is still being written into a complete .dendro\n    \
-                 reindex    Rewrite a recording's segment indexes in place, so its tables open faster\n    \
-                 upgrade    Convert a recording an earlier release wrote into a .dendro archive\n\n\
+                 upgrade    Bring a recording an earlier release wrote up to date\n\n\
                  Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,\n\
                  a .parquet file or a .parquet.ab.tar A/B tarball is refused with the command\n\
                  that converts it: `{program} recording upgrade FILE`.\n\n\
@@ -971,10 +955,10 @@ mod help {
                          {program} recording filter capture.dendro --metrics cpu_usage,cpu_frequency";
 
     pub(super) const UPGRADE_LONG: &str =
-        "Write a new .dendro archive holding a recording an earlier release wrote:\n\
-                         a v1, v2 or v3 `.rez`, a standalone `.parquet`, or a `.parquet.ab.tar`\n\
-                         A/B tarball. Every other command opens .dendro archives only and refuses\n\
-                         these with this command.\n\n\
+        "Bring a recording an earlier release wrote up to what this release writes.\n\n\
+                         A v1, v2 or v3 `.rez`, a standalone `.parquet` or a `.parquet.ab.tar`\n\
+                         A/B tarball is converted into a new .dendro archive. Every other command\n\
+                         opens .dendro archives only and refuses these with this command.\n\n\
                          A v3 `.rez`'s recordings become sources and its tables streams; segment,\n\
                          WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings\n\
                          become sources with their labels, metadata, clock anchor and `complete`\n\
@@ -988,16 +972,31 @@ mod help {
                          An A/B tarball becomes two sources, its baseline labelled arm=baseline\n\
                          and its experiment arm=experiment, which the viewer opens as a\n\
                          comparison. Tar and parquet tables are re-encoded.\n\n\
-                         The input is never changed. -o defaults to the input's name with .dendro\n\
-                         for its extension (x.parquet.ab.tar becomes x.dendro), and an existing\n\
-                         output is refused.\n\n\
+                         A converted input is never changed. -o defaults to the input's name with\n\
+                         .dendro for its extension (x.parquet.ab.tar becomes x.dendro), and an\n\
+                         existing output is refused.\n\n\
+                         A .dendro archive is upgraded IN PLACE unless -o names a new file. Each\n\
+                         sealed segment's index is rewritten as this release writes it, so the\n\
+                         viewer opens a table from its segments' indexes instead of reading every\n\
+                         segment, and a table's first chart takes less time. An archive an earlier\n\
+                         6.0 build wrote is re-indexed with no segment's data rewritten. A 5.x\n\
+                         archive (schema 4) is copied into the current layout first, the copy\n\
+                         re-indexed and renamed over the input, which needs free space for one\n\
+                         copy. An archive already current is reported and left as it is. With -o,\n\
+                         the archive is copied there and the copy upgraded; the input is not\n\
+                         changed.\n\n\
+                         Upgrading in place is refused while another process has the archive\n\
+                         open (a viewer, a recording); upgrade a `{program} recording snapshot` of\n\
+                         one still being written. While it runs, the viewer cannot open the file.\n\n\
                          EXAMPLES:\n    \
                          # Writes old.dendro beside old.rez\n    \
                          {program} recording upgrade old.rez\n\n    \
                          # A parquet recording, to a chosen name\n    \
                          {program} recording upgrade capture.parquet -o capture.dendro\n\n    \
                          # An A/B tarball: writes ab.dendro, a two-arm comparison\n    \
-                         {program} recording upgrade ab.parquet.ab.tar";
+                         {program} recording upgrade ab.parquet.ab.tar\n\n    \
+                         # A .dendro archive, in place\n    \
+                         {program} recording upgrade run.dendro";
 
     pub(super) const SNAPSHOT_LONG: &str = "Take a complete, standalone .dendro copy of an archive while\n\
                          {appenders} is still appending to it.\n\n\
@@ -1015,28 +1014,6 @@ mod help {
                          EXAMPLES:\n    \
                          {buffer_example}{live_example}\n    \
                          {program} recording snapshot {agent}.dendro -o so-far.dendro";
-
-    pub(super) const REINDEX_LONG: &str =
-        "Rewrite the index of every sealed segment of a .dendro recording, in\n\
-                         place, as this release writes it. Opening a table then reads its\n\
-                         segments' indexes instead of every segment, so the first chart of a\n\
-                         table takes less time. No segment's data is rewritten: each segment is\n\
-                         read once to build its index.\n\n\
-                         A recording this release records needs no re-index, and neither does\n\
-                         a filter that keeps named metrics. A recording an earlier 6.0 build\n\
-                         wrote, and any copy of one (a snapshot, a combine, a filter of whole\n\
-                         tables), keeps the earlier indexes and needs one.\n\n\
-                         An archive another process has open (a viewer, a recording) is\n\
-                         refused; re-index it once that process closes it, or re-index a\n\
-                         `{program} recording snapshot` of it. While the re-index runs, the\n\
-                         viewer cannot open the file. An archive written before .dendro's\n\
-                         current layout (schema 5) is refused with the snapshot that copies it\n\
-                         into the current one.\n\n\
-                         EXAMPLES:\n    \
-                         {program} recording reindex run.dendro\n\n    \
-                         # A 5.x archive (schema 4): copy it, then re-index the copy\n    \
-                         {program} recording snapshot old.dendro -o current.dendro\n    \
-                         {program} recording reindex current.dendro";
 
     pub(super) const CONVERT_METADATA: &str = "Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer reads to identify where a recording came from (it defaults to {agent}). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=";
 }

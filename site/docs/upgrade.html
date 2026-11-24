@@ -222,7 +222,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <li>A <code>.parquet.ab.tar</code> becomes one <code>.dendro</code> with two recordings labelled <code>arm=baseline</code> and <code>arm=experiment</code>, which the viewer opens as the comparison. <code>x.parquet.ab.tar</code> becomes <code>x.dendro</code>. The tarball's aliases and category are not carried over.</li>
 <li>A combined parquet written by 5.x <code>recording combine</code>, or by a 5.x recorder given several endpoints, becomes one recording per input.</li>
 <li>In 5.x, <code>recording upgrade old.rez</code> rewrote a v1 or v2 <code>.rez</code> in place as v3, and refused a v3 file ("already a v3 (SQLite) archive", exit 1). In 6.0 the same command converts any <code>.rez</code> version and writes <code>old.dendro</code> beside it. <code>--to v3</code> is refused (exit 1); <code>--to dendro</code> is accepted and gives the same result as leaving it out.</li>
-<li>A <code>.dendro</code> written by 5.x opens in 6.0 as it is. <code>recording upgrade</code> on it exits 1 with "already a dendro archive; there is nothing to upgrade".</li>
+<li>A <code>.dendro</code> written by 5.x opens in 6.0 as it is. <code>recording upgrade</code> on it copies it into the current layout, with indexes that let the viewer open a table without reading every segment, and renames the copy over it (<code>-o</code> writes the copy elsewhere instead).</li>
 </ul>
 </section>
 

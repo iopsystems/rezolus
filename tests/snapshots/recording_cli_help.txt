@@ -94,9 +94,8 @@ Commands:
   metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
   filter    Shrink a .dendro recording to the samplers or metrics named
-  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
+  upgrade   Bring a recording an earlier release wrote up to date: a .rez, .parquet or .parquet.ab.tar to a .dendro archive, or a .dendro archive to the current layout and indexes
   snapshot  Copy an archive that is still being written, without stopping the writer
-  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -117,8 +116,7 @@ SUBCOMMANDS:
     convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro
     filter     Shrink a recording to the samplers or metrics named
     snapshot   Copy an archive that is still being written into a complete .dendro
-    reindex    Rewrite a recording's segment indexes in place, so its tables open faster
-    upgrade    Convert a recording an earlier release wrote into a .dendro archive
+    upgrade    Bring a recording an earlier release wrote up to date
 
 Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,
 a .parquet file or a .parquet.ab.tar A/B tarball is refused with the command
@@ -137,9 +135,8 @@ Commands:
   metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
   filter    Shrink a .dendro recording to the samplers or metrics named
-  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
+  upgrade   Bring a recording an earlier release wrote up to date: a .rez, .parquet or .parquet.ab.tar to a .dendro archive, or a .dendro archive to the current layout and indexes
   snapshot  Copy an archive that is still being written, without stopping the writer
-  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -704,15 +701,15 @@ Options:
 === rezolus recording upgrade -h
 --- exit 0
 --- stdout
-Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
+Bring a recording an earlier release wrote up to date: a .rez, .parquet or .parquet.ab.tar to a .dendro archive, or a .dendro archive to the current layout and indexes
 
 Usage: rezolus recording upgrade [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  The recording to convert: a .rez archive, a .parquet file or a .parquet.ab.tar
+  <FILE>  The recording to upgrade: a .rez archive, a .parquet file, a .parquet.ab.tar, or a .dendro archive (in place without -o)
 
 Options:
-  -o, --output <DENDRO>  The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro); must not exist
+  -o, --output <DENDRO>  The .dendro to write (default: for a .dendro input, the input itself; otherwise the input's name with .dendro for its extension, x.parquet.ab.tar becoming x.dendro); must not exist
       --to <FORMAT>      Target container: `dendro`, the only one written (accepted for scripts that pass it) [default: dendro]
   -h, --help             Print help (see more with '--help')
 --- stderr
@@ -720,10 +717,11 @@ Options:
 === rezolus recording upgrade --help
 --- exit 0
 --- stdout
-Write a new .dendro archive holding a recording an earlier release wrote:
-a v1, v2 or v3 `.rez`, a standalone `.parquet`, or a `.parquet.ab.tar`
-A/B tarball. Every other command opens .dendro archives only and refuses
-these with this command.
+Bring a recording an earlier release wrote up to what this release writes.
+
+A v1, v2 or v3 `.rez`, a standalone `.parquet` or a `.parquet.ab.tar`
+A/B tarball is converted into a new .dendro archive. Every other command
+opens .dendro archives only and refuses these with this command.
 
 A v3 `.rez`'s recordings become sources and its tables streams; segment,
 WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings
@@ -739,9 +737,24 @@ An A/B tarball becomes two sources, its baseline labelled arm=baseline
 and its experiment arm=experiment, which the viewer opens as a
 comparison. Tar and parquet tables are re-encoded.
 
-The input is never changed. -o defaults to the input's name with .dendro
-for its extension (x.parquet.ab.tar becomes x.dendro), and an existing
-output is refused.
+A converted input is never changed. -o defaults to the input's name with
+.dendro for its extension (x.parquet.ab.tar becomes x.dendro), and an
+existing output is refused.
+
+A .dendro archive is upgraded IN PLACE unless -o names a new file. Each
+sealed segment's index is rewritten as this release writes it, so the
+viewer opens a table from its segments' indexes instead of reading every
+segment, and a table's first chart takes less time. An archive an earlier
+6.0 build wrote is re-indexed with no segment's data rewritten. A 5.x
+archive (schema 4) is copied into the current layout first, the copy
+re-indexed and renamed over the input, which needs free space for one
+copy. An archive already current is reported and left as it is. With -o,
+the archive is copied there and the copy upgraded; the input is not
+changed.
+
+Upgrading in place is refused while another process has the archive
+open (a viewer, a recording); upgrade a `rezolus recording snapshot` of
+one still being written. While it runs, the viewer cannot open the file.
 
 EXAMPLES:
     # Writes old.dendro beside old.rez
@@ -753,15 +766,18 @@ EXAMPLES:
     # An A/B tarball: writes ab.dendro, a two-arm comparison
     rezolus recording upgrade ab.parquet.ab.tar
 
+    # A .dendro archive, in place
+    rezolus recording upgrade run.dendro
+
 Usage: rezolus recording upgrade [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          The recording to convert: a .rez archive, a .parquet file or a .parquet.ab.tar
+          The recording to upgrade: a .rez archive, a .parquet file, a .parquet.ab.tar, or a .dendro archive (in place without -o)
 
 Options:
   -o, --output <DENDRO>
-          The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro); must not exist
+          The .dendro to write (default: for a .dendro input, the input itself; otherwise the input's name with .dendro for its extension, x.parquet.ab.tar becoming x.dendro); must not exist
 
       --to <FORMAT>
           Target container: `dendro`, the only one written (accepted for scripts that pass it)
@@ -824,59 +840,6 @@ Options:
   -o, --output <DENDRO>
           The .dendro to write. Must not already exist.
 
-  -h, --help
-          Print help (see a summary with '-h')
---- stderr
-
-=== rezolus recording reindex -h
---- exit 0
---- stdout
-Rewrite a .dendro recording's segment indexes in place, so its tables open faster
-
-Usage: rezolus recording reindex <FILE>
-
-Arguments:
-  <FILE>  The archive to re-index (.dendro), in place; not one another process has open
-
-Options:
-  -h, --help  Print help (see more with '--help')
---- stderr
-
-=== rezolus recording reindex --help
---- exit 0
---- stdout
-Rewrite the index of every sealed segment of a .dendro recording, in
-place, as this release writes it. Opening a table then reads its
-segments' indexes instead of every segment, so the first chart of a
-table takes less time. No segment's data is rewritten: each segment is
-read once to build its index.
-
-A recording this release records needs no re-index, and neither does
-a filter that keeps named metrics. A recording an earlier 6.0 build
-wrote, and any copy of one (a snapshot, a combine, a filter of whole
-tables), keeps the earlier indexes and needs one.
-
-An archive another process has open (a viewer, a recording) is
-refused; re-index it once that process closes it, or re-index a
-`rezolus recording snapshot` of it. While the re-index runs, the
-viewer cannot open the file. An archive written before .dendro's
-current layout (schema 5) is refused with the snapshot that copies it
-into the current one.
-
-EXAMPLES:
-    rezolus recording reindex run.dendro
-
-    # A 5.x archive (schema 4): copy it, then re-index the copy
-    rezolus recording snapshot old.dendro -o current.dendro
-    rezolus recording reindex current.dendro
-
-Usage: rezolus recording reindex <FILE>
-
-Arguments:
-  <FILE>
-          The archive to re-index (.dendro), in place; not one another process has open
-
-Options:
   -h, --help
           Print help (see a summary with '-h')
 --- stderr
@@ -1471,9 +1434,8 @@ Commands:
   metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
   filter    Shrink a .dendro recording to the samplers or metrics named
-  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
+  upgrade   Bring a recording an earlier release wrote up to date: a .rez, .parquet or .parquet.ab.tar to a .dendro archive, or a .dendro archive to the current layout and indexes
   snapshot  Copy an archive that is still being written, without stopping the writer
-  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1494,8 +1456,7 @@ SUBCOMMANDS:
     convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro
     filter     Shrink a recording to the samplers or metrics named
     snapshot   Copy an archive that is still being written into a complete .dendro
-    reindex    Rewrite a recording's segment indexes in place, so its tables open faster
-    upgrade    Convert a recording an earlier release wrote into a .dendro archive
+    upgrade    Bring a recording an earlier release wrote up to date
 
 Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,
 a .parquet file or a .parquet.ab.tar A/B tarball is refused with the command
@@ -1514,9 +1475,8 @@ Commands:
   metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
   filter    Shrink a .dendro recording to the samplers or metrics named
-  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
+  upgrade   Bring a recording an earlier release wrote up to date: a .rez, .parquet or .parquet.ab.tar to a .dendro archive, or a .dendro archive to the current layout and indexes
   snapshot  Copy an archive that is still being written, without stopping the writer
-  reindex   Rewrite a .dendro recording's segment indexes in place, so its tables open faster
   help      Print this message or the help of the given subcommand(s)
 
 Options:
