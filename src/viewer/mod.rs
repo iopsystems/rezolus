@@ -43,6 +43,7 @@ pub(crate) mod combined_test;
 #[cfg(test)]
 mod dashboard_queries_test;
 mod follow;
+pub(crate) mod legacy_load;
 mod live;
 pub(crate) mod metadata;
 mod report_save;
@@ -108,8 +109,8 @@ pub fn command() -> Command {
              - a live agent:             rezolus view http://host:4241   (agent 5.21.0+ with snapshot_format = \"v3\"; recorded into a temporary .dendro)\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
              A recording is a .dendro archive. A .rez archive, a .parquet file or a\n\
-             .parquet.ab.tar from an earlier release is refused with the command that\n\
-             converts it: `rezolus recording upgrade FILE`.\n\n\
+             .parquet.ab.tar from an earlier release is converted to a temporary .dendro\n\
+             when it is opened; `rezolus recording upgrade FILE` writes one to keep.\n\n\
              An archive holding several recordings of one run (`rezolus record --endpoint a\n\
              --endpoint b`) opens as ONE combined view: every series carries its recording's\n\
              labels (source, host, record's labels), and each recording renders its own sections, so\n\
@@ -363,6 +364,11 @@ pub fn command() -> Command {
 pub struct Config {
     source: Source,
     experiment_path: Option<PathBuf>,
+    /// The file as the user named it, when `source` is a `.dendro` converted
+    /// from it (`legacy_load`): the name messages and the page show.
+    source_converted_from: Option<String>,
+    /// [`Config::source_converted_from`], for the experiment.
+    experiment_converted_from: Option<String>,
     baseline_alias: Option<String>,
     experiment_alias: Option<String>,
     category_name: Option<String>,
@@ -481,6 +487,8 @@ impl TryFrom<ArgMatches> for Config {
         Ok(Config {
             source,
             experiment_path,
+            source_converted_from: None,
+            experiment_converted_from: None,
             baseline_alias,
             experiment_alias,
             category_name: args.get_one::<String>("CATEGORY").cloned(),
@@ -514,9 +522,131 @@ impl TryFrom<ArgMatches> for Config {
     }
 }
 
-pub fn run(config: Config) {
-    let config: Arc<Config> = config.into();
+impl Config {
+    /// The name to show for the baseline file at `path`: the file the user
+    /// named, which may have been converted to `path`.
+    fn shown_source(&self, path: &Path) -> String {
+        self.source_converted_from
+            .clone()
+            .unwrap_or_else(|| path.display().to_string())
+    }
+
+    /// [`Config::shown_source`], for the experiment file at `path`.
+    fn shown_experiment(&self, path: &Path) -> String {
+        self.experiment_converted_from
+            .clone()
+            .unwrap_or_else(|| path.display().to_string())
+    }
+
+    /// The name a hint's commands use for the baseline file at `path`: the
+    /// `.dendro` that `recording upgrade` writes beside a converted file,
+    /// since those commands open `.dendro` files only, else `path`.
+    fn hint_source(&self, path: &Path) -> String {
+        match &self.source_converted_from {
+            Some(file) => crate::parquet_tools::legacy::dendro_beside(Path::new(file))
+                .display()
+                .to_string(),
+            None => path.display().to_string(),
+        }
+    }
+
+    /// [`Config::hint_source`], for the experiment file at `path`.
+    fn hint_experiment(&self, path: &Path) -> String {
+        match &self.experiment_converted_from {
+            Some(file) => crate::parquet_tools::legacy::dendro_beside(Path::new(file))
+                .display()
+                .to_string(),
+            None => path.display().to_string(),
+        }
+    }
+
+    /// For a hint whose commands name the files: the `recording upgrade`
+    /// commands that write the `.dendro` files it names
+    /// ([`Config::hint_source`]), ending in a newline. Empty when neither
+    /// file was converted.
+    fn upgrade_first(&self) -> String {
+        let files: Vec<&String> = [&self.source_converted_from, &self.experiment_converted_from]
+            .into_iter()
+            .flatten()
+            .collect();
+        if files.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("These files are not .dendro archives; convert them first:\n");
+        for file in files {
+            out.push_str(&format!(
+                "  {} recording upgrade {}\n",
+                env!("CARGO_BIN_NAME"),
+                ::rez::container::shell_word(file)
+            ));
+        }
+        out
+    }
+
+    /// Whether either file was converted to open it: a converted copy is
+    /// never written again, so it is not followed.
+    fn converted(&self) -> bool {
+        self.source_converted_from.is_some() || self.experiment_converted_from.is_some()
+    }
+}
+
+/// Exit the process with `code`, first removing the files converted to open
+/// a recording (`legacy_load`): `std::process::exit` runs no destructors.
+fn exit_viewer(code: i32) -> ! {
+    legacy_load::remove();
+    std::process::exit(code)
+}
+
+/// Removes the converted files when [`run`] returns. A panic does not unwind
+/// to it (the process's panic hook exits first), so [`run`] also chains a
+/// panic hook that removes them.
+struct RemoveConverted;
+
+impl Drop for RemoveConverted {
+    fn drop(&mut self) {
+        legacy_load::remove();
+    }
+}
+
+pub fn run(mut config: Config) {
+    let _converted = RemoveConverted;
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        legacy_load::remove();
+        previous_hook(info);
+    }));
     let _log_drain = configure_logging(verbosity_to_level(config.verbose));
+    // A recording an earlier release wrote is converted to a temporary
+    // `.dendro` before anything opens it.
+    if let Source::File(path) = &config.source {
+        match legacy_load::dendro_path(path) {
+            Ok(dendro) => {
+                if dendro != *path {
+                    config.source_converted_from = Some(path.display().to_string());
+                }
+                config.source = Source::File(dendro);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                exit_viewer(1);
+            }
+        }
+    }
+    if let Some(path) = &config.experiment_path {
+        match legacy_load::dendro_path(path) {
+            Ok(dendro) => {
+                if dendro != *path {
+                    config.experiment_converted_from = Some(path.display().to_string());
+                }
+                config.experiment_path = Some(dendro);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                exit_viewer(1);
+            }
+        }
+    }
+    let config: Arc<Config> = config.into();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -531,9 +661,10 @@ pub fn run(config: Config) {
     // delivered as a normal key event and handled as a graceful quit.
     if !config.tui {
         ctrlc::set_handler(move || {
-            // `exit` runs no destructors, so the live archive is removed here.
+            // `exit` runs no destructors, so the live archive is removed
+            // here (and the converted files by `exit_viewer`).
             live::remove_live_dirs();
-            std::process::exit(2)
+            exit_viewer(2)
         })
         .expect("failed to set ctrl-c handler");
     }
@@ -555,7 +686,7 @@ pub fn run(config: Config) {
                     "{}",
                     selectors_need_an_archive(&format!("the live agent at {url}"))
                 );
-                std::process::exit(1);
+                exit_viewer(1);
             }
             init_live_mode(
                 &rt,
@@ -571,7 +702,7 @@ pub fn run(config: Config) {
                     "{}",
                     selectors_need_an_archive("upload-only mode (no input file)")
                 );
-                std::process::exit(1);
+                exit_viewer(1);
             }
             info!("No input file — starting in upload-only mode");
             let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource> =
@@ -613,7 +744,7 @@ pub fn run(config: Config) {
     if config.tui {
         if matches!(config.source, Source::Empty) {
             eprintln!("--tui needs a data source: a live agent URL or a recording (upload-only is not supported)");
-            std::process::exit(1);
+            exit_viewer(1);
         }
         // The TUI shows a single capture. A/B compare and the category
         // bridge view are browser-only, so a second capture / --category
@@ -666,7 +797,7 @@ fn init_file_mode(
     for file in std::iter::once(path).chain(config.experiment_path.as_deref()) {
         if let Err(e) = ::rez::container::require_dendro(file, env!("CARGO_BIN_NAME")) {
             eprintln!("{e}");
-            std::process::exit(1);
+            exit_viewer(1);
         }
     }
     init_file_mode_rez(config, path, registry, pool)
@@ -674,7 +805,8 @@ fn init_file_mode(
 
 /// Open the dendro archive at `path` as the experiment of a two-file
 /// comparison: its one recording, with the systeminfo and metadata the
-/// captures registry keeps. A legacy file is refused with the upgrade
+/// captures registry keeps. A legacy file (converted by the caller,
+/// `legacy_load`) is refused with the upgrade
 /// command, an archive of several recordings with the commands that compare
 /// two of them ([`::rez::container::one_recording_hint`]), which name the
 /// experiment as `name` and the baseline as `baseline`.
@@ -930,11 +1062,12 @@ fn init_file_mode_combined(
     pool: Arc<metriken_storage::BufferPool>,
     readers: crate::rez_reader::LabeledRecordings,
 ) -> AppState {
+    let shown = config.shown_source(path);
     let combined = combine_recordings(readers);
     info!(
         "{} holds {} recordings of one run; opening them as one view (--baseline/--experiment \
          open a comparison)",
-        path.display(),
+        shown,
         combined.labels.len()
     );
     let markers = combined.markers.clone();
@@ -944,7 +1077,7 @@ fn init_file_mode_combined(
     let report_marker =
         ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
     // An archive not finalized when opened is followed: it can grow in place.
-    let following = !combined.reader.complete();
+    let following = !combined.reader.complete() && !config.converted();
     let mut live = None;
     let (source, catalog): (
         Arc<dyn metriken_query::MetricsSource>,
@@ -972,7 +1105,7 @@ fn init_file_mode_combined(
         Arc::clone(&pool),
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
-    *state.baseline_name.write() = Some(path.display().to_string());
+    *state.baseline_name.write() = Some(shown.to_string());
     *state.baseline_file.write() = state::BaselineFile::Combined {
         recordings: combined.labels.len(),
     };
@@ -990,15 +1123,12 @@ fn init_file_mode_combined(
         let followed = vec![(capture_registry::BASELINE_ID.to_string(), live)];
         match follow::Follow::start(followed, Arc::clone(&pool), follow::FOLLOW_INTERVAL) {
             Ok(f) => {
-                info!(
-                    "{} was not finalized when opened; following it",
-                    path.display()
-                );
+                info!("{} was not finalized when opened; following it", shown);
                 *state.follow.lock() = Some(f);
             }
             Err(e) => warn!(
                 "could not follow {}: {e}; showing it as it was when opened",
-                path.display()
+                shown
             ),
         }
     }
@@ -1018,36 +1148,38 @@ fn init_file_mode_rez(
 ) -> AppState {
     use metriken_query::MetricsSource;
     use std::collections::BTreeMap;
-    info!("Loading data from {}...", path.display());
+    let shown = config.shown_source(path);
+    info!("Loading data from {}...", shown);
 
     // One reader per recording (labels preserved).
     let readers = crate::rez_reader::RezReader::open_recordings(path, Arc::clone(&pool))
         .unwrap_or_else(|e| {
-            eprintln!("failed to load {}: {e}", path.display());
-            std::process::exit(1);
+            eprintln!("failed to load {}: {e}", shown);
+            exit_viewer(1);
         });
     if readers.is_empty() {
-        eprintln!("{} holds no recordings", path.display());
-        std::process::exit(1);
+        eprintln!("{} holds no recordings", shown);
+        exit_viewer(1);
     }
 
     // A second file is the experiment of a two-file comparison: each file
     // is one recording.
     if let Some(experiment) = &config.experiment_path {
         if readers.len() != 1 {
-            let file = path.display().to_string();
+            let file = config.hint_source(path);
             eprintln!(
-                "{}",
+                "{}{}",
+                config.upgrade_first(),
                 ::rez::container::one_recording_hint(
                     env!("CARGO_BIN_NAME"),
                     &file,
                     "the baseline",
                     readers.len(),
                     &file,
-                    &experiment.display().to_string(),
+                    &config.hint_experiment(experiment),
                 )
             );
-            std::process::exit(1);
+            exit_viewer(1);
         }
     }
 
@@ -1069,7 +1201,7 @@ fn init_file_mode_rez(
     )
     .unwrap_or_else(|e| {
         eprintln!("{e}");
-        std::process::exit(1);
+        exit_viewer(1);
     });
 
     // The slots, then every other recording beside the comparison: one
@@ -1108,10 +1240,11 @@ fn init_file_mode_rez(
     // buffer, a `record` in progress, or a file whose writer is gone) is
     // followed: each recording shown is read through a `LiveReader` that a
     // `follow::Follow` thread reopens until the follow ends (see follow.rs).
-    let mut following = order
-        .iter()
-        .chain(&beside_idx)
-        .any(|&i| !readers[i].1.complete());
+    let mut following = !config.converted()
+        && order
+            .iter()
+            .chain(&beside_idx)
+            .any(|&i| !readers[i].1.complete());
     // A reopen finds each recording by its label set, so a shown recording
     // whose label set another recording shares cannot be found again.
     if following {
@@ -1123,7 +1256,7 @@ fn init_file_mode_rez(
             warn!(
                 "{} is not finalized, but it holds several recordings labelled {}; \
                  showing it as it was when opened",
-                path.display(),
+                shown,
                 crate::mcp::render_labels(&all_labels[dup])
             );
             following = false;
@@ -1223,7 +1356,7 @@ fn init_file_mode_rez(
     *state.beside.write() = beside;
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
-    *state.baseline_name.write() = Some(path.display().to_string());
+    *state.baseline_name.write() = Some(shown.to_string());
     *state.baseline_file.write() = state::BaselineFile::compared(all_labels.len());
     *state.selection.write() = b_selection;
     // A saved report stamps `KEY_REPORT=trimmed` on its anchor recording.
@@ -1252,26 +1385,31 @@ fn init_file_mode_rez(
     if following {
         match follow::Follow::start(followed, Arc::clone(&pool), follow::FOLLOW_INTERVAL) {
             Ok(f) => {
-                info!(
-                    "{} was not finalized when opened; following it",
-                    path.display()
-                );
+                info!("{} was not finalized when opened; following it", shown);
                 *state.follow.lock() = Some(f);
             }
             Err(e) => warn!(
                 "could not follow {}: {e}; showing it as it was when opened",
-                path.display()
+                shown
             ),
         }
     }
 
     if let Some(exp_path) = &config.experiment_path {
-        let baseline = path.display().to_string();
-        let name = exp_path.display().to_string();
+        // The names open_experiment's hint uses in its commands.
+        let baseline = config.hint_source(path);
+        let name = config.hint_experiment(exp_path);
         let (reader, systeminfo, file_meta) =
             open_experiment(exp_path, &name, &baseline, Arc::clone(&pool)).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
+                // Only the hint has commands; another error (a load failure)
+                // is printed alone.
+                let first = if e.contains(" recording combine ") {
+                    config.upgrade_first()
+                } else {
+                    String::new()
+                };
+                eprintln!("{first}{e}");
+                exit_viewer(1);
             });
         state.captures.attach_experiment(
             Arc::new(reader) as Arc<dyn metriken_query::MetricsSource>,
@@ -1280,7 +1418,10 @@ fn init_file_mode_rez(
             config.experiment_alias.clone(),
         );
         *state.cli_experiment_path.write() = Some(exp_path.clone());
-        info!("Attached experiment capture: {}", exp_path.display());
+        info!(
+            "Attached experiment capture: {}",
+            config.shown_experiment(exp_path)
+        );
     }
 
     if let Some(ref cat_name) = config.category_name {
@@ -1299,11 +1440,11 @@ fn init_file_mode_rez(
 fn validate_category_at_startup(state: &AppState, registry: &TemplateRegistry, cat_name: &str) {
     let category = registry.get_category(cat_name).unwrap_or_else(|| {
         eprintln!("no category template named {cat_name:?} found in the registry");
-        std::process::exit(1);
+        exit_viewer(1);
     });
     let Some(experiment) = state.captures.get(CaptureId::Experiment) else {
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
-        std::process::exit(1);
+        exit_viewer(1);
     };
     let templates_of = |data: &dyn metriken_query::MetricsSource| {
         metadata::capture_service_extensions(data, registry, state.template_preference)
@@ -1312,7 +1453,7 @@ fn validate_category_at_startup(state: &AppState, registry: &TemplateRegistry, c
     let experiment_templates = templates_of(experiment.as_ref());
     if let Err(message) = category.admits(&baseline_templates, &experiment_templates) {
         eprintln!("--category {cat_name:?}: {message}");
-        std::process::exit(1);
+        exit_viewer(1);
     }
     let sources = |templates: &[(String, ServiceExtension)]| -> Vec<String> {
         templates.iter().map(|(s, _)| s.clone()).collect()
@@ -1343,14 +1484,14 @@ fn init_live_mode(
             Ok(i) => i,
             Err(e) => {
                 eprintln!("{e}");
-                std::process::exit(1);
+                exit_viewer(1);
             }
         };
         match live::LiveSession::start(&client, url, info.clone(), Arc::clone(&pool)).await {
             Ok(session) => (info, session),
             Err(e) => {
                 eprintln!("{e}");
-                std::process::exit(1);
+                exit_viewer(1);
             }
         }
     });

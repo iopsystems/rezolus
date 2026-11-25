@@ -446,7 +446,7 @@ fn the_wasm_viewer_renders_a_combined_archive_as_the_server_does() {
     for path in [two_hosts(dir.path()), agent_and_service(dir.path())] {
         let state = view(&path, &[]);
         let mut reg = viewer::WasmCaptureRegistry::new();
-        reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.dendro")
+        reg.attach("baseline", std::fs::read(&path).unwrap(), "run.dendro")
             .unwrap();
         reg.init_templates("baseline", "[]").unwrap();
         assert!(!reg.has("experiment"));
@@ -628,7 +628,7 @@ fn each_instance_has_its_own_throughput_and_systeminfo() {
     assert_eq!(info["h2"]["hostname"], "h2");
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.dendro")
+    reg.attach("baseline", std::fs::read(&path).unwrap(), "run.dendro")
         .unwrap();
     let wasm: serde_json::Value =
         serde_json::from_str(&reg.systeminfo("baseline").unwrap()).unwrap();
@@ -744,7 +744,7 @@ fn the_arms_fill_the_slots_in_both_viewers() {
     assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&reversed).unwrap(), "rev.dendro")
+    reg.attach("baseline", std::fs::read(&reversed).unwrap(), "rev.dendro")
         .unwrap();
     assert!(reg.file_metadata_json("baseline").unwrap().contains("s1"));
     assert!(reg.file_metadata_json("experiment").unwrap().contains("s0"));
@@ -898,7 +898,7 @@ fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
     assert!((svc[0] - 10.0).abs() < 1e-9, "{svc:?}");
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "conc.dendro")
+    reg.attach("baseline", std::fs::read(&path).unwrap(), "conc.dendro")
         .unwrap();
     reg.init_templates("baseline", "[]").unwrap();
     // Before the combined regeneration the baseline's own sections already
@@ -1075,7 +1075,7 @@ fn a_comparison_of_agents_keeps_the_usual_landing() {
     drop(store);
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "agents.dendro")
+    reg.attach("baseline", std::fs::read(&path).unwrap(), "agents.dendro")
         .unwrap();
     reg.init_templates("baseline", "[]").unwrap();
     let wasm: Vec<serde_json::Value> =
@@ -1125,7 +1125,7 @@ fn a_beside_recordings_template_notice_is_reported() {
         ],
     );
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "bad.dendro")
+    reg.attach("baseline", std::fs::read(&path).unwrap(), "bad.dendro")
         .unwrap();
     reg.init_templates("baseline", "[]").unwrap();
     reg.init_templates("experiment", "[]").unwrap();
@@ -1178,7 +1178,7 @@ async fn report_round_trip(dir: &Path, path: &Path) {
         // no rows: the page's span is the agent's.
         assert!(state.baseline_data().time_range().is_some(), "{name}");
         let mut reg = viewer::WasmCaptureRegistry::new();
-        reg.attach("baseline", bytes, &name).unwrap();
+        reg.attach("baseline", bytes.to_vec(), &name).unwrap();
         assert_eq!(reg.selection("baseline").as_deref(), Some(body), "{name}");
         let info: serde_json::Value = serde_json::from_str(&reg.info("baseline").unwrap()).unwrap();
         assert!(info["maxTime"].as_f64().unwrap() > 0.0, "{name}: {info}");
@@ -1225,7 +1225,7 @@ async fn report_round_trip(dir: &Path, path: &Path) {
 
     let mut reg = viewer::WasmCaptureRegistry::new();
     let name = path.file_name().unwrap().to_str().unwrap();
-    reg.attach("baseline", &std::fs::read(path).unwrap(), name)
+    reg.attach("baseline", std::fs::read(path).unwrap(), name)
         .unwrap();
     let wasm = reg.save_with_selection(body).unwrap();
     assert_eq!(marked(&wasm), ["svcA"], "{ext}");
@@ -1652,4 +1652,96 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
         scoped.counter_names()
     );
     assert_eq!(scoped.histogram_labels("dual").len(), 1);
+}
+
+/// Each plot carries the known errata of the recording its section was
+/// rendered from: in a combined archive, the affected recording's instance
+/// has them and the fixed recording's does not, and the WASM viewer serves
+/// the same sections.
+#[test]
+fn errata_ride_on_the_plots_of_the_affected_recording_in_both_viewers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("run.dendro");
+    let host = |labels: &'static [(&'static str, &'static str)],
+                metadata: &'static [(&'static str, &'static str)]| Recording {
+        labels,
+        metadata,
+        cpus: 1,
+        busy_ns: 250_000_000,
+        counter: Some(("network_bytes", 1000)),
+    };
+    one_run(
+        &path,
+        &[
+            host(
+                &[("source", "rezolus"), ("host", "h1")],
+                &[("source", "rezolus"), ("version", "5.19.0")],
+            ),
+            host(
+                &[("source", "rezolus"), ("host", "h2")],
+                &[("source", "rezolus"), ("version", "6.0.0")],
+            ),
+        ],
+    );
+    let state = view(&path, &[]);
+    let mut reg = viewer::WasmCaptureRegistry::new();
+    reg.attach("baseline", std::fs::read(&path).unwrap(), "run.dendro")
+        .unwrap();
+    reg.init_templates("baseline", "[]").unwrap();
+
+    let errata = |v: &serde_json::Value| -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        for g in v["groups"].as_array().unwrap() {
+            for sg in g["subgroups"].as_array().unwrap() {
+                for p in sg["plots"].as_array().unwrap() {
+                    if let Some(e) = p.get("errata") {
+                        assert!(
+                            p["promql_query"]
+                                .as_str()
+                                .unwrap()
+                                .contains("network_bytes"),
+                            "{p}"
+                        );
+                        out.extend(e.as_array().unwrap().iter().cloned());
+                    }
+                }
+            }
+        }
+        out
+    };
+    let sections = state.sections_metadata()["sections"].clone();
+    let routes: Vec<String> = sections
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["route"].as_str().unwrap().to_string())
+        .filter(|r| r.starts_with("/network"))
+        .collect();
+    assert_eq!(routes.len(), 2, "{routes:?}");
+    let mut with_errata = Vec::new();
+    for route in &routes {
+        let mut server = section(&state, route);
+        let mut wasm: serde_json::Value =
+            serde_json::from_str(&reg.get_section("baseline", &route[1..]).unwrap()).unwrap();
+        for v in [&mut server, &mut wasm] {
+            let o = v.as_object_mut().unwrap();
+            o.remove("filename");
+            o.remove("filesize");
+        }
+        assert_eq!(
+            serde_json::to_string(&wasm).unwrap(),
+            serde_json::to_string(&server).unwrap(),
+            "{route}"
+        );
+        let found = errata(&server);
+        if !found.is_empty() {
+            assert!(found.iter().all(|e| e["metric"] == "network_bytes"
+                && e["severity"] == "misleading"
+                && e["condition"] == "recorded by an agent before 5.20.1-alpha.3"
+                && e["reference"] == "https://github.com/iopsystems/rezolus/pull/1214"));
+            with_errata.push(route.clone());
+        }
+    }
+    // Only h1's instance (the first, at the bare route): h2's agent is fixed.
+    assert_eq!(with_errata, vec!["/network".to_string()], "{routes:?}");
 }

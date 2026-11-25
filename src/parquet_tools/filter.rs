@@ -112,7 +112,7 @@ fn filter(
 }
 
 /// Filter a dendro archive by sampler and/or by metric column, through
-/// dendro's `copy_sources_into` (`crate::dendro_copy`).
+/// dendro's `copy_sources_into_as_copies` (`crate::dendro_copy`).
 ///
 /// - `keep_samplers` keeps a stream when its sampler is named; an occupant
 ///   stream (`<table>/occupants`) counts as its table's, so it goes with it.
@@ -377,11 +377,12 @@ mod tests {
         );
     }
 
-    /// An in-place filter writes a copy and renames it over the input, so an
+    /// An in-place filter writes a copy and renames it over the input; an
     /// archive with two sources under one uuid (written before
-    /// 6.0.0-alpha.169) is refused, and left as it was.
+    /// 6.0.0-alpha.169) is copied with the second under a fresh uuid, its
+    /// origin the first's.
     #[test]
-    fn filter_in_place_refuses_two_sources_under_one_uuid() {
+    fn filter_in_place_keeps_two_sources_under_one_uuid() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
@@ -389,7 +390,6 @@ mod tests {
         let old = dir.path().join("old.dendro");
         crate::parquet_tools::combine::run_combine_for_test(&[a, b], &old).unwrap();
         ::rez::fixtures::one_uuid(&old);
-        let before = std::fs::read(&old).unwrap();
         let uuid = dendro::archive::Archive::open(&old)
             .unwrap()
             .read_sources()
@@ -397,14 +397,16 @@ mod tests {
             .uuid
             .clone()
             .unwrap();
-        let err = filter_dendro(&old, &keep(Some(&set(&["threads"])), None), None)
-            .unwrap_err()
-            .to_string();
+        filter_dendro(&old, &keep(Some(&set(&["threads"])), None), None).unwrap();
+        let rows = dendro::archive::Archive::open(&old)
+            .unwrap()
+            .read_sources()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
         assert!(
-            err.contains(&::rez::container::duplicate_source(&uuid)),
-            "{err}"
+            rows.iter().all(|r| r.identity() == Some(&*uuid)),
+            "{rows:?}"
         );
-        assert_eq!(std::fs::read(&old).unwrap(), before);
     }
 
     /// `--samplers` keeps a long table's occupant stream with its table.

@@ -104,8 +104,9 @@ field along with the bytes.
 ## `legacy/simple_capture.parquet`
 
 A standalone parquet recording from a 5.x recorder, formerly the static
-site's sample. It is the input of `recording upgrade`'s tests and of the
-refusal tests: every command but `upgrade` must refuse it and print
+site's sample. It is the input of `recording upgrade`'s tests, of the
+viewers' conversion on load, and of the refusal tests: `mcp` and every
+`recording` subcommand but `upgrade` must refuse it and print
 `rezolus recording upgrade FILE`.
 
 ## `upgraded/*.dendro`

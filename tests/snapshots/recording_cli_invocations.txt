@@ -3,7 +3,7 @@
 --- stdout
 --- stderr
 error: 'rezolus recording' requires a subcommand but one was not provided
-  [subcommands: annotate, check, combine, metadata, convert, filter, upgrade, snapshot, reindex, help]
+  [subcommands: annotate, check, combine, metadata, convert, filter, upgrade, snapshot, help]
 
 Usage: rezolus recording <COMMAND>
 
@@ -88,10 +88,10 @@ Error: v2.dendro already exists; refusing to replace it
 Error: --to v3: `recording upgrade` converts to dendro, the only format written
 
 === rezolus recording upgrade simple.dendro -o again.dendro
---- exit 1
+--- exit 0
 --- stdout
+upgraded simple.dendro into again.dendro: 0 of 1 segments re-indexed, 1 already current, 0 left as they were
 --- stderr
-Error: simple.dendro is already a dendro archive; there is nothing to upgrade
 
 === rezolus recording upgrade missing.rez
 --- exit 1
@@ -1112,18 +1112,11 @@ dendro archive — 1 recording(s)
     b/g                         12 rows  ~1.000s  (3 segments)
 --- stderr
 
-=== rezolus recording reindex snap2.dendro
+=== rezolus recording upgrade snap2.dendro
 --- exit 0
 --- stdout
-Re-indexed snap2.dendro: 0 of 6 segments rewritten, 6 already current, 0 left as they were
+snap2.dendro is current: 6 segments, nothing to upgrade
 --- stderr
-
-=== rezolus recording reindex simple.parquet
---- exit 1
---- stdout
---- stderr
-Error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
-  rezolus recording upgrade simple.parquet
 
 === rezolus mcp describe-recording multi.dendro
 --- exit 0

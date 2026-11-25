@@ -360,7 +360,7 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
     // The WASM viewer, given the archive's bytes, serves the same
     // navigation and the same service section.
     let mut wasm = viewer::WasmCaptureRegistry::new();
-    wasm.attach("baseline", &std::fs::read(&archive).unwrap(), "run.dendro")
+    wasm.attach("baseline", std::fs::read(&archive).unwrap(), "run.dendro")
         .unwrap();
     wasm.init_templates("baseline", "[]").unwrap();
     let wasm_sections: serde_json::Value =

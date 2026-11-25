@@ -200,6 +200,8 @@ async function loadFile(file) {
     landingError = null;
     m.redraw();
     try {
+        const refusal = await ViewerApi.uploadRefusal(file);
+        if (refusal) throw new Error(refusal);
         const data = new Uint8Array(await file.arrayBuffer());
         splashLabel = 'Initializing';
         splashProgress = -1;

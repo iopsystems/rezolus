@@ -54,6 +54,75 @@ pub(crate) struct Opened {
     pub combined: Vec<std::collections::BTreeMap<String, String>>,
     /// Each of `combined`'s position in the archive (`--ab baseline=N`).
     pub combined_positions: Vec<usize>,
+    /// The known errata that apply to the recording, or for a combined reader
+    /// to each joined recording, by that recording's agent version. Only
+    /// recordings with at least one finding are listed.
+    pub errata: Vec<RecordingErrata>,
+}
+
+/// The errata ([`dashboard::errata`]) that apply to one recording.
+#[derive(Clone, Debug)]
+pub(crate) struct RecordingErrata {
+    /// The recording's labels; empty for the only recording of a file.
+    pub labels: std::collections::BTreeMap<String, String>,
+    pub findings: Vec<::dashboard::errata::Finding>,
+}
+
+/// The errata that apply to `reader`, by its `version` metadata and the
+/// metrics it holds; `None` when there are none. `rezolus_native` is
+/// [`is_rezolus_recording`]: another producer's `version` is not a Rezolus
+/// agent version, so such a recording is read as having none. That includes
+/// an agent's recording the check does not recognize (a `source` set to
+/// another name, no `sampler_status` and none of `REZOLUS_SELF_ANCHORS`, as
+/// in a filtered recording), which is then reported as possibly affected
+/// rather than by its version.
+pub(crate) fn errata_of(
+    labels: &std::collections::BTreeMap<String, String>,
+    reader: &dyn metriken_query::MetricsSource,
+    rezolus_native: bool,
+) -> Option<RecordingErrata> {
+    let names: std::collections::HashSet<String> = reader
+        .counter_names()
+        .into_iter()
+        .chain(reader.gauge_names())
+        .chain(reader.histogram_names())
+        .chain(reader.gauge_histogram_names())
+        .collect();
+    let version = if rezolus_native {
+        reader.version()
+    } else {
+        String::new()
+    };
+    let findings = ::dashboard::errata::applicable(&version, |m| names.contains(m));
+    (!findings.is_empty()).then(|| RecordingErrata {
+        labels: labels.clone(),
+        findings,
+    })
+}
+
+/// `describe-recording`'s errata section, or an empty string when there are
+/// none. With more than one recording, each entry names its recording.
+pub(crate) fn format_errata(errata: &[RecordingErrata], combined: bool) -> String {
+    if errata.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\nKnown Errata\n============\n");
+    for rec in errata {
+        for f in &rec.findings {
+            let metrics = f.present.join(", ");
+            if combined {
+                out.push_str(&format!(
+                    "- [{}] {metrics}: {}\n",
+                    render_labels(&rec.labels),
+                    f.describe()
+                ));
+            } else {
+                out.push_str(&format!("- {metrics}: {}\n", f.describe()));
+            }
+        }
+    }
+    out.truncate(out.trim_end().len());
+    out
 }
 
 /// Whether `reader` is a Rezolus agent's recording, by the rule both viewers
@@ -66,26 +135,7 @@ pub(crate) struct Opened {
 /// upgraded foreign parquet are none of these. The viewers' template step is
 /// left out: no recording is classed as a service here.
 fn is_rezolus_recording(reader: &dyn metriken_query::MetricsSource) -> bool {
-    let metadata: serde_json::Map<String, serde_json::Value> = reader
-        .file_metadata()
-        .into_iter()
-        .map(|(key, val)| {
-            let json = serde_json::from_str(&val).unwrap_or(serde_json::Value::String(val));
-            (key, json)
-        })
-        .collect();
-    let mut names = reader.counter_names();
-    names.extend(reader.gauge_names());
-    names.extend(reader.histogram_names());
-    names.extend(reader.gauge_histogram_names());
-    ::dashboard::source_kind::classify_sources(
-        &serde_json::Value::Object(metadata),
-        &names,
-        &std::collections::HashSet::new(),
-        None,
-    )
-    .iter()
-    .any(|entry| entry.is_rezolus)
+    ::dashboard::source_kind::is_rezolus_recording(reader)
 }
 
 impl Opened {
@@ -278,6 +328,9 @@ pub(crate) fn open_source_with_pool_labeled(
         };
         let (labels, reader) = recordings.swap_remove(0);
         let rezolus_native = is_rezolus_recording(&reader);
+        let errata = errata_of(&labels, &reader, rezolus_native)
+            .into_iter()
+            .collect();
         return Ok(Opened {
             labels,
             reader: std::sync::Arc::new(reader),
@@ -285,6 +338,7 @@ pub(crate) fn open_source_with_pool_labeled(
             rezolus_native,
             combined: Vec::new(),
             combined_positions: Vec::new(),
+            errata,
         });
     }
 
@@ -300,6 +354,10 @@ pub(crate) fn open_source_with_pool_labeled(
             r.filename()
         });
         let rezolus_native = recordings.iter().all(|(_, r)| is_rezolus_recording(r));
+        let errata = recordings
+            .iter()
+            .filter_map(|(l, r)| errata_of(l, r, is_rezolus_recording(r)))
+            .collect();
         let (reader, _) = crate::rez_reader::RezReader::combine(recordings, filename);
         return Ok(Opened {
             labels: std::collections::BTreeMap::new(),
@@ -308,6 +366,7 @@ pub(crate) fn open_source_with_pool_labeled(
             rezolus_native,
             combined: candidates,
             combined_positions: candidate_idx,
+            errata,
         });
     }
 
@@ -432,6 +491,9 @@ pub(crate) fn open_source_with_pool_labeled(
 
     let (labels, reader) = recordings.swap_remove(chosen);
     let rezolus_native = is_rezolus_recording(&reader);
+    let errata = errata_of(&labels, &reader, rezolus_native)
+        .into_iter()
+        .collect();
     Ok(Opened {
         labels,
         reader: std::sync::Arc::new(reader),
@@ -439,6 +501,7 @@ pub(crate) fn open_source_with_pool_labeled(
         rezolus_native,
         combined: Vec::new(),
         combined_positions: Vec::new(),
+        errata,
     })
 }
 
@@ -735,7 +798,7 @@ pub(crate) fn describe_recording_output(
             Some(&opened.combined_positions),
             syntax,
             Some("Run any tool with one of the selectors above to read that recording alone."),
-        )),
+        ) + &format_errata(&opened.errata, true)),
         Ok(opened) => {
             // Every arm is empty: report the ARCHIVE. `format_recording_info`
             // would otherwise print arm 0's metadata as though the file held
@@ -760,10 +823,10 @@ pub(crate) fn describe_recording_output(
                     None,
                 ));
             }
-            Ok(format_recording_info(
-                file.to_str().unwrap_or("<unknown>"),
-                opened.reader.as_ref(),
-            ))
+            Ok(
+                format_recording_info(file.to_str().unwrap_or("<unknown>"), opened.reader.as_ref())
+                    + &format_errata(&opened.errata, false),
+            )
         }
         // With no selector, a multi-recording archive is LISTED rather than
         // refused. `describe-recording` is documented as the place to start,
@@ -846,15 +909,20 @@ fn run_describe_recording(file: PathBuf, selector: &RecordingSelector) {
 }
 
 fn run_describe_metrics(file: PathBuf, selector: &RecordingSelector) {
-    let reader = match open_source_selected(&file, selector) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to load recording: {e}");
-            std::process::exit(1);
-        }
-    };
+    let opened =
+        match open_selected_labeled(&file, selector, SelectorSyntax::Flag("--recording"), true) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("Failed to load recording: {e}");
+                std::process::exit(1);
+            }
+        };
 
-    let output = describe_metrics::format_metrics_description(reader.as_ref());
+    let output = describe_metrics::format_metrics_description(
+        opened.reader.as_ref(),
+        &opened.errata,
+        !opened.combined.is_empty(),
+    );
     println!("{output}");
 }
 
@@ -1920,6 +1988,9 @@ pub fn command() -> Command {
                 ),
         )
 }
+
+#[cfg(test)]
+mod errata_test;
 
 #[cfg(test)]
 pub(crate) mod tests {

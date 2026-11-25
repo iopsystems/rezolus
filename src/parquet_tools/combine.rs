@@ -379,11 +379,12 @@ pub(super) fn run(
 ///
 /// Every input is a dendro archive (`run` refuses anything else). Each is
 /// copied through
-/// `copy_sources_into` in its own read snapshot, its live tail sealed
-/// (`crate::dendro_copy`), and each source keeps its uuid. An archive holds
-/// one source per uuid, so two inputs that share a source (a file and its
-/// snapshot, or one file given twice) are refused before anything is
-/// copied, naming both.
+/// `copy_sources_into_as_copies` in its own read snapshot, its live tail
+/// sealed (`crate::dendro_copy`). Each source keeps its uuid, except one the
+/// output already holds (a file and its snapshot, two dumps of one buffer):
+/// an archive holds one source per uuid, so that copy is kept under a fresh
+/// uuid with the one it copies as its origin, and reads as a copy of it.
+/// One file given twice is refused before anything is copied.
 fn combine_dendro(
     viewer_refuses: &str,
     files: &[PathBuf],
@@ -391,7 +392,7 @@ fn combine_dendro(
     plan: &AbPlan,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use dendro::archive::{Archive, ArchiveMut};
-    use dendro::rewrite::{copy_sources_into, CopySpec};
+    use dendro::rewrite::{copy_sources_into_as_copies, CopySpec};
 
     // Beside the output, never in $TMPDIR: a link across filesystems fails.
     let staging = legacy::staging_dir(output)?;
@@ -402,41 +403,29 @@ fn combine_dendro(
         .iter()
         .map(|p| Archive::open(p))
         .collect::<Result<_, _>>()?;
-    refuse_shared_sources(files, &archives)?;
+    refuse_one_file_twice(files)?;
     let mut sources = 0usize;
     let mut counts: Vec<usize> = Vec::with_capacity(archives.len());
 
     let staged = staging.path().join("combined.dendro");
     let mut dst = ArchiveMut::create(&staged)?;
-    // The input being copied, to name it in an error: an archive written
-    // before 6.0.0-alpha.169 can hold two sources with one uuid, and the copy
-    // refuses the second.
-    let mut at = 0;
+    // A source the output already holds (an input and a snapshot of it, two
+    // dumps of one buffer, or an archive an earlier build wrote holding a
+    // source twice) is kept under a fresh uuid with the one it copies as its
+    // origin, and reads as a copy of that source.
     dst.transaction(|tx| {
-        for (i, src) in archives.iter().enumerate() {
-            at = i;
+        for src in &archives {
             // The encoder is built in the snapshot the copy reads, so an
             // input still being recorded cannot gain a long stream between
             // the two.
             let n = src.read_snapshot(|src| {
                 let encoder = metriken_storage::writer::Encoder::for_archive(src)?;
-                copy_sources_into(src, tx, &CopySpec::everything(), &encoder)
+                copy_sources_into_as_copies(src, tx, &CopySpec::everything(), &encoder)
             })?;
             counts.push(n);
             sources += n;
         }
         Ok(())
-    })
-    .map_err(|e| -> Box<dyn std::error::Error> {
-        match e {
-            dendro::Error::DuplicateSource { uuid } => format!(
-                "{}: {}",
-                files[at].display(),
-                ::rez::container::duplicate_source(&uuid)
-            )
-            .into(),
-            e => e.into(),
-        }
     })?;
     // Stamped on the staged copy, so a refusal leaves no output.
     #[cfg(test)]
@@ -468,6 +457,12 @@ fn combine_dendro(
     // sources of one agent process given different arms). The staged file's sidecars stay
     // in the staging directory.
     let final_groups = read_groups_of(&staged)?;
+    let notes = differing_copies(
+        &Archive::open(&staged)?.read_sources()?,
+        &counts,
+        files,
+        &final_groups,
+    );
     let recordings = final_groups.len();
     let stamped_recordings = recordings_touched(&final_groups, &stamped_sources);
     #[cfg(test)]
@@ -492,30 +487,141 @@ fn combine_dendro(
             files.len()
         );
     }
+    for line in notes {
+        #[cfg(test)]
+        SAID.with(|s| s.borrow_mut().push(line.clone()));
+        eprintln!("{line}");
+    }
     Ok(())
 }
 
-/// Refuse `files` when two of them hold the same source (a uuid both
-/// carry): a file and a snapshot of it, two snapshots or hindsight dumps of
-/// one recording, or one file given twice. The output could hold only one
-/// of the two, and which one is the caller's choice.
-fn refuse_shared_sources(
+/// A note for each set of copies of one source in one recording of the output
+/// whose KPIs or systeminfo were edited differently. On a source with identity
+/// layers that is the value its user layer sets (`annotate`,
+/// `template_override`, `record --metadata`); the recorder and producer layers
+/// also set both keys, and an agent restart while recording re-reads them, so
+/// two dumps of one buffer taken at different times can differ there with no
+/// edit. On a source without layers it is the key itself. The recording takes
+/// each key from the first of its sources holding it, and the note names that
+/// input for each key that differs. Events are left out (a recording holds the
+/// events of all its sources). `--ab` is suggested only for two copies, one in
+/// each of two inputs. `rows` are the output's sources in catalog order,
+/// `counts` how many each of `files` contributed, in order, and `groups` the
+/// output's recordings by catalog position.
+fn differing_copies(
+    rows: &[dendro::archive::SourceRow],
+    counts: &[usize],
     files: &[PathBuf],
-    archives: &[dendro::archive::Archive],
-) -> Result<(), Box<dyn std::error::Error>> {
-    for (i, a) in archives.iter().enumerate() {
-        for (j, b) in archives.iter().enumerate().skip(i + 1) {
-            if let Some(uuid) = dendro::rewrite::shared_sources(a, b)?.first() {
-                return Err(format!(
-                    "{} and {} hold the same source (uuid {uuid}): both are copies of one \
-                     recording (the file, a snapshot or a hindsight dump of it), or one file \
-                     given twice. An archive holds each source once, so they cannot be \
-                     combined. Give only one of them: the one covering the time you need",
-                    files[i].display(),
-                    files[j].display()
-                )
-                .into());
+    groups: &[Vec<usize>],
+) -> Vec<String> {
+    let input_of: Vec<&Path> = counts
+        .iter()
+        .zip(files)
+        .flat_map(|(&n, f)| std::iter::repeat_n(f.as_path(), n))
+        .collect();
+    const NOTED: [(&str, &str); 2] = [("service_queries", "KPIs"), ("systeminfo", "systeminfo")];
+    let mut notes = Vec::new();
+    for group in groups {
+        let mut group = group.clone();
+        group.sort_unstable();
+        let mut by_identity: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for &p in &group {
+            if let Some(identity) = rows.get(p).and_then(|r| r.identity()) {
+                by_identity.entry(identity).or_default().push(p);
             }
+        }
+        for copies in by_identity.values().filter(|c| c.len() > 1) {
+            let metadata = |p: usize| rows.get(p).map(|r| &r.meta.metadata);
+            // The value a person set: the user layer's, where there are
+            // layers.
+            let edited = |p: usize, key: &str| -> Option<String> {
+                let m = metadata(p)?;
+                match metriken_storage::layers::Layers::read(m) {
+                    Ok(Some(layers)) => layers
+                        .user
+                        .fold(metriken_storage::layers::Layer::User)
+                        .metadata
+                        .remove(key),
+                    _ => m.get(key).cloned(),
+                }
+            };
+            let shown: Vec<String> = NOTED
+                .iter()
+                .filter(|(key, _)| {
+                    copies
+                        .iter()
+                        .any(|&p| edited(p, key) != edited(copies[0], key))
+                })
+                .map(|(key, name)| {
+                    let from = group
+                        .iter()
+                        .find(|&&p| metadata(p).is_some_and(|m| m.contains_key(*key)))
+                        .map(|&p| input_of[p].display().to_string())
+                        .unwrap_or_default();
+                    format!("{name} from {from}")
+                })
+                .collect();
+            if shown.is_empty() {
+                continue;
+            }
+            let mut inputs: Vec<&Path> = copies.iter().map(|&p| input_of[p]).collect();
+            inputs.dedup();
+            let holders = match inputs.as_slice() {
+                [one] => format!("{} holds {} copies", one.display(), copies.len()),
+                many => format!(
+                    "{} hold copies",
+                    many.iter()
+                        .map(|f| f.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                ),
+            };
+            let hint = if files.len() == 2 && copies.len() == 2 && inputs.len() == 2 {
+                ". To compare them, combine with --ab"
+            } else {
+                ""
+            };
+            notes.push(format!(
+                "note: {holders} of one recording whose KPIs or systeminfo differ; the \
+                 combined recording takes {}, and the events of all{hint}",
+                shown.join(", ")
+            ));
+        }
+    }
+    notes
+}
+
+/// Refuse `files` when two of them are one file, by any spelling or link
+/// (a hard link compared by device and inode on Unix): the second would add
+/// only a redundant copy of every source.
+fn refuse_one_file_twice(files: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
+    let same = |a: &Path, b: &Path| -> std::io::Result<bool> {
+        if std::fs::canonicalize(a)? == std::fs::canonicalize(b)? {
+            return Ok(true);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let (a, b) = (std::fs::metadata(a)?, std::fs::metadata(b)?);
+            return Ok((a.dev(), a.ino()) == (b.dev(), b.ino()));
+        }
+        #[allow(unreachable_code)]
+        Ok(false)
+    };
+    for i in 0..files.len() {
+        if let Some(j) = (0..i)
+            .map(|j| same(&files[j], &files[i]).map(|s| s.then_some(j)))
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .next()
+        {
+            return Err(format!(
+                "{} and {} are the same file; give it once",
+                files[j].display(),
+                files[i].display()
+            )
+            .into());
         }
     }
     Ok(())
@@ -1070,37 +1176,282 @@ mod tests {
         }
     }
 
-    /// A recording and its snapshot hold one source (one uuid), and an
-    /// archive holds a source once: combine refuses the pair before copying,
-    /// naming both inputs, in either order and when one file is given twice,
-    /// and writes nothing.
+    /// A recording and its snapshot (one source) combine in either order
+    /// into two sources, the second under a fresh uuid with the first's as
+    /// its origin, that read as one recording answering as the recording
+    /// alone; with `--ab` each is an arm answering as the recording alone.
+    /// One file given twice, by one spelling, another spelling or (on Unix) a
+    /// hard or symbolic link, is refused and nothing is written.
     #[test]
-    fn inputs_that_share_a_source_are_refused() {
+    fn a_recording_and_its_copy_combine_into_one_recording() {
+        use metriken_query::MetricsSource;
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.dendro");
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
         let copy = dir.path().join("copy.dendro");
         crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
+        let pool = || metriken_storage::BufferPool::new(64 * 1024 * 1024);
+        let answer = |r: &dyn MetricsSource| {
+            let (start, end) = r.time_range().unwrap();
+            serde_json::to_value(
+                r.query_range("sum(irate(task_ops[3s]))", start, end, 1.0)
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let alone = ::rez::reader::RezReader::open_recordings(&a, pool()).unwrap();
+        for (name, first, second) in [("ac.dendro", &a, &copy), ("ca.dendro", &copy, &a)] {
+            let out = dir.path().join(name);
+            run_combine(&[first.clone(), second.clone()], &out).unwrap();
+            let rows = dendro::archive::Archive::open(&out)
+                .unwrap()
+                .read_sources()
+                .unwrap();
+            assert_eq!(rows.len(), 2, "{name}");
+            assert_eq!(rows[1].origin, rows[0].uuid, "{name}");
+            let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
+            assert_eq!(both.len(), 1, "{name}: one recording");
+            assert_eq!(answer(&both[0].1), answer(&alone[0].1), "{name}");
+        }
+
+        // With --ab, the recording and its snapshot are the two arms: two
+        // recordings, each answering as the recording alone.
+        let ab = dir.path().join("ab.dendro");
+        run_combine_ab(
+            &[a.clone(), copy.clone()],
+            &ab,
+            &["baseline=a.dendro", "experiment=copy.dendro"],
+        )
+        .unwrap();
+        let arms = ::rez::reader::RezReader::open_recordings(&ab, pool()).unwrap();
+        assert_eq!(arms.len(), 2, "one recording an arm");
+        for (labels, reader) in &arms {
+            assert!(labels.contains_key("arm"), "{labels:?}");
+            assert_eq!(answer(reader), answer(&alone[0].1), "{labels:?}");
+        }
+
         let out = dir.path().join("twice.dendro");
-        for (first, second) in [(&a, &copy), (&copy, &a), (&a, &a)] {
-            let err = run_combine(&[first.clone(), second.clone()], &out)
+        let again = dir.path().join(".").join("a.dendro");
+        #[allow(unused_mut)]
+        let mut seconds = vec![a.clone(), again];
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("hard.dendro");
+            std::fs::hard_link(&a, &link).unwrap();
+            let sym = dir.path().join("sym.dendro");
+            std::os::unix::fs::symlink(&a, &sym).unwrap();
+            seconds.extend([link, sym]);
+        }
+        for second in &seconds {
+            let err = run_combine(&[a.clone(), second.clone()], &out)
                 .unwrap_err()
                 .to_string();
-            let named = format!(
-                "{} and {} hold the same source (uuid ",
-                first.display(),
-                second.display()
+            assert_eq!(
+                err,
+                format!(
+                    "{} and {} are the same file; give it once",
+                    a.display(),
+                    second.display()
+                )
             );
-            assert!(err.starts_with(&named), "{err}");
             assert!(!out.exists(), "nothing is written");
         }
+    }
+
+    /// Two copies of one recording whose metadata differs combine into one
+    /// recording with a note naming both inputs and, for each key that
+    /// differs, the input whose value the recording shows: KPIs both hold
+    /// from the first input, systeminfo only the second holds from the
+    /// second, in either order. Copies that agree, or that differ only in
+    /// events or keys a writer maintains, get none, and with `--ab` (two
+    /// recordings) neither does. One input holding both copies gets the note
+    /// without the `--ab` hint.
+    #[test]
+    fn copies_whose_metadata_differs_are_noted() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 6, true);
+        let b = dir.path().join("b.dendro");
+        crate::parquet_tools::snapshot_rez(&a, &b, "rezolus").unwrap();
+        let notes = || -> Vec<String> {
+            SAID.with(|s| s.take())
+                .into_iter()
+                .filter(|l| l.starts_with("note:"))
+                .collect()
+        };
+        let set = |path: &Path, key: &str, value: &str| {
+            let mut db = dendro::archive::ArchiveMut::open(path).unwrap();
+            for row in db.read_sources().unwrap() {
+                let mut metadata = row.meta.metadata.clone();
+                metadata.insert(key.to_string(), value.to_string());
+                db.update_source_metadata(row.id, &metadata).unwrap();
+            }
+        };
+
+        notes();
+        run_combine(&[a.clone(), b.clone()], &dir.path().join("same.dendro")).unwrap();
+        assert_eq!(notes(), Vec::<String>::new(), "copies that agree");
+
+        set(&a, "events", r#"{"events":[{"id":"x","timestamp":1}]}"#);
+        set(&a, "writer_sessions", "[1]");
+        set(&a, "descriptions", r#"{"m":"help"}"#);
+        run_combine(&[a.clone(), b.clone()], &dir.path().join("ev.dendro")).unwrap();
+        assert_eq!(notes(), Vec::<String>::new(), "events and writer keys");
+
+        set(&a, "service_queries", "[1]");
+        set(&b, "service_queries", "[2]");
+        set(&b, "systeminfo", "{}");
+        for (out, first, second) in [("ab.dendro", &a, &b), ("ba.dendro", &b, &a)] {
+            run_combine(&[first.clone(), second.clone()], &dir.path().join(out)).unwrap();
+            assert_eq!(
+                notes(),
+                [format!(
+                    "note: {} and {} hold copies of one recording whose KPIs or \
+                     systeminfo differ; the combined recording takes KPIs from {}, \
+                     systeminfo from {}, and the events of all. To compare them, combine \
+                     with --ab",
+                    first.display(),
+                    second.display(),
+                    first.display(),
+                    b.display()
+                )],
+                "{out}"
+            );
+        }
+
+        run_combine_ab(
+            &[a.clone(), b.clone()],
+            &dir.path().join("arms.dendro"),
+            &["baseline=a.dendro", "experiment=b.dendro"],
+        )
+        .unwrap();
+        assert_eq!(notes(), Vec::<String>::new(), "--ab");
+
+        // One input holding both copies: --ab cannot separate them, so no
+        // hint.
+        let both = dir.path().join("ab.dendro");
+        let c = dir.path().join("c.dendro");
+        crate::dendro_copy::fixtures::recorded(&c, 6, true);
+        run_combine(&[both.clone(), c.clone()], &dir.path().join("abc.dendro")).unwrap();
+        assert_eq!(
+            notes(),
+            [format!(
+                "note: {} holds 2 copies of one recording whose KPIs or systeminfo \
+                 differ; the combined recording takes KPIs from {}, systeminfo from {}, \
+                 and the events of all",
+                both.display(),
+                both.display(),
+                both.display()
+            )]
+        );
+
+        // Three copies over two inputs: --ab would leave two of them in one
+        // arm, so no hint.
+        run_combine(&[both.clone(), b.clone()], &dir.path().join("abb.dendro")).unwrap();
+        let said = notes();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(!said[0].contains("--ab"), "{said:?}");
+    }
+
+    /// On sources with identity layers, the note compares what the user
+    /// layer sets: two copies whose recorder layers differ (an agent restart
+    /// re-reads systeminfo while recording) get none, and an `annotate` of
+    /// one gets one.
+    #[test]
+    fn layered_copies_are_noted_for_user_edits_only() {
+        use metriken_storage::layers::{append, Entry, Layer, LegacyEvidence};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 6, true);
+        let layer = |path: &Path, layer: Layer, id: &str, systeminfo: &str| {
+            let mut db = dendro::archive::ArchiveMut::open(path).unwrap();
+            for row in db.read_sources().unwrap() {
+                let (mut labels, mut metadata) =
+                    (row.meta.labels.clone(), row.meta.metadata.clone());
+                let mut entry = Entry::new(id, "test");
+                entry.metadata = [("systeminfo".to_string(), systeminfo.to_string())].into();
+                append(
+                    &mut labels,
+                    &mut metadata,
+                    None,
+                    &LegacyEvidence::default(),
+                    layer,
+                    entry,
+                )
+                .unwrap();
+                db.update_source_metadata(row.id, &metadata).unwrap();
+            }
+        };
+        let notes = || -> Vec<String> {
+            SAID.with(|s| s.take())
+                .into_iter()
+                .filter(|l| l.starts_with("note:"))
+                .collect()
+        };
+
+        layer(&a, Layer::Recorder, "r0", r#"{"pcie_gen":4}"#);
+        let b = dir.path().join("b.dendro");
+        crate::parquet_tools::snapshot_rez(&a, &b, "rezolus").unwrap();
+        layer(&b, Layer::Recorder, "r1", r#"{"pcie_gen":1}"#);
+        notes();
+        run_combine(&[a.clone(), b.clone()], &dir.path().join("r.dendro")).unwrap();
+        assert_eq!(notes(), Vec::<String>::new(), "a restart's recorder entry");
+
+        layer(&b, Layer::User, "u0", r#"{"os":"edited"}"#);
+        run_combine(&[a.clone(), b.clone()], &dir.path().join("u.dendro")).unwrap();
+        let said = notes();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("systeminfo from"), "{said:?}");
+    }
+
+    /// Two ranged dumps of one recording with a gap between them (ticks 0-7
+    /// and 16-23 of 24, in segments of 4) combine into one recording whose
+    /// instants are both dumps' and none of the gap's.
+    #[test]
+    fn two_dumps_with_a_gap_combine_into_one_recording() {
+        use metriken_query::MetricsSource;
+        const SECOND: i64 = 1_000_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 24, true);
+        let pool = || metriken_storage::BufferPool::new(64 * 1024 * 1024);
+        let alone = ::rez::reader::RezReader::open_recordings(&a, pool()).unwrap();
+        let (first, last) = alone[0].1.time_range_ns().unwrap();
+        let first = first as i64;
+        let src = dendro::archive::Archive::open(&a).unwrap();
+        let early = dir.path().join("early.dendro");
+        let late = dir.path().join("late.dendro");
+        for (path, start, end) in [
+            (&early, i64::MIN, first + 5 * SECOND),
+            (&late, first + 18 * SECOND, i64::MAX),
+        ] {
+            let spec = dendro::rewrite::CopySpec {
+                start,
+                end,
+                ..dendro::rewrite::CopySpec::everything()
+            };
+            crate::dendro_copy::copy(&src, path, &spec).unwrap();
+        }
+        drop(src);
+
+        let out = dir.path().join("both.dendro");
+        run_combine(&[early.clone(), late.clone()], &out).unwrap();
+        let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
+        assert_eq!(both.len(), 1, "one recording");
+        let instants = both[0].1.sample_timestamps();
+        assert_eq!(instants.first().copied(), Some(first as u64));
+        assert_eq!(instants.last().copied(), Some(last));
+        let gap = (first + 8 * SECOND) as u64..(first + 16 * SECOND) as u64;
+        assert!(instants.iter().all(|t| !gap.contains(t)), "{instants:?}");
+        assert_eq!(instants.len(), 16, "{instants:?}");
     }
 
     /// An archive a build before 6.0.0-alpha.169 combined from a recording
     /// and its snapshot holds two sources with one uuid. They read as one
     /// recording, answering as the recording alone (read once, nothing
-    /// counted twice), and a combine that copies that archive is refused
-    /// naming it.
+    /// counted twice), and a combine that copies that archive keeps the
+    /// second under a fresh uuid, so it is still one recording beside the
+    /// new input.
     #[test]
     fn two_sources_with_one_uuid_are_one_recording() {
         use metriken_query::MetricsSource;
@@ -1135,19 +1486,19 @@ mod tests {
         let c = dir.path().join("c.dendro");
         crate::dendro_copy::fixtures::recorded(&c, 6, true);
         let again = dir.path().join("again.dendro");
-        let err = run_combine(&[c, out.clone()], &again)
-            .unwrap_err()
-            .to_string();
-        let uuid = sources[0].uuid.clone().unwrap();
+        run_combine(&[c, out.clone()], &again).unwrap();
+        let rows = dendro::archive::Archive::open(&again)
+            .unwrap()
+            .read_sources()
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2].origin, sources[0].uuid);
+        let readers = ::rez::reader::RezReader::open_recordings(&again, pool()).unwrap();
         assert_eq!(
-            err,
-            format!(
-                "{}: {}",
-                out.display(),
-                ::rez::container::duplicate_source(&uuid)
-            )
+            readers.len(),
+            2,
+            "c, and the recording read from two sources"
         );
-        assert!(!again.exists(), "nothing is written");
     }
 
     /// metriken-query reads each process group once (since 0.42), and these

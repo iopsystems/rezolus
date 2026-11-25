@@ -73,8 +73,21 @@ const ViewerApi = {
         registry.set_baseline_name(fileName);
     },
 
+    // The refusal of `file` before it is read into memory, when it is a
+    // format the browser converts and is larger than it converts (the WASM
+    // module's `upload_refusal`, from the file's first 4 KiB); null when
+    // the file may be read.
+    async uploadRefusal(file) {
+        const wasmModule = await import('../pkg/wasm_viewer.js');
+        await wasmModule.default();
+        const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+        return wasmModule.upload_refusal(head, file.size, file.name || 'upload') ?? null;
+    },
+
     async attachExperiment(file) {
         ensureRegistry();
+        const refusal = await this.uploadRefusal(file);
+        if (refusal) throw new Error(refusal);
         const data = new Uint8Array(await file.arrayBuffer());
         registry.attach('experiment', data, file.name || 'experiment.dendro');
     },

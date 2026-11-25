@@ -18,8 +18,8 @@ log = "0.4.29"
 metriken = "0.11.4"
 metriken-charts = "0.1.5"
 metriken-exposition = "0.28.0"
-metriken-query = { version = "0.52.1", default-features = false }
-metriken-storage = { version = "0.14.1", default-features = false }
+metriken-query = { version = "0.52.2", default-features = false }
+metriken-storage = { version = "0.14.2", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -53,8 +53,12 @@ dashboard = { path = "crates/dashboard" }
 # source per uuid (`Error::DuplicateSource`), and each writing handle holds an
 # advisory lock on an `<archive>-lock` file beside the archive. 0.8.2 adds
 # `ArchiveMut::replace_segment_index`, which metriken-storage 0.14.1's
-# `reindex` (`recording reindex`) uses.
-dendro = { version = "0.8.2", default-features = false }
+# `reindex` (`recording upgrade` of a `.dendro`) uses. 0.8.3 adds
+# `copy_sources_into_as_copies`, which every copy here uses: a source whose
+# uuid the destination already holds is copied under a fresh uuid, its
+# `origin` naming the first source of its chain of copies, which
+# metriken-storage 0.14.2 groups it with.
+dendro = { version = "0.8.3", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -63,7 +67,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.172"
+version = "6.0.0-alpha.178"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

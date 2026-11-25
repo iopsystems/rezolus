@@ -175,6 +175,7 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     let _ = ctrlc::set_handler(|| {
         restore_terminal();
         super::live::remove_live_dirs();
+        super::legacy_load::remove();
         std::process::exit(130);
     });
 
