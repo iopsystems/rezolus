@@ -3622,6 +3622,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
+ "dashboard",
  "dendro",
  "histogram",
  "metriken",

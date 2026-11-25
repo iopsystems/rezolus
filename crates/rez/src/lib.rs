@@ -8,10 +8,10 @@
 pub mod container;
 #[cfg(any(all(test, feature = "write"), feature = "test-support"))]
 pub mod fixtures;
+pub mod legacy;
 pub mod live;
 pub mod reader;
 
-#[cfg(feature = "write")]
 pub use metriken_storage::rez::to_dendro;
 pub use metriken_storage::rez::{catalog, rez, rez_sqlite, wal, wire};
 pub use metriken_storage::{schema, window};

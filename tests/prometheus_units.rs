@@ -598,7 +598,7 @@ fn served_series_read_back_through_both_viewers() {
 
     // The WASM viewer, built natively.
     let bytes = std::fs::read(output).unwrap();
-    let wasm = match viewer::Viewer::new(&bytes, "units.dendro") {
+    let wasm = match viewer::Viewer::new(bytes.to_vec(), "units.dendro") {
         Ok(v) => v,
         Err(_) => panic!("the WASM viewer opens the recording"),
     };

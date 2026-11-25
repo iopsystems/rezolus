@@ -784,15 +784,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Removed
 
-- **Breaking: every command but `rezolus recording upgrade` opens
+- **Breaking: `mcp` and every `recording` subcommand but `upgrade` open
   `.dendro` archives only.** A `.rez` archive (v1, v2 or v3), a standalone
-  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by
-  `view` (a file, a browser upload, a URL load and an attached
-  experiment), the static-site viewer, `mcp` (CLI and stdio), Save as
-  Report and every other `recording` subcommand, with the command that
-  converts the file: `rezolus recording upgrade FILE`, which writes
-  `FILE`'s name with a `.dendro` extension. Nothing converts a recording
-  when it is opened, in memory or into a temporary file. `upgrade` now
+  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by `mcp`
+  (CLI and stdio) and every other `recording` subcommand, with the command
+  that converts the file: `rezolus recording upgrade FILE`, which writes
+  `FILE`'s name with a `.dendro` extension. The viewers convert one when
+  they open it (see Changed). `upgrade` now
   also converts a `.parquet.ab.tar` into a two-recording `.dendro`
   labelled `arm=baseline`/`arm=experiment`, which the viewer opens as the
   comparison; the tarball's aliases and category are not carried over. The
@@ -913,6 +911,22 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
+- **The viewers convert a `.rez` or `.parquet` recording when they open it.**
+  `rezolus view` converts a `.rez` (v1, v2 or v3), a `.parquet` or a
+  `.parquet.ab.tar`, given on the command line, uploaded or loaded from a
+  URL, to a temporary `.dendro` with `recording upgrade`'s converter, and
+  removes it when the viewer exits (ctrl-c, SIGTERM, an error exit, a
+  panic, the TUI quitting). The static-site viewer converts a `.rez` or a single-source
+  `.parquet` of up to 640 MiB in the browser and shows a notice saying so;
+  Save as Report then writes a `.dendro`. Converting a v3 `.rez` in the
+  browser peaked at 4.5 to 5.2 times the file's size on files of 36 to
+  667 MiB (measured in node; other browsers were not measured), against
+  wasm32's 4 GiB, so a larger file is refused with
+  `rezolus recording upgrade FILE` before it is read, as are a combined 5.x
+  parquet file and a `.parquet.ab.tar`. Save as Report in the browser refuses an
+  archive over 400 MiB, converted or not. The upload picker offers `.rez` and `.parquet`
+  files. `mcp` and the `recording` tools still refuse these formats with
+  the upgrade command.
 - **An archive holds one source per uuid** (dendro 0.8, metriken-storage
   0.14, metriken-query 0.52, metriken-exposition 0.28, metriken-recorder
   0.16). `recording combine` refuses two inputs that hold the same source (a
@@ -2313,8 +2327,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   now refuses a `y` that exists before reading anything, where it replaced
   it; `-o` naming the input itself (`./x.dendro`) filters in place. A killed
   command leaves that directory behind. Save as Report in the static site
-  refuses a recording over 1 GiB (it holds about three copies in memory),
-  naming `rezolus view`.
+  refuses a recording over 400 MiB (the report is built in memory beside
+  the recording; saving one of 583 MiB ran wasm32 out of memory), naming
+  `rezolus view`.
 - **Gauge histograms are listed.** A `.dendro` holding gauge histograms
   (metriken 0.11.4's `GaugeHistogram`) shows them in the viewer's metric
   browser (as histograms, charted through the histogram functions) and in

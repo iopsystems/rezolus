@@ -569,9 +569,11 @@ open, `Esc`/`h` back, `[` / `]` change the time window, `r` refresh, `?` help,
 The same web dashboard is also available as a browser-only static site under
 [`site/viewer/`](../site/viewer/), powered by the
 [`crates/viewer`](../crates/viewer) WASM module. It runs the PromQL query engine
-client-side, so uploaded `.dendro` recordings never leave the browser. A
-`.rez` or `.parquet` upload is refused with the command that converts it on
-your machine, `rezolus recording upgrade FILE`.
+client-side, so uploaded recordings never leave the browser. A `.rez` or
+`.parquet` upload of up to 640 MiB is converted to a `.dendro` in the browser;
+a larger one, a combined 5.x parquet file or a `.parquet.ab.tar` is refused
+with the command that converts it on your machine,
+`rezolus recording upgrade FILE`.
 
 ### Aligning captures in a comparison
 
