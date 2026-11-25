@@ -113,6 +113,32 @@ pub static ERRATA: &[Erratum] = &[
                   rather than lacked run-time statistics.",
         reference: "https://github.com/iopsystems/rezolus/pull/1753",
     },
+    Erratum {
+        metrics: &[
+            "gpmu_clock",
+            "gpmu_active_clock",
+            "gpmu_waves",
+            "gpmu_busy_cycles",
+            "gpmu_wave_cycles",
+            "gpmu_valu_instructions",
+            "gpmu_salu_instructions",
+            "gpmu_lds_instructions",
+            "gpmu_icache_requests",
+            "gpmu_icache_hits",
+            "gpmu_vram_read_requests",
+            "gpmu_vram_write_requests",
+            "gpmu_l2_hits",
+            "gpmu_l2_misses",
+        ],
+        fixed_in: "6.0.0-alpha.178",
+        since: None,
+        fixed_if_present: &[],
+        severity: Severity::Misleading,
+        summary: "A counter whose total was zero was not recorded, so a GPU or counter \
+                  missing from these series may have counted nothing, such as an SQ \
+                  instruction counter on an idle GPU, rather than not been collected.",
+        reference: "https://github.com/iopsystems/rezolus/pull/1754",
+    },
 ];
 
 /// Whether an erratum applies to a recording, and why.

@@ -123,6 +123,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     };
     debug!("{NAME}: initialized for {} GPU agent(s)", rocp.num_agents());
 
+    // GPU agents are numbered from 0 and fixed after init, so the prefix bound
+    // is exact. `publish` skips any id at or beyond `MAX_GPUS`.
+    GPU_AMD_PMU_ACQ.set_member_bound(rocp.num_agents().min(super::MAX_GPUS));
+
     Ok(Some(Box::new(AmdPmu { rocp })))
 }
 
@@ -147,23 +151,48 @@ impl Sampler for AmdPmu {
         // Read the running counter totals for each GPU. The totals are maintained
         // by per-GPU background worker threads (which bracket each window with
         // start/stop); this is just a cheap in-memory read, no GPU I/O.
-        for idx in 0..self.rocp.num_agents() {
-            match self.rocp.sample(idx) {
-                Ok(sums) => publish(idx, &sums),
-                Err(e) => debug!("{NAME}: GPU {idx}: read failed: {e}"),
-            }
+        let samples: Vec<_> = (0..self.rocp.num_agents())
+            .filter_map(|idx| match self.rocp.sample(idx) {
+                Ok(sample) => Some((idx, sample)),
+                Err(e) => {
+                    debug!("{NAME}: GPU {idx}: read failed: {e}");
+                    None
+                }
+            })
+            .collect();
+
+        // A worker last added a window to its totals before this copy, and a
+        // worker whose windows keep failing leaves them as they were. The
+        // window therefore begins no later than the oldest such time among
+        // the GPUs this publishes (ids below `MAX_GPUS`).
+        GPU_AMD_PMU_ACQ.values_fixed_at(
+            samples
+                .iter()
+                .filter(|(idx, _)| *idx < super::MAX_GPUS)
+                .filter_map(|(_, s)| s.accumulated_at_ns)
+                .min(),
+        );
+
+        let guard = GPU_AMD_PMU_ACQ.acquire();
+        for (idx, sample) in &samples {
+            publish(*idx, &sample.sums);
+        }
+        // `sample` fails only when rocprofiler is shutting down. With no GPU
+        // read, stamping would present the old values as fresh.
+        if samples.is_empty() {
+            guard.discard();
+        } else {
+            guard.finish();
         }
     }
 }
 
 /// Publish the running device-level counter totals for GPU `id` into the
-/// metrics. Each value is a monotonic running total (the sum of per-window
-/// deltas accumulated by the worker thread), but `CounterGroup` only exposes
-/// `add`, so we advance the stored counter by the delta from its current value.
-/// This keeps it monotonic and converged to the total.
+/// metrics. Each value is a monotonic running total: the sum of per-window
+/// deltas the worker thread has accumulated since the agent started.
 fn publish(id: usize, sums: &std::collections::HashMap<String, f64>) {
-    // Metric groups are sized for `MAX_GPUS`; a higher id would be silently
-    // dropped by `CounterGroup::add` (returns Err). Skip it and warn once.
+    // Metric groups are sized for `MAX_GPUS`; a higher id would be dropped by
+    // `CounterGroup::set` (returns false). Skip it and warn once.
     if id >= super::MAX_GPUS {
         use std::sync::atomic::{AtomicBool, Ordering};
         static WARNED: AtomicBool = AtomicBool::new(false);
@@ -178,13 +207,7 @@ fn publish(id: usize, sums: &std::collections::HashMap<String, f64>) {
 
     let advance = |name: &str, metric: &metriken::CounterGroup| {
         if let Some(&v) = sums.get(name) {
-            if v.is_finite() && v >= 0.0 {
-                let target = v as u64;
-                let current = metric.value(id).unwrap_or(0);
-                if target > current {
-                    let _ = metric.add(id, target - current);
-                }
-            }
+            advance_to(metric, id, v);
         }
     };
 
@@ -202,4 +225,85 @@ fn publish(id: usize, sums: &std::collections::HashMap<String, f64>) {
     advance("GL2C_EA_WRREQ", &GPU_GL2C_EA_WRREQ);
     advance("GL2C_HIT", &GPU_GL2C_HIT);
     advance("GL2C_MISS", &GPU_GL2C_MISS);
+}
+
+/// Store the running total `v` for GPU `id`, including a total of zero.
+///
+/// The total starts at zero when the agent starts, so a zero is a reading:
+/// an idle GPU, or an RDNA counter that cannot count outside a stable power
+/// state. The stored value never decreases. A total below the stored one, or
+/// one that is negative or not finite, leaves the entry unchanged.
+fn advance_to(metric: &metriken::CounterGroup, id: usize, v: f64) {
+    if !(v.is_finite() && v >= 0.0) {
+        return;
+    }
+    let target = v as u64;
+    match metric.value(id) {
+        Some(current) if target <= current => {}
+        _ => {
+            let _ = metric.set(id, target);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_total_of_zero_is_stored_as_zero() {
+        let metric = metriken::CounterGroup::new(2);
+        advance_to(&metric, 0, 0.0);
+        assert_eq!(metric.value(0), Some(0));
+        assert_eq!(metric.value(1), None, "an unread GPU stays unwritten");
+    }
+
+    #[test]
+    fn the_stored_total_never_decreases() {
+        let metric = metriken::CounterGroup::new(1);
+        advance_to(&metric, 0, 10.0);
+        advance_to(&metric, 0, 4.0);
+        assert_eq!(metric.value(0), Some(10));
+        advance_to(&metric, 0, 12.0);
+        assert_eq!(metric.value(0), Some(12));
+    }
+
+    #[test]
+    fn a_negative_or_non_finite_total_is_ignored() {
+        let metric = metriken::CounterGroup::new(1);
+        advance_to(&metric, 0, -1.0);
+        advance_to(&metric, 0, f64::NAN);
+        advance_to(&metric, 0, f64::INFINITY);
+        assert_eq!(metric.value(0), None);
+    }
+
+    /// `publish` stores a total of zero. No test initialises the sampler, so
+    /// no worker writes this slot.
+    #[test]
+    fn publish_stores_a_total_of_zero() {
+        let id = super::super::MAX_GPUS - 1;
+        let sums = std::collections::HashMap::from([("GRBM_COUNT".to_string(), 0.0)]);
+        publish(id, &sums);
+        assert_eq!(GPU_GRBM_COUNT.value(id), Some(0));
+    }
+
+    /// Every `gpmu_*` metric is in the declared group, which publishes a zero
+    /// entry; the default group skips it.
+    #[test]
+    fn every_counter_is_in_the_declared_group() {
+        let mut seen = 0;
+        for metric in metriken::metrics().static_metrics() {
+            if !metric.name().starts_with("gpmu_") {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(
+                metric.metadata().get("acq_group"),
+                Some("gpu_amd_pmu_devices"),
+                "{} is not in gpu_amd_pmu_devices",
+                metric.name()
+            );
+        }
+        assert_eq!(seen, COUNTERS.len());
+    }
 }

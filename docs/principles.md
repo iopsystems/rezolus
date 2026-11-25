@@ -748,8 +748,9 @@ section (drivehealth and both GPU samplers collapse their whole per-drive/
 per-device sweep into a single group per principle 18's "device sweep"
 read-section shape, matching the like-entities rule; memory/cpu-cores are
 one procfs/sysfs read each). `gpu_amd_pmu` (rocprofiler hardware counters)
-was untouched — it was already a plain, unwindowed `CounterGroup` sampler
-with no per-metric window to migrate away from.
+is one group, `gpu_amd_pmu_devices`: `refresh` copies the per-GPU totals its
+worker threads accumulate, one `sample` call per GPU, and the window begins no
+later than the oldest worker's last accumulation.
 
 A gap-closure pass (both waves had missed these; caught by the on-host
 measurement in `2026-08-19-v3-format-acceptance.md`'s wave-2 addendum)

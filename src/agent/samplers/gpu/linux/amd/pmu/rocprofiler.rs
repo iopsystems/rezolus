@@ -253,9 +253,29 @@ struct AgentState {
     /// The counter names successfully included in the config (a subset of the
     /// requested set), retained for diagnostics/logging.
     kept: Vec<String>,
-    /// Running totals (counter name -> accumulated value), updated by the worker
-    /// thread each window and read by `sample()`. Shared with the worker.
-    accum: Arc<Mutex<HashMap<String, u64>>>,
+    /// Running totals, updated by the worker thread each window and read by
+    /// `sample()`. Shared with the worker.
+    accum: Arc<Mutex<Totals>>,
+}
+
+/// An agent's running counter totals and when the worker last added a window
+/// to them.
+#[derive(Default)]
+struct Totals {
+    /// Counter name -> accumulated value.
+    counts: HashMap<String, u64>,
+    /// When the worker last added a window's delta, on the source timeline
+    /// (`epoch::anchored_ts`). `None` until the first window is added.
+    accumulated_at_ns: Option<u64>,
+}
+
+/// One agent's totals as `sample()` returns them.
+pub struct Sample {
+    /// Counter name -> running total, summed across hardware instances.
+    pub sums: HashMap<String, f64>,
+    /// When the worker last added a window to the totals, on the source
+    /// timeline. `None` until the worker has added its first window.
+    pub accumulated_at_ns: Option<u64>,
 }
 // SAFETY: only accessed under the STATE mutex.
 unsafe impl Send for AgentState {}
@@ -466,7 +486,7 @@ fn setup_agent(syms: &Syms, id: AgentId, wanted: &[&str]) -> Result<AgentState, 
             config: cfg,
             id_to_name,
             kept,
-            accum: Arc::new(Mutex::new(HashMap::new())),
+            accum: Arc::new(Mutex::new(Totals::default())),
         })
     }
 }
@@ -662,7 +682,7 @@ impl Rocprofiler {
         // releasing the STATE guard, then spawn the threads. The tuple type is
         // self-documenting here (ctx, config handle, shared accumulator).
         #[allow(clippy::type_complexity)]
-        let worker_inputs: Vec<(ContextId, u64, Arc<Mutex<HashMap<String, u64>>>)> = state
+        let worker_inputs: Vec<(ContextId, u64, Arc<Mutex<Totals>>)> = state
             .agents
             .iter()
             .map(|a| (a.ctx, a.config.handle, a.accum.clone()))
@@ -694,17 +714,24 @@ impl Rocprofiler {
         self.num_agents
     }
 
-    /// Return the current accumulated counter totals for agent `idx` (counter
-    /// name -> running total, summed across hardware instances). These are
-    /// monotonic counters built up by the agent's background worker from each
-    /// window's delta, so `rate()` downstream works the same as for any other
-    /// Rezolus counter. This is a cheap in-memory read — no GPU I/O.
-    pub fn sample(&self, idx: usize) -> Result<HashMap<String, f64>, String> {
+    /// Return the current accumulated counter totals for agent `idx`, and when
+    /// the worker last added a window to them. These are monotonic counters built up by the agent's
+    /// background worker from each window's delta, so `rate()` downstream works
+    /// the same as for any other Rezolus counter. This is a cheap in-memory
+    /// read — no GPU I/O.
+    pub fn sample(&self, idx: usize) -> Result<Sample, String> {
         let guard = STATE.lock();
         let state = guard.as_ref().ok_or("rocprofiler not initialized")?;
         let agent = state.agents.get(idx).ok_or("agent index out of range")?;
         let accum = agent.accum.lock();
-        Ok(accum.iter().map(|(k, &v)| (k.clone(), v as f64)).collect())
+        Ok(Sample {
+            sums: accum
+                .counts
+                .iter()
+                .map(|(k, &v)| (k.clone(), v as f64))
+                .collect(),
+            accumulated_at_ns: accum.accumulated_at_ns,
+        })
     }
 }
 
@@ -772,10 +799,13 @@ fn agent_worker_loop(
     idx: usize,
     ctx: ContextId,
     config_handle: u64,
-    accum: Arc<Mutex<HashMap<String, u64>>>,
+    accum: Arc<Mutex<Totals>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
     use std::sync::atomic::Ordering;
+
+    // Whether the last window was added, so a change is logged once.
+    let mut accumulating = true;
 
     // Helper: run a closure with the locked syms + the agent's id_to_name.
     // Returns None if rocprofiler state is gone (shutting down).
@@ -805,7 +835,10 @@ fn agent_worker_loop(
         match started {
             None => break, // state gone — shutting down
             Some(Err(e)) => {
-                crate::debug!("gpu_amd_pmu: GPU {idx}: {e}");
+                if accumulating {
+                    crate::warn!("gpu_amd_pmu: GPU {idx}: counters are not accumulating: {e}");
+                    accumulating = false;
+                }
                 // Back off a little before retrying so we don't spin on errors.
                 std::thread::sleep(WINDOW);
                 continue;
@@ -829,14 +862,26 @@ fn agent_worker_loop(
             // 5) accumulate the per-window delta into the running totals.
             let mut a = accum.lock();
             for (name, v) in delta {
-                *a.entry(name).or_insert(0) += v;
+                *a.counts.entry(name).or_insert(0) += v;
             }
+            a.accumulated_at_ns =
+                Some(crate::agent::epoch::anchored_ts(std::time::Instant::now()).max(0) as u64);
             Ok(())
         });
         match result {
             None => break,
-            Some(Err(e)) => crate::debug!("gpu_amd_pmu: GPU {idx}: {e}"),
-            Some(Ok(())) => {}
+            Some(Err(e)) => {
+                if accumulating {
+                    crate::warn!("gpu_amd_pmu: GPU {idx}: counters are not accumulating: {e}");
+                    accumulating = false;
+                }
+            }
+            Some(Ok(())) => {
+                if !accumulating {
+                    crate::info!("gpu_amd_pmu: GPU {idx}: counters accumulating again");
+                    accumulating = true;
+                }
+            }
         }
     }
 }
