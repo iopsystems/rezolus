@@ -357,7 +357,7 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   acquisition group, where a zero entry is skipped. A counter whose total was
   0, such as an SQ instruction counter on an idle GPU or at the `auto` power
   level, therefore had no series, which reads the same as a counter the
-  sampler does not collect. Releases from 5.18.0 through 5.32.0 and the 6.0
+  sampler does not collect. Releases from 5.18.0 through 5.33.0 and the 6.0
   prereleases have this. The counters are now in the group
   `gpu_amd_pmu_devices`, with one member per GPU, and carry an acquisition
   window that begins no later than the oldest time a GPU's worker last added
