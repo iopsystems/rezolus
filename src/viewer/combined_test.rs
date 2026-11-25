@@ -1685,7 +1685,7 @@ fn errata_ride_on_the_plots_of_the_affected_recording_in_both_viewers() {
     );
     let state = view(&path, &[]);
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.dendro")
+    reg.attach("baseline", std::fs::read(&path).unwrap(), "run.dendro")
         .unwrap();
     reg.init_templates("baseline", "[]").unwrap();
 
