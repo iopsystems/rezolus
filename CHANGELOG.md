@@ -935,8 +935,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   copies of one recording (a file and a snapshot of it, or two snapshots or
   hindsight dumps of one buffer) combine into one recording, gaps and
   overlap included, which takes each metadata key (KPIs, systeminfo) from
-  the first input that holds it; with `--ab` each becomes its own arm, which
-  is how to compare two annotations of one recording. Save as Report saves a
+  the first input that holds it, except events, which are both inputs' (an
+  event with one id once, from the first input); with `--ab` each becomes
+  its own arm, which is how to compare two annotations of one recording. Save as Report saves a
   comparison of two such files. One file given twice to `recording combine` is
   refused. An archive a build before 6.0.0-alpha.169 wrote with two sources
   under one uuid (a recording combined with a copy of it) reads as one
@@ -1467,7 +1468,8 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   queries cached.
 - **One agent process recorded twice is read once.** metriken-query 0.42 forms
   process groups: sources that share a uuid (in an archive written before
-  6.0.0-alpha.169) or are copies kept under a fresh uuid with one origin, or
+  6.0.0-alpha.169) or are copies kept under a fresh uuid with one origin
+  (metriken-storage 0.14.2), or
   share a `producer_epoch` and overlap in time (one agent
   process recorded twice), are one recording; one epoch with disjoint spans
   is two. `rezolus view`, `mcp` (its `--recording` selectors and

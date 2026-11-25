@@ -437,9 +437,10 @@ with --ab, below) and an output (-o) ending in .dendro. Two inputs that
 are copies of one recording (a file and a snapshot of it, or two
 snapshots or hindsight dumps of one buffer) are read as one recording,
 gaps and overlap included; where their metadata differs (KPIs,
-systeminfo), each key is taken from the first input that holds it, so to
-compare two annotations of one recording, use --ab. One file given twice
-is refused.
+systeminfo), each key is taken from the first input that holds it,
+except events, which are both inputs' (an event with one id once, from
+the first input), so to compare two annotations of one recording, use
+--ab. One file given twice is refused.
 
 With `--ab baseline=<input> experiment=<input>` each input's recordings
 are labelled arm=baseline or arm=experiment and the viewer opens a

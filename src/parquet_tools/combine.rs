@@ -1073,8 +1073,8 @@ mod tests {
     /// into two sources, the second under a fresh uuid with the first's as
     /// its origin, that read as one recording answering as the recording
     /// alone; with `--ab` each is an arm answering as the recording alone.
-    /// One file given twice, by one spelling, another spelling, a hard link
-    /// or (on Unix) a symbolic link, is refused and nothing is written.
+    /// One file given twice, by one spelling, another spelling or (on Unix) a
+    /// hard or symbolic link, is refused and nothing is written.
     #[test]
     fn a_recording_and_its_copy_combine_into_one_recording() {
         use metriken_query::MetricsSource;
@@ -1125,15 +1125,15 @@ mod tests {
 
         let out = dir.path().join("twice.dendro");
         let again = dir.path().join(".").join("a.dendro");
-        let link = dir.path().join("hard.dendro");
-        std::fs::hard_link(&a, &link).unwrap();
         #[allow(unused_mut)]
-        let mut seconds = vec![a.clone(), again, link];
+        let mut seconds = vec![a.clone(), again];
         #[cfg(unix)]
         {
+            let link = dir.path().join("hard.dendro");
+            std::fs::hard_link(&a, &link).unwrap();
             let sym = dir.path().join("sym.dendro");
             std::os::unix::fs::symlink(&a, &sym).unwrap();
-            seconds.push(sym);
+            seconds.extend([link, sym]);
         }
         for second in &seconds {
             let err = run_combine(&[a.clone(), second.clone()], &out)

@@ -865,9 +865,10 @@ mod help {
                          are copies of one recording (a file and a snapshot of it, or two\n\
                          snapshots or hindsight dumps of one buffer) are read as one recording,\n\
                          gaps and overlap included; where their metadata differs (KPIs,\n\
-                         systeminfo), each key is taken from the first input that holds it, so to\n\
-                         compare two annotations of one recording, use --ab. One file given twice\n\
-                         is refused.\n\n\
+                         systeminfo), each key is taken from the first input that holds it,\n\
+                         except events, which are both inputs' (an event with one id once, from\n\
+                         the first input), so to compare two annotations of one recording, use\n\
+                         --ab. One file given twice is refused.\n\n\
                          With `--ab baseline=<input> experiment=<input>` each input's recordings\n\
                          are labelled arm=baseline or arm=experiment and the viewer opens a\n\
                          baseline/experiment comparison; an input recording that already carries\n\
