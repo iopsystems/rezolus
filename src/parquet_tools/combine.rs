@@ -495,17 +495,19 @@ fn combine_dendro(
     Ok(())
 }
 
-/// A note for each set of copies of one source in one recording of the
-/// output whose KPIs or systeminfo differ: the keys a person sets
-/// (`annotate`), where the recording takes each from the first of its
-/// sources holding it. The note names, for each that differs, the input
-/// whose value the recording shows. Events are left out (a recording holds
-/// the events of all its sources), and so are the keys a writer maintains
-/// (`descriptions`, `writer_sessions`, the layers), which differ between two
-/// dumps of one buffer taken at different times. `--ab` is suggested only
-/// when there are two inputs and each holds one of the copies. `rows` are the output's sources
-/// in catalog order, `counts` how many each of `files` contributed, in
-/// order, and `groups` the output's recordings by catalog position.
+/// A note for each set of copies of one source in one recording of the output
+/// whose KPIs or systeminfo were edited differently. On a source with identity
+/// layers that is the value its user layer sets (`annotate`,
+/// `template_override`, `record --metadata`); the recorder and producer layers
+/// also set both keys, and an agent restart while recording re-reads them, so
+/// two dumps of one buffer taken at different times can differ there with no
+/// edit. On a source without layers it is the key itself. The recording takes
+/// each key from the first of its sources holding it, and the note names that
+/// input for each key that differs. Events are left out (a recording holds the
+/// events of all its sources). `--ab` is suggested only for two copies, one in
+/// each of two inputs. `rows` are the output's sources in catalog order,
+/// `counts` how many each of `files` contributed, in order, and `groups` the
+/// output's recordings by catalog position.
 fn differing_copies(
     rows: &[dendro::archive::SourceRow],
     counts: &[usize],
@@ -530,13 +532,25 @@ fn differing_copies(
         }
         for copies in by_identity.values().filter(|c| c.len() > 1) {
             let metadata = |p: usize| rows.get(p).map(|r| &r.meta.metadata);
+            // The value a person set: the user layer's, where there are
+            // layers.
+            let edited = |p: usize, key: &str| -> Option<String> {
+                let m = metadata(p)?;
+                match metriken_storage::layers::Layers::read(m) {
+                    Ok(Some(layers)) => layers
+                        .user
+                        .fold(metriken_storage::layers::Layer::User)
+                        .metadata
+                        .remove(key),
+                    _ => m.get(key).cloned(),
+                }
+            };
             let shown: Vec<String> = NOTED
                 .iter()
                 .filter(|(key, _)| {
-                    copies.iter().any(|&p| {
-                        metadata(p).and_then(|m| m.get(*key))
-                            != metadata(copies[0]).and_then(|m| m.get(*key))
-                    })
+                    copies
+                        .iter()
+                        .any(|&p| edited(p, key) != edited(copies[0], key))
                 })
                 .map(|(key, name)| {
                     let from = group
@@ -562,7 +576,7 @@ fn differing_copies(
                         .join(" and ")
                 ),
             };
-            let hint = if files.len() == 2 && inputs.len() == 2 {
+            let hint = if files.len() == 2 && copies.len() == 2 && inputs.len() == 2 {
                 ". To compare them, combine with --ab"
             } else {
                 ""
@@ -1330,6 +1344,64 @@ mod tests {
                 both.display()
             )]
         );
+
+        // Three copies over two inputs: --ab would leave two of them in one
+        // arm, so no hint.
+        run_combine(&[both.clone(), b.clone()], &dir.path().join("abb.dendro")).unwrap();
+        let said = notes();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(!said[0].contains("--ab"), "{said:?}");
+    }
+
+    /// On sources with identity layers, the note compares what the user
+    /// layer sets: two copies whose recorder layers differ (an agent restart
+    /// re-reads systeminfo while recording) get none, and an `annotate` of
+    /// one gets one.
+    #[test]
+    fn layered_copies_are_noted_for_user_edits_only() {
+        use metriken_storage::layers::{append, Entry, Layer, LegacyEvidence};
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 6, true);
+        let layer = |path: &Path, layer: Layer, id: &str, systeminfo: &str| {
+            let mut db = dendro::archive::ArchiveMut::open(path).unwrap();
+            for row in db.read_sources().unwrap() {
+                let (mut labels, mut metadata) =
+                    (row.meta.labels.clone(), row.meta.metadata.clone());
+                let mut entry = Entry::new(id, "test");
+                entry.metadata = [("systeminfo".to_string(), systeminfo.to_string())].into();
+                append(
+                    &mut labels,
+                    &mut metadata,
+                    None,
+                    &LegacyEvidence::default(),
+                    layer,
+                    entry,
+                )
+                .unwrap();
+                db.update_source_metadata(row.id, &metadata).unwrap();
+            }
+        };
+        let notes = || -> Vec<String> {
+            SAID.with(|s| s.take())
+                .into_iter()
+                .filter(|l| l.starts_with("note:"))
+                .collect()
+        };
+
+        layer(&a, Layer::Recorder, "r0", r#"{"pcie_gen":4}"#);
+        let b = dir.path().join("b.dendro");
+        crate::parquet_tools::snapshot_rez(&a, &b, "rezolus").unwrap();
+        layer(&b, Layer::Recorder, "r1", r#"{"pcie_gen":1}"#);
+        notes();
+        run_combine(&[a.clone(), b.clone()], &dir.path().join("r.dendro")).unwrap();
+        assert_eq!(notes(), Vec::<String>::new(), "a restart's recorder entry");
+
+        layer(&b, Layer::User, "u0", r#"{"os":"edited"}"#);
+        run_combine(&[a.clone(), b.clone()], &dir.path().join("u.dendro")).unwrap();
+        let said = notes();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("systeminfo from"), "{said:?}");
     }
 
     /// Two ranged dumps of one recording with a gap between them (ticks 0-7

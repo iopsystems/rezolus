@@ -937,10 +937,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   overlap included, which takes each metadata key (KPIs, systeminfo) from
   the first input that holds it, except events, which are both inputs' (an
   event with one id once, from the first input). A note names which of the
-  KPIs and systeminfo differ and the input each is taken from. With `--ab`
-  each copy becomes its own arm, which is how to compare two annotations of
-  one recording. Save as Report saves a
-  comparison of two such files. One file given twice to `recording combine` is
+  KPIs and systeminfo were edited differently and the input each is taken
+  from. With `--ab` each copy becomes its own arm, which is how to compare
+  two annotations of one recording. Save as Report saves a comparison of
+  two such files. One file given twice to `recording combine` is
   refused. An archive a build before 6.0.0-alpha.169 wrote with two sources
   under one uuid (a recording combined with a copy of it) reads as one
   recording, and `recording snapshot`, `filter`, an edit into a new file,

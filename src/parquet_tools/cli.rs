@@ -865,12 +865,11 @@ mod help {
                          are copies of one recording (a file and a snapshot of it, or two\n\
                          snapshots or hindsight dumps of one buffer) are read as one recording,\n\
                          gaps and overlap included; where their metadata differs (KPIs,\n\
-                         systeminfo), each key is taken from the first input that holds it,\n\
-                         except events, which are both inputs' (an event with one id once, from\n\
-                         the first input), and a note names which of the KPIs and systeminfo\n\
-                         differ and the input each is taken from; to compare two annotations of\n\
-                         one recording, use --ab.\n\
-                         One file given twice is refused.\n\n\
+                         systeminfo), each key is taken from the first input that holds it, except\n\
+                         events, which are both inputs' (an event with one id once, from the first\n\
+                         input), and a note names which of the KPIs and systeminfo were edited\n\
+                         differently and the input each is taken from; to compare two annotations\n\
+                         of one recording, use --ab. One file given twice is refused.\n\n\
                          With `--ab baseline=<input> experiment=<input>` each input's recordings\n\
                          are labelled arm=baseline or arm=experiment and the viewer opens a\n\
                          baseline/experiment comparison; an input recording that already carries\n\
