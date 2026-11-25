@@ -37,10 +37,10 @@ pub fn parse_rate_mode(s: Option<&str>) -> RateMode {
 }
 
 /// Parse a scope argument: the uuids of the sources a query reads,
-/// separated by commas (a uuid names one source and its copies: those kept
-/// under a fresh uuid with it as their `origin`, and in an archive written
-/// before 6.0.0-alpha.169 those under the same uuid; one named twice is read
-/// once). Absent reads every source. Present but naming no
+/// separated by commas (a uuid names the sources with that uuid: one source,
+/// or in an archive written before 6.0.0-alpha.169 a source and its copies
+/// under the same uuid; a copy kept under a fresh uuid is named by its own;
+/// one named twice is read once). Absent reads every source. Present but naming no
 /// source is an error: read as absent it would read every source, and as an
 /// empty scope it would answer with an empty result. Shared by both
 /// backends.

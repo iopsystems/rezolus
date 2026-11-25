@@ -485,8 +485,8 @@ fn combine_dendro(
 }
 
 /// Refuse `files` when two of them are one file, by any spelling or link
-/// (a hard link compared by device and inode on Unix): its every source
-/// would be read twice over the same span.
+/// (a hard link compared by device and inode on Unix): the second would add
+/// only a redundant copy of every source.
 fn refuse_one_file_twice(files: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
     let same = |a: &Path, b: &Path| -> std::io::Result<bool> {
         if std::fs::canonicalize(a)? == std::fs::canonicalize(b)? {
@@ -1073,8 +1073,8 @@ mod tests {
     /// into two sources, the second under a fresh uuid with the first's as
     /// its origin, that read as one recording answering as the recording
     /// alone; with `--ab` each is an arm answering as the recording alone.
-    /// One file given twice, by one spelling, a symbolic link or a hard
-    /// link, is refused and nothing is written.
+    /// One file given twice, by one spelling, another spelling, a hard link
+    /// or (on Unix) a symbolic link, is refused and nothing is written.
     #[test]
     fn a_recording_and_its_copy_combine_into_one_recording() {
         use metriken_query::MetricsSource;
@@ -1127,7 +1127,15 @@ mod tests {
         let again = dir.path().join(".").join("a.dendro");
         let link = dir.path().join("hard.dendro");
         std::fs::hard_link(&a, &link).unwrap();
-        for second in [&a, &again, &link] {
+        #[allow(unused_mut)]
+        let mut seconds = vec![a.clone(), again, link];
+        #[cfg(unix)]
+        {
+            let sym = dir.path().join("sym.dendro");
+            std::os::unix::fs::symlink(&a, &sym).unwrap();
+            seconds.push(sym);
+        }
+        for second in &seconds {
             let err = run_combine(&[a.clone(), second.clone()], &out)
                 .unwrap_err()
                 .to_string();
@@ -1141,6 +1149,48 @@ mod tests {
             );
             assert!(!out.exists(), "nothing is written");
         }
+    }
+
+    /// Two ranged dumps of one recording with a gap between them (ticks 0-7
+    /// and 16-23 of 24, in segments of 4) combine into one recording whose
+    /// instants are both dumps' and none of the gap's.
+    #[test]
+    fn two_dumps_with_a_gap_combine_into_one_recording() {
+        use metriken_query::MetricsSource;
+        const SECOND: i64 = 1_000_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 24, true);
+        let pool = || metriken_storage::BufferPool::new(64 * 1024 * 1024);
+        let alone = ::rez::reader::RezReader::open_recordings(&a, pool()).unwrap();
+        let (first, last) = alone[0].1.time_range_ns().unwrap();
+        let first = first as i64;
+        let src = dendro::archive::Archive::open(&a).unwrap();
+        let early = dir.path().join("early.dendro");
+        let late = dir.path().join("late.dendro");
+        for (path, start, end) in [
+            (&early, i64::MIN, first + 5 * SECOND),
+            (&late, first + 18 * SECOND, i64::MAX),
+        ] {
+            let spec = dendro::rewrite::CopySpec {
+                start,
+                end,
+                ..dendro::rewrite::CopySpec::everything()
+            };
+            crate::dendro_copy::copy(&src, path, &spec).unwrap();
+        }
+        drop(src);
+
+        let out = dir.path().join("both.dendro");
+        run_combine(&[early.clone(), late.clone()], &out).unwrap();
+        let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
+        assert_eq!(both.len(), 1, "one recording");
+        let instants = both[0].1.sample_timestamps();
+        assert_eq!(instants.first().copied(), Some(first as u64));
+        assert_eq!(instants.last().copied(), Some(last));
+        let gap = (first + 8 * SECOND) as u64..(first + 16 * SECOND) as u64;
+        assert!(instants.iter().all(|t| !gap.contains(t)), "{instants:?}");
+        assert_eq!(instants.len(), 16, "{instants:?}");
     }
 
     /// An archive a build before 6.0.0-alpha.169 combined from a recording

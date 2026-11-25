@@ -859,11 +859,14 @@ mod help {
                          {program} recording check fleet.dendro --recording host=web-01 --json";
 
     pub(super) const COMBINE_LONG: &str = "Assemble two or more .dendro archives into one, a recording per input\n\
-                         recording, which the viewer opens as one combined view. Requires at least\n\
-                         two inputs (one archive with --ab, below) and an output (-o) ending in\n\
-                         .dendro. Two inputs that are copies of one recording (a file and a\n\
-                         snapshot of it, or two snapshots or hindsight dumps of one buffer) are\n\
-                         read as one recording, gaps and overlap included; one file given twice\n\
+                         recording (copies of one recording are one, below), which the viewer\n\
+                         opens as one combined view. Requires at least two inputs (one archive\n\
+                         with --ab, below) and an output (-o) ending in .dendro. Two inputs that\n\
+                         are copies of one recording (a file and a snapshot of it, or two\n\
+                         snapshots or hindsight dumps of one buffer) are read as one recording,\n\
+                         gaps and overlap included; where their metadata differs (KPIs,\n\
+                         systeminfo), each key is taken from the first input that holds it, so to\n\
+                         compare two annotations of one recording, use --ab. One file given twice\n\
                          is refused.\n\n\
                          With `--ab baseline=<input> experiment=<input>` each input's recordings\n\
                          are labelled arm=baseline or arm=experiment and the viewer opens a\n\
