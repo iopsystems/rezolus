@@ -192,6 +192,33 @@ pub fn classify_sources(
     entries
 }
 
+/// Whether `data` is a Rezolus agent's recording by [`classify_sources`],
+/// without the viewers' template step: no recording is classed as a service
+/// here. A Prometheus scrape, another producer's stream and an upgraded
+/// foreign parquet are not.
+pub fn is_rezolus_recording(data: &dyn metriken_query::MetricsSource) -> bool {
+    let metadata: serde_json::Map<String, serde_json::Value> = data
+        .file_metadata()
+        .into_iter()
+        .map(|(key, val)| {
+            let json = serde_json::from_str(&val).unwrap_or(serde_json::Value::String(val));
+            (key, json)
+        })
+        .collect();
+    let mut names = data.counter_names();
+    names.extend(data.gauge_names());
+    names.extend(data.histogram_names());
+    names.extend(data.gauge_histogram_names());
+    classify_sources(
+        &serde_json::Value::Object(metadata),
+        &names,
+        &HashSet::new(),
+        None,
+    )
+    .iter()
+    .any(|entry| entry.is_rezolus)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

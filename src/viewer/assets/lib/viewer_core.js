@@ -848,6 +848,23 @@ export function createGroupComponent(getState) {
                 ]),
             ]);
 
+            // Known errata for the metrics a plot reads (`errata` on the
+            // plot, from the section's recording; crates/dashboard errata.rs).
+            // In compare mode the section is the baseline's, so the notice
+            // names it.
+            const chartErrata = (spec) => Array.isArray(spec.errata) && spec.errata.length > 0
+                && m('div.chart-errata', { role: 'note' }, spec.errata.map((e) =>
+                    m('p.chart-erratum', [
+                        m('strong', compareMode
+                            ? `Known erratum in ${captureLabels.baseline} (${e.severity}): `
+                            : `Known erratum (${e.severity}): `),
+                        m('code', e.metric), ' ',
+                        e.summary, ' ',
+                        m('span.chart-erratum-condition',
+                            `${e.condition.charAt(0).toUpperCase()}${e.condition.slice(1)}.`), ' ',
+                        m('a', { href: e.reference, target: '_blank', rel: 'noopener noreferrer' }, 'Fix'),
+                    ])));
+
             const noCollapse = attrs.noCollapse || attrs.metadata?.no_collapse;
             // sectionMetadata is the section payload (set by renderServiceSection);
             // attrs.metadata is per-group config — unrelated.
@@ -930,6 +947,7 @@ export function createGroupComponent(getState) {
                 return m(cellClass, [
                     renderSpec.opts.description
                         && m('p.chart-description', renderSpec.opts.description),
+                    chartErrata(spec),
                     m('div.chart-wrapper', [
                         chartHeader(renderSpec.opts, renderSpec),
                         chartBody(renderSpec, spec),

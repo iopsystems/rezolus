@@ -127,14 +127,15 @@ pub struct Finding {
 }
 
 impl Finding {
-    /// One line: severity, the condition, the summary and the reference.
-    pub fn describe(&self) -> String {
+    /// Why the erratum applies: the agent version range, and whether the
+    /// recording's version placed it there or is missing or unparseable.
+    pub fn condition(&self) -> String {
         let fixed = self.erratum.fixed_in;
         let range = match self.erratum.since {
             Some(since) => format!("from {since}, before {fixed}"),
             None => format!("before {fixed}"),
         };
-        let condition = match &self.applies {
+        match &self.applies {
             Applies::Affected => format!("recorded by an agent {range}"),
             Applies::NoVersion => {
                 format!("the recording has no Rezolus agent version; agents {range} recorded this")
@@ -143,7 +144,12 @@ impl Finding {
                 "the recording's agent version ({v}) is not a semver version; agents {range} \
                  recorded this"
             ),
-        };
+        }
+    }
+
+    /// One line: severity, the condition, the summary and the reference.
+    pub fn describe(&self) -> String {
+        let condition = self.condition();
         format!(
             "{} ({condition}): {} {}",
             self.erratum.severity, self.erratum.summary, self.erratum.reference
@@ -201,6 +207,32 @@ pub fn applicable(version: &str, has_metric: impl Fn(&str) -> bool) -> Vec<Findi
             })
         })
         .collect()
+}
+
+/// The errata that apply to `data`: [`applicable`] with its `version`
+/// metadata when it is a Rezolus agent's recording
+/// ([`crate::source_kind::is_rezolus_recording`]) and no version otherwise,
+/// since another producer's `version` is not an agent version.
+pub fn for_source(data: &dyn metriken_query::MetricsSource) -> Vec<Finding> {
+    let names: std::collections::HashSet<String> = data
+        .counter_names()
+        .into_iter()
+        .chain(data.gauge_names())
+        .chain(data.histogram_names())
+        .chain(data.gauge_histogram_names())
+        .collect();
+    if !ERRATA
+        .iter()
+        .any(|e| e.metrics.iter().any(|m| names.contains(*m)))
+    {
+        return Vec::new();
+    }
+    let version = if crate::source_kind::is_rezolus_recording(data) {
+        data.version()
+    } else {
+        String::new()
+    };
+    applicable(&version, |m| names.contains(m))
 }
 
 /// The findings in `findings` that cover `metric` and whose recording holds

@@ -254,7 +254,12 @@ fn dashboard_queries(
             serde_json::to_string(&ctx.sections).unwrap()
         );
         for section in &ctx.sections {
-            let want = generate_section(data, &section.route, &generated);
+            // render_section attaches the recording's errata to each plot;
+            // the generators do not, so the expected view gets them too.
+            let want = generate_section(data, &section.route, &generated).map(|mut v| {
+                v.annotate_errata(&dashboard::errata::for_source(data));
+                v
+            });
             let Some(rendered) = render_section(data, &section.route, &ctx) else {
                 assert!(want.is_none(), "{} is not rendered", section.route);
                 continue;
