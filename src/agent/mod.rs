@@ -122,11 +122,12 @@ pub fn run(config: PathBuf) {
         }
     };
 
-    // Before anything below logs: a message before this is dropped.
-    let _log_drain = configure_logging(config.log().level().to_tracing_level());
-
     #[cfg(target_os = "linux")]
     config.scheduler().apply();
+
+    // After the scheduler class is applied, so the log writer thread takes
+    // it, and before anything below logs: a message before this is dropped.
+    let _log_drain = configure_logging(config.log().level().to_tracing_level());
 
     // BPF run-time stats are host-wide (one global kernel switch), so they are
     // opt-in. When enabled, acquire a BPF_ENABLE_STATS fd and hold it for the

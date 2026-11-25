@@ -357,10 +357,10 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   sampler whose programs had not fired (for example `tcp_retransmit` on a host
   with no retransmits) had no series, the same as when run-time accounting is
   off. Releases from 5.19.1 through 5.32.0 and the 6.0 prereleases have this.
-  Without `bpf_stats`, a 0 is still not published, since the kernel does not
-  count while accounting is off. This needs the agent to have enabled
+  Without `bpf_stats`, a 0 is still not published: without the fd the agent
+  cannot tell it apart from accounting being off. This needs the agent to have enabled
   run-time statistics; it logs a warning when it cannot. In those releases
-  that warning, and the info line when it could, were logged before logging
+  that warning, and the info line when it succeeded, were logged before logging
   was set up and never appeared.
 - **In V3 snapshots, `network_ethtool` publishes an ENA allowance counter
   that is zero.** The five `network_ena_*_allowance_exceeded` counters declared
