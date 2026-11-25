@@ -690,8 +690,9 @@ wrote, which every other subcommand refuses with that command.
   one recording (a file and a snapshot of it, or two snapshots or hindsight
   dumps of one buffer) are one recording, which takes each metadata key
   (KPIs, systeminfo) from the first input that holds it, except events,
-  which are both inputs' (an event with one id once, from the first input);
-  to compare two annotations of one recording, use `--ab`.
+  which are both inputs' (an event with one id once, from the first input),
+  and a note names each key that differs and the input it is taken from; to
+  compare two annotations of one recording, use `--ab`.
 - **Convert** — turn a raw msgpack recording (`record -o out.raw` in 5.x)
   into a `.dendro`. The input may be plain or zstd-compressed; which one it is
   is detected from the file's contents, not its name.

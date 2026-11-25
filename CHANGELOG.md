@@ -936,8 +936,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   hindsight dumps of one buffer) combine into one recording, gaps and
   overlap included, which takes each metadata key (KPIs, systeminfo) from
   the first input that holds it, except events, which are both inputs' (an
-  event with one id once, from the first input); with `--ab` each becomes
-  its own arm, which is how to compare two annotations of one recording. Save as Report saves a
+  event with one id once, from the first input), and a note names each key
+  that differs and the input it is taken from; with `--ab` each becomes its
+  own arm, which is how to compare two annotations of one recording. Save as Report saves a
   comparison of two such files. One file given twice to `recording combine` is
   refused. An archive a build before 6.0.0-alpha.169 wrote with two sources
   under one uuid (a recording combined with a copy of it) reads as one
