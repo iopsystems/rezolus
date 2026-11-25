@@ -258,7 +258,8 @@ struct AgentState {
     accum: Arc<Mutex<Totals>>,
 }
 
-/// An agent's running counter totals and when they last changed.
+/// An agent's running counter totals and when the worker last added a window
+/// to them.
 #[derive(Default)]
 struct Totals {
     /// Counter name -> accumulated value.
@@ -272,8 +273,8 @@ struct Totals {
 pub struct Sample {
     /// Counter name -> running total, summed across hardware instances.
     pub sums: HashMap<String, f64>,
-    /// When the totals last changed, on the source timeline. `None` until the
-    /// worker has added its first window.
+    /// When the worker last added a window to the totals, on the source
+    /// timeline. `None` until the worker has added its first window.
     pub accumulated_at_ns: Option<u64>,
 }
 // SAFETY: only accessed under the STATE mutex.
@@ -714,7 +715,7 @@ impl Rocprofiler {
     }
 
     /// Return the current accumulated counter totals for agent `idx`, and when
-    /// they last changed. These are monotonic counters built up by the agent's
+    /// the worker last added a window to them. These are monotonic counters built up by the agent's
     /// background worker from each window's delta, so `rate()` downstream works
     /// the same as for any other Rezolus counter. This is a cheap in-memory
     /// read — no GPU I/O.

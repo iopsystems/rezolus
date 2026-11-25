@@ -151,7 +151,6 @@ impl Sampler for AmdPmu {
         // Read the running counter totals for each GPU. The totals are maintained
         // by per-GPU background worker threads (which bracket each window with
         // start/stop); this is just a cheap in-memory read, no GPU I/O.
-        //
         let samples: Vec<_> = (0..self.rocp.num_agents())
             .filter_map(|idx| match self.rocp.sample(idx) {
                 Ok(sample) => Some((idx, sample)),
@@ -162,12 +161,14 @@ impl Sampler for AmdPmu {
             })
             .collect();
 
-        // The totals changed when a worker last added a window, before this
-        // copy, and a worker whose windows keep failing leaves them unchanged.
-        // The window therefore begins no later than the oldest such time.
+        // A worker last added a window to its totals before this copy, and a
+        // worker whose windows keep failing leaves them as they were. The
+        // window therefore begins no later than the oldest such time among
+        // the GPUs this publishes (ids below `MAX_GPUS`).
         GPU_AMD_PMU_ACQ.values_fixed_at(
             samples
                 .iter()
+                .filter(|(idx, _)| *idx < super::MAX_GPUS)
                 .filter_map(|(_, s)| s.accumulated_at_ns)
                 .min(),
         );
@@ -276,8 +277,8 @@ mod tests {
         assert_eq!(metric.value(0), None);
     }
 
-    /// `publish` stores a total of zero. Uses the last slot, which no host
-    /// reaches, so it cannot meet a real GPU's values.
+    /// `publish` stores a total of zero. No test initialises the sampler, so
+    /// no worker writes this slot.
     #[test]
     fn publish_stores_a_total_of_zero() {
         let id = super::super::MAX_GPUS - 1;
