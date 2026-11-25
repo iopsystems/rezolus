@@ -122,6 +122,9 @@ pub fn run(config: PathBuf) {
         }
     };
 
+    // Before anything below logs: a message before this is dropped.
+    let _log_drain = configure_logging(config.log().level().to_tracing_level());
+
     #[cfg(target_os = "linux")]
     config.scheduler().apply();
 
@@ -138,13 +141,16 @@ pub fn run(config: PathBuf) {
             Ok(fd) => {
                 bpf::RUN_STATS_HELD.store(true, std::sync::atomic::Ordering::Relaxed);
                 info!(
-                    "bpf_stats=true: enabled host-wide BPF run-time statistics;                      rezolus_bpf_run_time/count will populate. This taxes EVERY BPF                      program on the host, not just Rezolus's."
+                    "bpf_stats=true: enabled host-wide BPF run-time statistics; \
+                     rezolus_bpf_run_time/count will populate. This taxes EVERY BPF \
+                     program on the host, not just Rezolus's."
                 );
                 Some(fd)
             }
             Err(e) => {
                 warn!(
-                    "bpf_stats=true but BPF_ENABLE_STATS failed ({e});                      rezolus_bpf_run_time/count will be absent"
+                    "bpf_stats=true but BPF_ENABLE_STATS failed ({e}); \
+                     rezolus_bpf_run_time/count will be absent"
                 );
                 None
             }
@@ -152,8 +158,6 @@ pub fn run(config: PathBuf) {
     } else {
         None
     };
-
-    let _log_drain = configure_logging(config.log().level().to_tracing_level());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

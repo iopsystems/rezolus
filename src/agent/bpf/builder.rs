@@ -185,14 +185,38 @@ pub struct BpfProgStats {
 
 /// Whether a summed BPF run statistic is a reading to publish.
 ///
-/// The kernel reports 0 for both statistics while run-time accounting is off.
-/// While this agent holds the stats fd (`held`) accounting is on, so any total
-/// read from at least one program is a reading, including 0. Without the fd,
-/// accounting is on only if something else enabled it; a nonzero total shows
-/// that it was, and a total of 0 cannot be told apart from accounting being
-/// off, so it is not published.
+/// The kernel adds to both statistics only while run-time accounting is on,
+/// so a program that has run only while it was off reports 0. While this agent
+/// holds the stats fd (`held`) accounting is on, so any total read from at
+/// least one program is a reading, including 0. Without the fd, a total of 0
+/// cannot be told apart from accounting being off, so it is not published.
 fn run_stat_is_reading(held: bool, read_any: bool, total: u64) -> bool {
     read_any && (held || total > 0)
+}
+
+/// Sum the run time and run count of a sampler's programs and publish each
+/// total that [`run_stat_is_reading`] accepts. `infos` holds one entry per
+/// program: its `(run_time_ns, run_cnt)`, or `None` where reading its info
+/// failed.
+fn publish_run_stats(
+    stats: &BpfProgStats,
+    held: bool,
+    infos: impl IntoIterator<Item = Option<(u64, u64)>>,
+) {
+    let mut run_time: u64 = 0;
+    let mut run_count: u64 = 0;
+    let mut read_any = false;
+    for (time, count) in infos.into_iter().flatten() {
+        read_any = true;
+        run_time = run_time.wrapping_add(time);
+        run_count = run_count.wrapping_add(count);
+    }
+    if run_stat_is_reading(held, read_any, run_time) {
+        stats.run_time.set(run_time);
+    }
+    if run_stat_is_reading(held, read_any, run_count) {
+        stats.run_count.set(run_count);
+    }
 }
 
 pub struct PerfEvent {
@@ -1348,11 +1372,7 @@ where
                     v.refresh();
                 }
 
-                let mut run_time: u64 = 0;
-                let mut run_count: u64 = 0;
-                let mut read_any = false;
-
-                for prog in skel.object().progs() {
+                let infos = skel.object().progs().map(|prog| {
                     let mut info = libbpf_sys::bpf_prog_info::default();
                     let mut len = std::mem::size_of::<libbpf_sys::bpf_prog_info>() as u32;
 
@@ -1361,22 +1381,11 @@ where
                     let result =
                         unsafe { libbpf_sys::bpf_prog_get_info_by_fd(fd, &mut info, &mut len) };
 
-                    if result == 0 {
-                        read_any = true;
-                        run_time = run_time.wrapping_add(info.run_time_ns);
-                        run_count = run_count.wrapping_add(info.run_cnt);
-                    }
-                }
+                    (result == 0).then_some((info.run_time_ns, info.run_cnt))
+                });
 
                 let held = super::RUN_STATS_HELD.load(std::sync::atomic::Ordering::Relaxed);
-
-                if run_stat_is_reading(held, read_any, run_time) {
-                    self.prog_stats.run_time.set(run_time);
-                }
-
-                if run_stat_is_reading(held, read_any, run_count) {
-                    self.prog_stats.run_count.set(run_count);
-                }
+                publish_run_stats(&self.prog_stats, held, infos);
 
                 sync.notify();
             }
@@ -1747,7 +1756,48 @@ where
 
 #[cfg(test)]
 mod run_stat_tests {
-    use super::run_stat_is_reading;
+    use super::{publish_run_stats, run_stat_is_reading, BpfProgStats};
+    use metriken::{Counter, Lazy, LazyCounter};
+
+    /// Through `publish_run_stats`, as the sampler thread calls it: a total
+    /// of 0 is published while the fd is held, and nothing is published
+    /// without it or when no program's info was read.
+    #[test]
+    fn publish_writes_a_zero_only_while_the_stats_fd_is_held() {
+        static HELD_TIME: LazyCounter = LazyCounter::new(Counter::default);
+        static HELD_COUNT: LazyCounter = LazyCounter::new(Counter::default);
+        let held = BpfProgStats {
+            run_time: &HELD_TIME,
+            run_count: &HELD_COUNT,
+        };
+        publish_run_stats(&held, true, [Some((0, 0)), None]);
+        assert_eq!(Lazy::get(&HELD_TIME).map(|c| c.value()), Some(0));
+        assert_eq!(Lazy::get(&HELD_COUNT).map(|c| c.value()), Some(0));
+
+        static FREE_TIME: LazyCounter = LazyCounter::new(Counter::default);
+        static FREE_COUNT: LazyCounter = LazyCounter::new(Counter::default);
+        let free = BpfProgStats {
+            run_time: &FREE_TIME,
+            run_count: &FREE_COUNT,
+        };
+        publish_run_stats(&free, false, [Some((0, 0))]);
+        assert!(Lazy::get(&FREE_TIME).is_none());
+        assert!(Lazy::get(&FREE_COUNT).is_none());
+
+        static NONE_TIME: LazyCounter = LazyCounter::new(Counter::default);
+        static NONE_COUNT: LazyCounter = LazyCounter::new(Counter::default);
+        let none = BpfProgStats {
+            run_time: &NONE_TIME,
+            run_count: &NONE_COUNT,
+        };
+        publish_run_stats(&none, true, [None, None]);
+        assert!(Lazy::get(&NONE_TIME).is_none());
+        assert!(Lazy::get(&NONE_COUNT).is_none());
+
+        publish_run_stats(&free, false, [Some((5, 2)), Some((3, 1))]);
+        assert_eq!(Lazy::get(&FREE_TIME).map(|c| c.value()), Some(8));
+        assert_eq!(Lazy::get(&FREE_COUNT).map(|c| c.value()), Some(3));
+    }
 
     #[test]
     fn zero_is_a_reading_while_the_agent_holds_the_stats_fd() {
