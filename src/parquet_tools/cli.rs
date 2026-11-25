@@ -867,8 +867,9 @@ mod help {
                          gaps and overlap included; where their metadata differs (KPIs,\n\
                          systeminfo), each key is taken from the first input that holds it,\n\
                          except events, which are both inputs' (an event with one id once, from\n\
-                         the first input), and a note names each key that differs and the input\n\
-                         it is taken from; to compare two annotations of one recording, use --ab.\n\
+                         the first input), and a note names which of the KPIs and systeminfo\n\
+                         differ and the input each is taken from; to compare two annotations of\n\
+                         one recording, use --ab.\n\
                          One file given twice is refused.\n\n\
                          With `--ab baseline=<input> experiment=<input>` each input's recordings\n\
                          are labelled arm=baseline or arm=experiment and the viewer opens a\n\

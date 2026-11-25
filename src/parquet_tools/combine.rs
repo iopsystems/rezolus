@@ -496,10 +496,14 @@ fn combine_dendro(
 }
 
 /// A note for each set of copies of one source in one recording of the
-/// output whose metadata differs, `events` aside (a recording holds the
-/// events of all its sources). The recording takes every other key from the
-/// first of its sources holding it, so the note names, for each key that
-/// differs, the input whose value it shows. `rows` are the output's sources
+/// output whose KPIs or systeminfo differ: the keys a person sets
+/// (`annotate`), where the recording takes each from the first of its
+/// sources holding it. The note names, for each that differs, the input
+/// whose value the recording shows. Events are left out (a recording holds
+/// the events of all its sources), and so are the keys a writer maintains
+/// (`descriptions`, `writer_sessions`, the layers), which differ between two
+/// dumps of one buffer taken at different times. `--ab` is suggested only
+/// when there are two inputs and each holds one of the copies. `rows` are the output's sources
 /// in catalog order, `counts` how many each of `files` contributed, in
 /// order, and `groups` the output's recordings by catalog position.
 fn differing_copies(
@@ -513,11 +517,7 @@ fn differing_copies(
         .zip(files)
         .flat_map(|(&n, f)| std::iter::repeat_n(f.as_path(), n))
         .collect();
-    let name = |key: &str| match key {
-        "service_queries" => "KPIs".to_string(),
-        metriken_storage::layers::USER_KEY => "annotations".to_string(),
-        other => other.to_string(),
-    };
+    const NOTED: [(&str, &str); 2] = [("service_queries", "KPIs"), ("systeminfo", "systeminfo")];
     let mut notes = Vec::new();
     for group in groups {
         let mut group = group.clone();
@@ -529,31 +529,27 @@ fn differing_copies(
             }
         }
         for copies in by_identity.values().filter(|c| c.len() > 1) {
-            let metadata = |p: usize| &rows[p].meta.metadata;
-            let keys: BTreeSet<&String> = copies
+            let metadata = |p: usize| rows.get(p).map(|r| &r.meta.metadata);
+            let shown: Vec<String> = NOTED
                 .iter()
-                .flat_map(|&p| metadata(p).keys())
-                .filter(|k| k.as_str() != metriken_storage::process::EVENTS)
-                .filter(|k| {
-                    copies
-                        .iter()
-                        .any(|&p| metadata(p).get(*k) != metadata(copies[0]).get(*k))
+                .filter(|(key, _)| {
+                    copies.iter().any(|&p| {
+                        metadata(p).and_then(|m| m.get(*key))
+                            != metadata(copies[0]).and_then(|m| m.get(*key))
+                    })
                 })
-                .collect();
-            if keys.is_empty() {
-                continue;
-            }
-            let shown: Vec<String> = keys
-                .iter()
-                .map(|k| {
+                .map(|(key, name)| {
                     let from = group
                         .iter()
-                        .find(|&&p| metadata(p).contains_key(*k))
+                        .find(|&&p| metadata(p).is_some_and(|m| m.contains_key(*key)))
                         .map(|&p| input_of[p].display().to_string())
                         .unwrap_or_default();
-                    format!("{} from {from}", name(k))
+                    format!("{name} from {from}")
                 })
                 .collect();
+            if shown.is_empty() {
+                continue;
+            }
             let mut inputs: Vec<&Path> = copies.iter().map(|&p| input_of[p]).collect();
             inputs.dedup();
             let holders = match inputs.as_slice() {
@@ -566,10 +562,14 @@ fn differing_copies(
                         .join(" and ")
                 ),
             };
+            let hint = if files.len() == 2 && inputs.len() == 2 {
+                ". To compare them, combine with --ab"
+            } else {
+                ""
+            };
             notes.push(format!(
-                "note: {holders} of one recording whose metadata differs; the combined \
-                 recording takes {}, and the events of all. To compare them, combine \
-                 with --ab",
+                "note: {holders} of one recording whose KPIs or systeminfo differ; the \
+                 combined recording takes {}, and the events of all{hint}",
                 shown.join(", ")
             ));
         }
@@ -1249,7 +1249,9 @@ mod tests {
     /// differs, the input whose value the recording shows: KPIs both hold
     /// from the first input, systeminfo only the second holds from the
     /// second, in either order. Copies that agree, or that differ only in
-    /// events, get none, and with `--ab` (two recordings) neither does.
+    /// events or keys a writer maintains, get none, and with `--ab` (two
+    /// recordings) neither does. One input holding both copies gets the note
+    /// without the `--ab` hint.
     #[test]
     fn copies_whose_metadata_differs_are_noted() {
         let dir = tempfile::tempdir().unwrap();
@@ -1277,8 +1279,10 @@ mod tests {
         assert_eq!(notes(), Vec::<String>::new(), "copies that agree");
 
         set(&a, "events", r#"{"events":[{"id":"x","timestamp":1}]}"#);
+        set(&a, "writer_sessions", "[1]");
+        set(&a, "descriptions", r#"{"m":"help"}"#);
         run_combine(&[a.clone(), b.clone()], &dir.path().join("ev.dendro")).unwrap();
-        assert_eq!(notes(), Vec::<String>::new(), "events alone");
+        assert_eq!(notes(), Vec::<String>::new(), "events and writer keys");
 
         set(&a, "service_queries", "[1]");
         set(&b, "service_queries", "[2]");
@@ -1288,9 +1292,10 @@ mod tests {
             assert_eq!(
                 notes(),
                 [format!(
-                    "note: {} and {} hold copies of one recording whose metadata differs; \
-                     the combined recording takes KPIs from {}, systeminfo from {}, and \
-                     the events of all. To compare them, combine with --ab",
+                    "note: {} and {} hold copies of one recording whose KPIs or \
+                     systeminfo differ; the combined recording takes KPIs from {}, \
+                     systeminfo from {}, and the events of all. To compare them, combine \
+                     with --ab",
                     first.display(),
                     second.display(),
                     first.display(),
@@ -1307,6 +1312,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(notes(), Vec::<String>::new(), "--ab");
+
+        // One input holding both copies: --ab cannot separate them, so no
+        // hint.
+        let both = dir.path().join("ab.dendro");
+        let c = dir.path().join("c.dendro");
+        crate::dendro_copy::fixtures::recorded(&c, 6, true);
+        run_combine(&[both.clone(), c.clone()], &dir.path().join("abc.dendro")).unwrap();
+        assert_eq!(
+            notes(),
+            [format!(
+                "note: {} holds 2 copies of one recording whose KPIs or systeminfo \
+                 differ; the combined recording takes KPIs from {}, systeminfo from {}, \
+                 and the events of all",
+                both.display(),
+                both.display(),
+                both.display()
+            )]
+        );
     }
 
     /// Two ranged dumps of one recording with a gap between them (ticks 0-7
