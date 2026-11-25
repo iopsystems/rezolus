@@ -526,12 +526,12 @@ fn an_invalid_check_in_the_queries_file_is_refused() {
     assert!(stderr(&out).contains("exactly one"), "{}", stderr(&out));
 }
 
-/// `recording combine` refuses a recording and its snapshot (one source,
-/// which an archive holds once), naming both files. A recording read from
-/// two sources with one uuid (an archive a build before 6.0.0-alpha.169
-/// combined from a recording and its snapshot) carries a key only one of
-/// them holds: KPIs annotated onto the second are the recording's whichever
-/// order the two were combined in, and `recording check` runs them.
+/// A recording read from two copies of one source carries a key only one
+/// of them holds: KPIs annotated onto a snapshot of a recording are the
+/// combined recording's whichever order the two are combined in (the
+/// snapshot kept under a fresh uuid, its origin the recording's), and so
+/// are KPIs on the second of two sources with one uuid (an archive a build
+/// before 6.0.0-alpha.169 combined); `recording check` runs them.
 #[test]
 fn kpis_on_one_source_are_the_recordings() {
     let dir = tempfile::tempdir().unwrap();
@@ -545,26 +545,34 @@ fn kpis_on_one_source_are_the_recordings() {
         snap.to_str().unwrap(),
     ]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let refused = dir.path().join("refused.dendro");
+    let queries = write_queries(dir.path(), "q.json", FAILING);
     let out = rezolus(&[
         "recording",
-        "combine",
-        a.to_str().unwrap(),
+        "annotate",
         snap.to_str().unwrap(),
-        "-o",
-        refused.to_str().unwrap(),
+        "--queries",
+        queries.to_str().unwrap(),
     ]);
-    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
-    assert!(
-        stderr(&out).contains(&format!(
-            "{} and {} hold the same source",
-            a.display(),
-            snap.display()
-        )),
-        "{}",
-        stderr(&out)
-    );
-    assert!(!refused.exists());
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    for (name, first, second) in [("as.dendro", &a, &snap), ("sa.dendro", &snap, &a)] {
+        let combined = dir.path().join(name);
+        let out = rezolus(&[
+            "recording",
+            "combine",
+            first.to_str().unwrap(),
+            second.to_str().unwrap(),
+            "-o",
+            combined.to_str().unwrap(),
+        ]);
+        assert!(out.status.success(), "{name}: {}", stderr(&out));
+        let out = rezolus(&["recording", "check", combined.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(1), "{name}: {}", stderr(&out));
+        assert!(
+            stdout(&out).contains("FAIL          Queue depth bounded"),
+            "{name}: {}",
+            stdout(&out)
+        );
+    }
 
     // A second upgrade of the same capture is a source with its own uuid.
     let other = dir.path().join("other.dendro");

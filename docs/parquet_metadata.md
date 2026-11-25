@@ -530,8 +530,8 @@ target/release/rezolus recording annotate file.parquet --add-events events.json 
   canonical storage is always `u64` nanoseconds.
 
 In a `.dendro` each recording keeps its events in its own metadata. A
-recording read from several sources (one agent process recorded twice,
-which the readers present as one recording) shows the union of their events, deduped
+recording read from several sources (one agent process recorded twice, or
+a recording and a snapshot of it, which the readers present as one recording) shows the union of their events, deduped
 by `id`; `remove_events` drops an event from each source's own payload.
 
 ## `per_source_metadata`

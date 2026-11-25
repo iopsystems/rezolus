@@ -686,7 +686,14 @@ wrote, which every other subcommand refuses with that command.
 - **Combine** — combine `.dendro` recordings into one `.dendro`, a recording
   per input recording, which the viewer
   opens as one combined view; `--ab` labels each input's recordings as the
-  baseline or experiment arm of a comparison.
+  baseline or experiment arm of a comparison. Two inputs that are copies of
+  one recording (a file and a snapshot of it, or two snapshots or hindsight
+  dumps of one buffer) are one recording, which takes each metadata key
+  (KPIs, systeminfo) from the first input that holds it, except events,
+  which are both inputs' (an event with one id once, from the first input),
+  and a note names which of the KPIs and systeminfo were edited
+  differently and the input each is taken from; to compare two annotations
+  of one recording, use `--ab`.
 - **Convert** — turn a raw msgpack recording (`record -o out.raw` in 5.x)
   into a `.dendro`. The input may be plain or zstd-compressed; which one it is
   is detected from the file's contents, not its name.
@@ -732,7 +739,8 @@ layers, either way.
 
 `annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
 copy, given `-o`). A recording read from several sources (one agent process
-recorded twice, combined) takes each metadata key from the first source
+recorded twice, or a recording and a snapshot of it, combined) takes each
+metadata key from the first source
 holding it, so removing KPIs from one file with `--undo` does not remove
 them from a combined recording whose other source still has them: annotate
 the combined recording instead, which edits every source. A new output is

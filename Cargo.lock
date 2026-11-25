@@ -1167,9 +1167,9 @@ checksum = "5729f5117e208430e437df2f4843f5e5952997175992d1414f94c57d61e270b4"
 
 [[package]]
 name = "dendro"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e23e44db9ce36e914306492c00136a2f27f86941d60a2d1f644e4016d5ea3cdb"
+checksum = "928d4b839713643cc68a25f5ffb373ee3d12ae763eaba85a1b0cbd75b2b62414"
 dependencies = [
  "arrow",
  "bytes",
@@ -2576,9 +2576,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.52.1"
+version = "0.52.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cab49922f7f215c08586d9a21429d633f2820d1dd8b25dcd45e0cfe04095cdfe"
+checksum = "22eb8d3f23bab9ffb983460b0d548c8a30cc58857eb0342a4b5b4e21b1a04068"
 dependencies = [
  "arrow",
  "bytes",
@@ -2620,9 +2620,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9280fc5448191e24237d5dcc25f3b662131899810ec945da8d952d132191974"
+checksum = "6579eccec2b828f2a2543eea801637e9352d5c894facd124d011498f0fdb5b6d"
 dependencies = [
  "arrow",
  "bytes",
@@ -3640,7 +3640,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.175"
+version = "6.0.0-alpha.176"
 dependencies = [
  "allan",
  "anyhow",

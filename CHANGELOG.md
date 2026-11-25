@@ -929,15 +929,22 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   the upgrade command.
 - **An archive holds one source per uuid** (dendro 0.8, metriken-storage
   0.14, metriken-query 0.52, metriken-exposition 0.28, metriken-recorder
-  0.16). `recording combine` refuses two inputs that hold the same source (a
-  file and a snapshot of it, two snapshots or hindsight dumps of one
-  recording, or one file given twice), naming both, and Save as Report
-  refuses a comparison of two copies of one recording. An archive a build
-  before 6.0.0-alpha.169 wrote with two sources under one uuid (a recording
-  combined with a copy of it) still reads as one recording, and `recording
-  annotate`, `check --annotate` and the MCP event tools edit it in place.
-  `recording snapshot`, `filter` (in place or with `-o`), an edit into a new
-  file, `combine` and Save as Report each write a copy, and refuse it.
+  0.16). A copy of a source the output already holds is kept under a fresh
+  uuid, with the first uuid of its chain of copies as its origin, and reads
+  as a copy of that source (dendro 0.8.3, metriken-storage 0.14.2). So two
+  copies of one recording (a file and a snapshot of it, or two snapshots or
+  hindsight dumps of one buffer) combine into one recording, gaps and
+  overlap included, which takes each metadata key (KPIs, systeminfo) from
+  the first input that holds it, except events, which are both inputs' (an
+  event with one id once, from the first input). A note names which of the
+  KPIs and systeminfo were edited differently and the input each is taken
+  from. With `--ab` each copy becomes its own arm, which is how to compare
+  two annotations of one recording. Save as Report saves a comparison of
+  two such files. One file given twice to `recording combine` is
+  refused. An archive a build before 6.0.0-alpha.169 wrote with two sources
+  under one uuid (a recording combined with a copy of it) reads as one
+  recording, and `recording snapshot`, `filter`, an edit into a new file,
+  `upgrade -o`, `combine` and Save as Report copy it the same way.
 - **Writing to an archive leaves an empty `<archive>-lock` file beside it**:
   `record`, `recording upgrade` of a `.dendro` in place, and an in-place
   `recording annotate`, `check --annotate` or MCP edit (`add_event`,
@@ -1463,7 +1470,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   queries cached.
 - **One agent process recorded twice is read once.** metriken-query 0.42 forms
   process groups: sources that share a uuid (in an archive written before
-  6.0.0-alpha.169), or share a `producer_epoch` and overlap in time (one agent
+  6.0.0-alpha.169) or are copies kept under a fresh uuid with one origin
+  (metriken-storage 0.14.2), or
+  share a `producer_epoch` and overlap in time (one agent
   process recorded twice), are one recording; one epoch with disjoint spans
   is two. `rezolus view`, `mcp` (its `--recording` selectors and
   `describe-recording`), `recording check` and `annotate` list and select

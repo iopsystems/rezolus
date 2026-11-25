@@ -431,11 +431,17 @@ Options:
 --- exit 0
 --- stdout
 Assemble two or more .dendro archives into one, a recording per input
-recording, which the viewer opens as one combined view. Requires at least
-two inputs (one archive with --ab, below) and an output (-o) ending in
-.dendro. Two inputs that hold the same source (a file and a snapshot of
-it, two snapshots or hindsight dumps of one recording, or one file given
-twice) are refused, naming both: an archive holds each source once.
+recording (copies of one recording are one, below), which the viewer
+opens as one combined view. Requires at least two inputs (one archive
+with --ab, below) and an output (-o) ending in .dendro. Two inputs that
+are copies of one recording (a file and a snapshot of it, or two
+snapshots or hindsight dumps of one buffer) are read as one recording,
+gaps and overlap included; where their metadata differs (KPIs,
+systeminfo), each key is taken from the first input that holds it, except
+events, which are both inputs' (an event with one id once, from the first
+input), and a note names which of the KPIs and systeminfo were edited
+differently and the input each is taken from; to compare two annotations
+of one recording, use --ab. One file given twice is refused.
 
 With `--ab baseline=<input> experiment=<input>` each input's recordings
 are labelled arm=baseline or arm=experiment and the viewer opens a
