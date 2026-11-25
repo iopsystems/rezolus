@@ -103,6 +103,17 @@ pub static ERRATA: &[Erratum] = &[
         reference: "https://github.com/iopsystems/rezolus/pull/1736",
     },
     Erratum {
+        metrics: &["rezolus_bpf_run_time", "rezolus_bpf_run_count"],
+        fixed_in: "6.0.0-alpha.177",
+        since: Some("5.19.1"),
+        fixed_if_present: &[],
+        severity: Severity::Misleading,
+        summary: "A sampler whose BPF programs had not run was not recorded, so a sampler \
+                  missing from these series may have loaded programs that never ran, \
+                  rather than lacked run-time statistics.",
+        reference: "https://github.com/iopsystems/rezolus/pull/1753",
+    },
+    Erratum {
         metrics: &[
             "gpmu_clock",
             "gpmu_active_clock",

@@ -125,6 +125,10 @@ pub fn run(config: PathBuf) {
     #[cfg(target_os = "linux")]
     config.scheduler().apply();
 
+    // After the scheduler class is applied, so the log writer thread takes
+    // it, and before anything below logs: a message before this is dropped.
+    let _log_drain = configure_logging(config.log().level().to_tracing_level());
+
     // BPF run-time stats are host-wide (one global kernel switch), so they are
     // opt-in. When enabled, acquire a BPF_ENABLE_STATS fd and hold it for the
     // agent's lifetime: while any process holds such an fd the kernel keeps
@@ -136,14 +140,18 @@ pub fn run(config: PathBuf) {
     let _bpf_stats_fd = if config.general().bpf_stats() {
         match enable_bpf_run_stats() {
             Ok(fd) => {
+                bpf::RUN_STATS_HELD.store(true, std::sync::atomic::Ordering::Relaxed);
                 info!(
-                    "bpf_stats=true: enabled host-wide BPF run-time statistics;                      rezolus_bpf_run_time/count will populate. This taxes EVERY BPF                      program on the host, not just Rezolus's."
+                    "bpf_stats=true: enabled host-wide BPF run-time statistics; \
+                     rezolus_bpf_run_time/count will populate. This taxes EVERY BPF \
+                     program on the host, not just Rezolus's."
                 );
                 Some(fd)
             }
             Err(e) => {
                 warn!(
-                    "bpf_stats=true but BPF_ENABLE_STATS failed ({e});                      rezolus_bpf_run_time/count will be absent"
+                    "bpf_stats=true but BPF_ENABLE_STATS failed ({e}); \
+                     rezolus_bpf_run_time/count will be absent"
                 );
                 None
             }
@@ -151,8 +159,6 @@ pub fn run(config: PathBuf) {
     } else {
         None
     };
-
-    let _log_drain = configure_logging(config.log().level().to_tracing_level());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

@@ -10,7 +10,13 @@ pub use builder::{BpfProgStats, PerfEvent};
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::OnceLock;
+
+/// Whether this agent holds a `BPF_ENABLE_STATS` fd, so the kernel counts the
+/// run time and run count of every BPF program. Set once in `agent::run`,
+/// before any sampler starts.
+pub static RUN_STATS_HELD: AtomicBool = AtomicBool::new(false);
 
 /// The programs a sampler loads, from what the kernel can run: the twins to
 /// leave unloaded ([`BpfBuilder::disabled_programs`]), the (program,
