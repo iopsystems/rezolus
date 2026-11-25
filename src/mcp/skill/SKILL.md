@@ -18,6 +18,9 @@ the file if you were not given one; `rezolus record -o out.dendro` writes one.
 1. **`describe_recording`** first. It says what the file holds: source,
    agent version, time range, duration, and, for a multi-recording archive,
    the list of recordings with the `recording` selector that picks each.
+   A Known Errata section lists metrics that the recording's agent version
+   recorded wrongly or without what is needed to read them; do not draw
+   conclusions from those metrics without accounting for the erratum.
 2. **`describe_metrics`** before any query. Metric names, types and labels
    come from the recording, not from memory. A counter is queried with
    `irate(name[1m])` (the per-step rate; `rate(name[5m])` is the average

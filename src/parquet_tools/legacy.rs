@@ -3,8 +3,9 @@
 //! tarballs), turned into `.dendro` by `recording upgrade`, and the staging
 //! every command that writes an archive shares.
 //!
-//! No other command opens those formats: each refuses one with the upgrade
-//! command (`rez::container::not_dendro`).
+//! `view` converts one to a temporary `.dendro` when it opens it
+//! (`viewer::legacy_load`, through [`convert_quiet`]); every other command
+//! refuses one with the upgrade command (`rez::container::not_dendro`).
 
 use std::path::{Path, PathBuf};
 
@@ -388,5 +389,70 @@ mod publish_tests {
         std::fs::remove_file(&output).unwrap();
         copy_new(&staged, &output).unwrap();
         assert_eq!(std::fs::read(&output).unwrap(), b"new");
+    }
+
+    /// The viewers' in-memory conversion (`rez::legacy::to_dendro_bytes`)
+    /// reads as `recording upgrade`'s for each format it converts: the same
+    /// recordings, labels, metadata, metric names and answers.
+    #[test]
+    fn a_viewers_conversion_reads_as_the_upgrade() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let parquet = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/legacy/simple_capture.parquet");
+        let inputs = [
+            ::rez::fixtures::committed_rez("v3.rez", dir.path()),
+            ::rez::fixtures::committed_rez("v3-multi.rez", dir.path()),
+            ::rez::fixtures::committed_rez("v3-live.rez", dir.path()),
+            ::rez::fixtures::committed_rez("v2.rez", dir.path()),
+            parquet,
+        ];
+        let pool = || metriken_storage::BufferPool::new(16 << 20);
+        let read = |readers: ::rez::reader::LabeledRecordings| -> Vec<serde_json::Value> {
+            readers
+                .into_iter()
+                .map(|(labels, r)| {
+                    let (start, end) = r.time_range().unwrap();
+                    let counters = r.counter_names();
+                    let gauges = r.gauge_names();
+                    let queries: Vec<String> = counters
+                        .iter()
+                        .take(4)
+                        .map(|n| format!("irate({n}[5s])"))
+                        .chain(gauges.iter().take(4).cloned())
+                        .collect();
+                    let answers: Vec<serde_json::Value> = queries
+                        .iter()
+                        .map(|q| {
+                            serde_json::to_value(r.query_range(q, start, end, 1.0).unwrap())
+                                .unwrap()
+                        })
+                        .collect();
+                    let names: Vec<String> = counters.into_iter().chain(gauges).collect();
+                    serde_json::json!({
+                        "labels": labels,
+                        "metadata": r.file_metadata(),
+                        "names": names,
+                        "answers": answers,
+                    })
+                })
+                .collect()
+        };
+        for input in inputs {
+            let name = input.file_name().unwrap().to_string_lossy().into_owned();
+            let upgraded = dir.path().join(format!("{name}.dendro"));
+            convert(&input, &upgraded).unwrap();
+            let want = read(::rez::reader::RezReader::open_recordings(&upgraded, pool()).unwrap());
+            let converted =
+                ::rez::legacy::to_dendro_bytes(std::fs::read(&input).unwrap(), &name, "rezolus")
+                    .unwrap();
+            assert_eq!(converted.from, Container::of_path(&input), "{name}");
+            let got = read(
+                ::rez::reader::RezReader::open_recordings_from_bytes(converted.bytes, pool())
+                    .unwrap(),
+            );
+            assert!(!want.is_empty(), "{name}");
+            assert_eq!(got, want, "{name}");
+        }
     }
 }

@@ -125,7 +125,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <ul class="space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-12 list-disc pl-6">
 <li>6.0 writes <code>.dendro</code> archives only. Asking for <code>.rez</code>, parquet or raw output is refused.</li>
-<li>6.0 opens <code>.dendro</code> archives only. A 5.x <code>.rez</code>, <code>.parquet</code> or <code>.parquet.ab.tar</code> is converted with <code>rezolus recording upgrade FILE</code>. A <code>.dendro</code> written by 5.x opens as it is.</li>
+<li>6.0 reads <code>.dendro</code> archives. <code>rezolus view</code> and the browser viewer convert a 5.x <code>.rez</code> or <code>.parquet</code> when they open it; <code>rezolus recording upgrade FILE</code> writes a <code>.dendro</code> to keep, and the other commands need one. A <code>.dendro</code> written by 5.x opens as it is.</li>
 <li>6.0 records an agent from 5.21.0 or later, over its <code>/metrics/stream</code> route. An older agent is refused.</li>
 <li>5.x cannot open a <code>.dendro</code> that 6.0 writes.</li>
 </ul>
@@ -198,11 +198,11 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Convert -->
 <section class="mb-16" id="convert">
 <h2 class="text-xl font-bold mb-4">You have <code>.rez</code> or parquet files</h2>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3"><code>rezolus view</code>, <code>rezolus mcp</code>, the static-site viewer and every <code>rezolus recording</code> subcommand except <code>upgrade</code> refuse a <code>.rez</code> archive (v1, v2 or v3), a <code>.parquet</code> file and a <code>.parquet.ab.tar</code> A/B tarball, and print the command that converts the file. The exit code is 1, except for <code>recording check</code>, which exits 2. Nothing converts a file when it is opened.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3"><code>rezolus view</code> converts a <code>.rez</code> archive (v1, v2 or v3), a <code>.parquet</code> file or a <code>.parquet.ab.tar</code> A/B tarball to a temporary <code>.dendro</code> when it opens one. The static-site viewer converts a <code>.rez</code> or a <code>.parquet</code> of up to 640 MiB in the browser, and refuses a larger file, a combined 5.x parquet and an A/B tarball with the command that converts them. <code>rezolus mcp</code> and every <code>rezolus recording</code> subcommand except <code>upgrade</code> refuse all three and print the command that converts the file. The exit code is 1, except for <code>recording check</code>, which exits 2.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
 <div class="p-5 font-mono text-base leading-8">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view old.rez</code></div>
-<div class="text-sm text-slate-400">old.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp describe-recording old.rez</code></div>
+<div class="text-sm text-slate-400">Failed to load recording: old.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:</div>
 <div class="text-sm text-slate-400">&nbsp;&nbsp;rezolus recording upgrade old.rez</div>
 <div class="text-slate-500 text-sm"># exit 1</div>
 </div>
@@ -222,7 +222,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <li>A <code>.parquet.ab.tar</code> becomes one <code>.dendro</code> with two recordings labelled <code>arm=baseline</code> and <code>arm=experiment</code>, which the viewer opens as the comparison. <code>x.parquet.ab.tar</code> becomes <code>x.dendro</code>. The tarball's aliases and category are not carried over.</li>
 <li>A combined parquet written by 5.x <code>recording combine</code>, or by a 5.x recorder given several endpoints, becomes one recording per input.</li>
 <li>In 5.x, <code>recording upgrade old.rez</code> rewrote a v1 or v2 <code>.rez</code> in place as v3, and refused a v3 file ("already a v3 (SQLite) archive", exit 1). In 6.0 the same command converts any <code>.rez</code> version and writes <code>old.dendro</code> beside it. <code>--to v3</code> is refused (exit 1); <code>--to dendro</code> is accepted and gives the same result as leaving it out.</li>
-<li>A <code>.dendro</code> written by 5.x opens in 6.0 as it is. <code>recording upgrade</code> on it exits 1 with "already a dendro archive; there is nothing to upgrade".</li>
+<li>A <code>.dendro</code> written by 5.x opens in 6.0 as it is. <code>recording upgrade</code> on it copies it into the current layout, with indexes that let the viewer open a table without reading every segment, and renames the copy over it, after which 5.x cannot open it; <code>-o NEW.dendro</code> writes the copy elsewhere and leaves the 5.x file as it was.</li>
 </ul>
 </section>
 

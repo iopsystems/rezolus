@@ -32,26 +32,57 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Added
 
-- **`rezolus recording reindex FILE` rewrites a recording's segment indexes
-  in place**, as this release writes them, so the viewer opens a table from
-  its segments' indexes instead of reading every segment (metriken-storage
-  0.14.1's `reindex`, with metriken-query 0.52.1 and dendro 0.8.2). No
-  segment's data is rewritten. On a 9.6 h recording of 5,874 segments,
-  copied into a current archive, `recording reindex` took 5.5 s and 207 MB
-  peak RSS (one run, release build, Apple M4 Max). On a re-indexed copy of
-  the same recording, metriken's journal measured the first query on its
-  wide task table at 1.31 s by median (1.30–2.14 s, five runs), against
-  2.45–2.81 s for a metriken-storage build without that index change
-  (metriken #438) reading the earlier indexes; this release reading an
-  archive that was not re-indexed was not measured. A recording this
-  release records (`record`, hindsight) needs no re-index, and neither does
-  the output of `filter --metrics`, which now indexes its output. A
-  recording an earlier 6.0 build wrote, and any copy of one (`snapshot`,
-  `combine`, `filter` without `--metrics`), keeps the earlier indexes and
-  can be re-indexed in place. A 5.x archive (schema 4) is refused with the
-  `recording snapshot` that copies it into the current layout, and an
-  archive another process has open (a viewer, a recording) is refused;
-  while it runs, the viewer cannot open the file.
+- **The viewer shows known errata on the dashboard charts they affect.** A
+  section chart whose query reads a metric with a known erratum for its
+  recording's agent version (the table `describe-recording` uses) carries a
+  notice above it: the severity, the metric, what is wrong, why it applies
+  to this recording, and a link to the fix. In an archive read combined,
+  each recording's charts carry that recording's errata. In a comparison,
+  only the baseline recording's errata are shown; an erratum of the
+  experiment's recording is not. The expanded single-chart view and
+  selections do not show the notice. Both the server and the static viewer
+  show it. (#1220)
+- **MCP `describe-recording` and `describe-metrics` list known errata.** An
+  erratum is a defect in metrics recorded by agents of a range of versions;
+  the table is compiled in (`crates/dashboard/src/errata.rs`) and checked
+  against each recording's agent version when it is opened, so it covers
+  recordings made before the defect was known. `describe-recording` adds a
+  Known Errata section and `describe-metrics` an `Erratum:` line under each
+  affected metric; in an archive read combined, each line names its
+  recording. A recording with no Rezolus agent version, or one that is not a
+  semver version, is reported as possibly affected, unless it holds a metric
+  that only fixed agents record. Values are not changed. (#1220) Three
+  entries:
+  - `network_ena_*_allowance_exceeded` from agents before 5.20.1-alpha.4
+    report one interface on a host with several (#1216);
+  - the same counters from 5.20.1-alpha.4, before 6.0.0-alpha.169, have no
+    series for a zero value (#1736);
+  - `network_bytes`/`network_packets` from agents before 5.20.1-alpha.3 count
+    each interface layer, with no `network_host_*` counters to compare
+    against (#1214).
+- **`rezolus recording upgrade` brings a `.dendro` up to date**, in place or
+  into a new file with `-o`: each sealed segment's index is rewritten as this
+  release writes it (metriken-storage 0.14.1's `reindex`, with metriken-query
+  0.52.1 and dendro 0.8.2), so the viewer opens a table from its segments'
+  indexes instead of reading every segment. An archive an earlier 6.0 build
+  wrote is re-indexed with no segment's data rewritten. A 5.x archive (schema
+  4), which `upgrade` refused as already a dendro archive, is copied into the
+  current layout and the copy renamed over it, after which 5.x cannot open it;
+  `-o` writes the copy elsewhere and leaves the input. A current archive is
+  reported and left as it is. On a 9.6 h recording of 5,874 segments, copied
+  into a current archive, the re-index took 5.5 s and 207 MB peak RSS (one
+  run, release build, Apple M4 Max). On a re-indexed copy of the same
+  recording, metriken's journal measured the first query on its wide task
+  table at 1.31 s by median (1.30–2.14 s, five runs), against 2.45–2.81 s for
+  a metriken-storage build without that index change (metriken #438) reading
+  the earlier indexes; this release reading an archive that was not re-indexed
+  was not measured. A recording this release records (`record`, hindsight) is
+  current, and so is the output of `filter --metrics`, which now indexes its
+  output. A recording an earlier 6.0 build wrote, and any copy of one
+  (`snapshot`, `combine`, `filter` without `--metrics`), keeps the earlier
+  indexes until upgraded. Upgrading in place is refused while another process
+  has the archive open (a viewer, a recording); while it runs, the viewer
+  cannot open the file.
 
 - **`memory_cgroup` reads each cgroup's limits and memory events.**
   `cgroup_memory_max` and `cgroup_memory_high` are `memory.max` and
@@ -763,15 +794,13 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Removed
 
-- **Breaking: every command but `rezolus recording upgrade` opens
+- **Breaking: `mcp` and every `recording` subcommand but `upgrade` open
   `.dendro` archives only.** A `.rez` archive (v1, v2 or v3), a standalone
-  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by
-  `view` (a file, a browser upload, a URL load and an attached
-  experiment), the static-site viewer, `mcp` (CLI and stdio), Save as
-  Report and every other `recording` subcommand, with the command that
-  converts the file: `rezolus recording upgrade FILE`, which writes
-  `FILE`'s name with a `.dendro` extension. Nothing converts a recording
-  when it is opened, in memory or into a temporary file. `upgrade` now
+  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by `mcp`
+  (CLI and stdio) and every other `recording` subcommand, with the command
+  that converts the file: `rezolus recording upgrade FILE`, which writes
+  `FILE`'s name with a `.dendro` extension. The viewers convert one when
+  they open it (see Changed). `upgrade` now
   also converts a `.parquet.ab.tar` into a two-recording `.dendro`
   labelled `arm=baseline`/`arm=experiment`, which the viewer opens as the
   comparison; the tarball's aliases and category are not carried over. The
@@ -892,23 +921,47 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
 
 ### Changed
 
+- **The viewers convert a `.rez` or `.parquet` recording when they open it.**
+  `rezolus view` converts a `.rez` (v1, v2 or v3), a `.parquet` or a
+  `.parquet.ab.tar`, given on the command line, uploaded or loaded from a
+  URL, to a temporary `.dendro` with `recording upgrade`'s converter, and
+  removes it when the viewer exits (ctrl-c, SIGTERM, an error exit, a
+  panic, the TUI quitting). The static-site viewer converts a `.rez` or a single-source
+  `.parquet` of up to 640 MiB in the browser and shows a notice saying so;
+  Save as Report then writes a `.dendro`. Converting a v3 `.rez` in the
+  browser peaked at 4.5 to 5.2 times the file's size on files of 36 to
+  667 MiB (measured in node; other browsers were not measured), against
+  wasm32's 4 GiB, so a larger file is refused with
+  `rezolus recording upgrade FILE` before it is read, as are a combined 5.x
+  parquet file and a `.parquet.ab.tar`. Save as Report in the browser refuses an
+  archive over 400 MiB, converted or not. The upload picker offers `.rez` and `.parquet`
+  files. `mcp` and the `recording` tools still refuse these formats with
+  the upgrade command.
 - **An archive holds one source per uuid** (dendro 0.8, metriken-storage
   0.14, metriken-query 0.52, metriken-exposition 0.28, metriken-recorder
-  0.16). `recording combine` refuses two inputs that hold the same source (a
-  file and a snapshot of it, two snapshots or hindsight dumps of one
-  recording, or one file given twice), naming both, and Save as Report
-  refuses a comparison of two copies of one recording. An archive a build
-  before 6.0.0-alpha.169 wrote with two sources under one uuid (a recording
-  combined with a copy of it) still reads as one recording, and `recording
-  annotate`, `check --annotate` and the MCP event tools edit it in place.
-  `recording snapshot`, `filter` (in place or with `-o`), an edit into a new
-  file, `combine` and Save as Report each write a copy, and refuse it.
+  0.16). A copy of a source the output already holds is kept under a fresh
+  uuid, with the first uuid of its chain of copies as its origin, and reads
+  as a copy of that source (dendro 0.8.3, metriken-storage 0.14.2). So two
+  copies of one recording (a file and a snapshot of it, or two snapshots or
+  hindsight dumps of one buffer) combine into one recording, gaps and
+  overlap included, which takes each metadata key (KPIs, systeminfo) from
+  the first input that holds it, except events, which are both inputs' (an
+  event with one id once, from the first input). A note names which of the
+  KPIs and systeminfo were edited differently and the input each is taken
+  from. With `--ab` each copy becomes its own arm, which is how to compare
+  two annotations of one recording. Save as Report saves a comparison of
+  two such files. One file given twice to `recording combine` is
+  refused. An archive a build before 6.0.0-alpha.169 wrote with two sources
+  under one uuid (a recording combined with a copy of it) reads as one
+  recording, and `recording snapshot`, `filter`, an edit into a new file,
+  `upgrade -o`, `combine` and Save as Report copy it the same way.
 - **Writing to an archive leaves an empty `<archive>-lock` file beside it**:
-  `record`, `recording reindex`, and an in-place `recording annotate`,
-  `check --annotate` or MCP edit (`add_event`, `remove_events`, `run_checks`
-  with `annotate=true`). dendro takes an advisory lock on that file so that
-  two processes cannot write one archive; the second is refused. The file holds no data, a copy
-  does not need it, and nothing removes it.
+  `record`, `recording upgrade` of a `.dendro` in place, and an in-place
+  `recording annotate`, `check --annotate` or MCP edit (`add_event`,
+  `remove_events`, `run_checks` with `annotate=true`). dendro takes an
+  advisory lock on that file so that two processes cannot write one archive;
+  the second is refused. The file holds no data, a copy does not need it, and
+  nothing removes it.
 - **A `drivehealth` or `memory_cgroup` read that finishes a full interval
   or more after its dispatch is followed by an idle interval with no read.**
   Otherwise the next read is due one interval after the previous dispatch.
@@ -1427,7 +1480,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   queries cached.
 - **One agent process recorded twice is read once.** metriken-query 0.42 forms
   process groups: sources that share a uuid (in an archive written before
-  6.0.0-alpha.169), or share a `producer_epoch` and overlap in time (one agent
+  6.0.0-alpha.169) or are copies kept under a fresh uuid with one origin
+  (metriken-storage 0.14.2), or
+  share a `producer_epoch` and overlap in time (one agent
   process recorded twice), are one recording; one epoch with disjoint spans
   is two. `rezolus view`, `mcp` (its `--recording` selectors and
   `describe-recording`), `recording check` and `annotate` list and select
@@ -2291,8 +2346,9 @@ Upgrading from 5.x: see `site/docs/upgrade.html`
   now refuses a `y` that exists before reading anything, where it replaced
   it; `-o` naming the input itself (`./x.dendro`) filters in place. A killed
   command leaves that directory behind. Save as Report in the static site
-  refuses a recording over 1 GiB (it holds about three copies in memory),
-  naming `rezolus view`.
+  refuses a recording over 400 MiB (the report is built in memory beside
+  the recording; saving one of 583 MiB ran wasm32 out of memory), naming
+  `rezolus view`.
 - **Gauge histograms are listed.** A `.dendro` holding gauge histograms
   (metriken 0.11.4's `GaugeHistogram`) shows them in the viewer's metric
   browser (as histograms, charted through the histogram functions) and in

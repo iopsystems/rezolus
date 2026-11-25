@@ -168,6 +168,44 @@ impl View {
         }
     }
 
+    /// Attach to each plot the findings among `findings` whose present
+    /// metrics one of the plot's queries reads, matched as whole metric
+    /// names.
+    pub fn annotate_errata(&mut self, findings: &[crate::errata::Finding]) {
+        if findings.is_empty() {
+            return;
+        }
+        for plot in self
+            .groups
+            .iter_mut()
+            .flat_map(|g| g.subgroups.iter_mut())
+            .flat_map(|sg| sg.plots.iter_mut())
+        {
+            let names: HashSet<&str> = plot
+                .queries()
+                .into_iter()
+                .flat_map(|q| {
+                    q.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+                })
+                .collect();
+            let mut errata = Vec::new();
+            for finding in findings {
+                for metric in &finding.present {
+                    if names.contains(metric) {
+                        errata.push(PlotErratum {
+                            metric: metric.to_string(),
+                            severity: finding.erratum.severity.to_string(),
+                            condition: finding.condition(),
+                            summary: finding.erratum.summary.to_string(),
+                            reference: finding.erratum.reference.to_string(),
+                        });
+                    }
+                }
+            }
+            plot.errata = errata;
+        }
+    }
+
     /// Every query of every plot, in order: what [`map_queries`] visits.
     ///
     /// [`map_queries`]: Self::map_queries
@@ -350,6 +388,7 @@ impl SubGroup {
             plot: plot.build(promql_query),
             promql_query_experiment: None,
             width: PlotWidth::default(),
+            errata: Vec::new(),
         });
     }
 
@@ -443,6 +482,25 @@ pub struct PagePlot {
     pub promql_query_experiment: Option<String>,
     #[serde(skip_serializing_if = "plot_width_is_half", default)]
     pub width: PlotWidth,
+    /// Known errata ([`crate::errata`]) for the metrics this plot's queries
+    /// read, in the recording the section was rendered from.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub errata: Vec<PlotErratum>,
+}
+
+/// One erratum on a plot, as the page shows it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PlotErratum {
+    /// The affected metric the plot reads.
+    pub metric: String,
+    /// `wrong` or `misleading`.
+    pub severity: String,
+    /// [`crate::errata::Finding::condition`].
+    pub condition: String,
+    /// [`crate::errata::Erratum::summary`].
+    pub summary: String,
+    /// The pull request that fixed it.
+    pub reference: String,
 }
 
 impl PagePlot {
@@ -524,6 +582,7 @@ mod tests {
             plot: Plot::counter("t", "id", Unit::Count).build("up"),
             promql_query_experiment: None,
             width,
+            errata: Vec::new(),
         }
     }
 
@@ -689,6 +748,36 @@ mod tests {
             plots[1]["promql_query_total"],
             "histogram_sum(blockio_latency{op=\"read\"})"
         );
+    }
+
+    /// `annotate_errata` matches a finding's metrics as whole tokens of each
+    /// query: a selector or a `__name__` matcher, not a longer metric name
+    /// containing it.
+    #[test]
+    fn annotate_errata_matches_whole_metric_names() {
+        let findings = crate::errata::applicable("5.19.0", |m| m == "network_bytes");
+        assert_eq!(findings.len(), 1);
+        let mut g = Group::new("G", "g");
+        for q in [
+            "sum(irate(network_bytes{direction=\"transmit\"}[5m]))",
+            "sum(irate(network_host_bytes[5m]))",
+            "sum(irate(network_bytes_total[5m]))",
+            "{__name__=\"network_bytes\"}",
+        ] {
+            g.plot_promql(Plot::gauge("t", "id", Unit::Count), q.into());
+        }
+        let mut view = View::default();
+        view.groups.push(g);
+        view.annotate_errata(&findings);
+        let marked: Vec<bool> = view.groups[0].subgroups[0]
+            .plots
+            .iter()
+            .map(|p| !p.errata.is_empty())
+            .collect();
+        assert_eq!(marked, vec![true, false, false, true]);
+        let e = &view.groups[0].subgroups[0].plots[0].errata[0];
+        assert_eq!(e.metric, "network_bytes");
+        assert_eq!(e.condition, "recorded by an agent before 5.20.1-alpha.3");
     }
 
     /// `map_queries` rewrites the query, the experiment query and the total

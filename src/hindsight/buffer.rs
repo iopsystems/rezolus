@@ -318,7 +318,7 @@ fn bytes_on_disk(path: &Path) -> u64 {
 /// slots and running a msgpack→parquet conversion over them.
 ///
 /// Both the whole buffer and a range go through dendro's
-/// `copy_sources_into`: whole segments overlapping the range, copied as they
+/// `copy_sources_into_as_copies`: whole segments overlapping the range, copied as they
 /// are, the live WAL tail encoded into a final segment through
 /// metriken-storage's encoder, and the clock offsets, all in one read
 /// snapshot of the buffer. The writer keeps committing throughout and the

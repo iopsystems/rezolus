@@ -331,7 +331,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- combine -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>combine</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Assemble two or more archives into one, a recording per input recording, opened as one combined view or, with <code>--ab</code>, as an A/B comparison. Two inputs that hold the same source (a file and a snapshot of it, two snapshots or hindsight dumps of one recording, or one file given twice) are refused, naming both: an archive holds each source once.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Assemble two or more archives into one, a recording per input recording (copies of one recording are one), opened as one combined view or, with <code>--ab</code>, as an A/B comparison. Two inputs that are copies of one recording (a file and a snapshot of it, or two snapshots or hindsight dumps of one buffer) are read as one recording, gaps and overlap included; where their metadata differs (KPIs, systeminfo), each key is taken from the first input that holds it, except events, which are both inputs' (an event with one id once, from the first input), and a note names which of the KPIs and systeminfo were edited differently and the input each is taken from; to compare two annotations of one recording, use <code>--ab</code>. One file given twice is refused.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Input recordings (.dendro)</span></div>
 <div><span class="text-slate-400">-o, --output &lt;FILE&gt;</span>         <span class="text-slate-600">The .dendro to write; must not exist</span></div>
@@ -376,22 +376,13 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 </div>
 </div>
 
-<!-- reindex -->
-<div>
-<h4 class="text-sm font-bold mb-2"><code>reindex</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Rewrite a recording's segment indexes in place, as this release writes them, so the viewer opens a table from the indexes instead of reading every segment. A recording this release records needs none, nor does the output of <code>filter --metrics</code>. A recording an earlier 6.0 build wrote, and any copy of one (<code>snapshot</code>, <code>combine</code>, <code>filter</code> without <code>--metrics</code>), keeps the earlier indexes and needs one. Refuses a file another process has open, and a 5.x archive (schema 4), which <code>snapshot</code> copies into the current layout first.</p>
-<div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The archive to re-index (.dendro), in place</span></div>
-</div>
-</div>
-
 <!-- upgrade -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>upgrade</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Convert a recording an earlier release wrote into a new <code>.dendro</code>: a v1, v2 or v3 <code>.rez</code>, a <code>.parquet</code> file, or a <code>.parquet.ab.tar</code> A/B tarball (two recordings, arm=baseline and arm=experiment). The input is never changed.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Bring a recording an earlier release wrote up to date. A v1, v2 or v3 <code>.rez</code>, a <code>.parquet</code> file, or a <code>.parquet.ab.tar</code> A/B tarball (two recordings, arm=baseline and arm=experiment) becomes a new <code>.dendro</code>, and the input is not changed. A <code>.dendro</code> is upgraded in place, or into a new file with <code>-o</code>: each sealed segment's index is rewritten as this release writes it, so the viewer opens a table without reading every segment. One an earlier 6.0 build wrote is re-indexed without rewriting its data; a 5.x <code>.dendro</code> (schema 4) is copied into the current layout and the copy renamed over it. Upgrading in place is refused while another process has the file open.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The recording to convert</span></div>
-<div><span class="text-slate-400">-o, --output &lt;DENDRO&gt;</span>       <span class="text-slate-600">The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro)</span></div>
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The recording to upgrade</span></div>
+<div><span class="text-slate-400">-o, --output &lt;DENDRO&gt;</span>       <span class="text-slate-600">The .dendro to write (default: a .dendro input itself; otherwise the input's name with .dendro for its extension, x.parquet.ab.tar becoming x.dendro)</span></div>
 </div>
 </div>
 

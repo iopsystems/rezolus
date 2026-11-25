@@ -78,34 +78,11 @@ const PER_INPUT_KEYS: &[&str] = &[
     ARROW_SCHEMA_KEY,
 ];
 
-/// Whether the parquet file at `path` is a combined file: its `source` is a
-/// JSON array of source names and every metric column carries a `source`
-/// label. A file the 5.x recorder (5.21 and later) wrote for one endpoint
-/// given an array `source` has unlabelled columns and is converted as one
-/// source.
+/// Whether the parquet file at `path` is a combined file
+/// (`rez::legacy::is_combined_parquet`, which the viewers ask of a parquet
+/// file they convert on load).
 pub(crate) fn is_combined(path: &Path) -> bool {
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let Ok(builder) = ParquetRecordBatchReaderBuilder::try_new(file) else {
-        return false;
-    };
-    let array_source = builder
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .and_then(|kv| kv.iter().find(|e| e.key == KEY_SOURCE))
-        .and_then(|e| e.value.as_deref())
-        .is_some_and(|v| serde_json::from_str::<Vec<String>>(v).is_ok());
-    let mut metrics = builder
-        .schema()
-        .fields()
-        .iter()
-        .filter(|f| !matches!(f.name().as_str(), "timestamp" | "duration"))
-        .peekable();
-    array_source
-        && metrics.peek().is_some()
-        && metrics.all(|f| f.metadata().get(KEY_SOURCE).is_some_and(|s| !s.is_empty()))
+    std::fs::File::open(path).is_ok_and(::rez::legacy::is_combined_parquet)
 }
 
 /// One input of a combined file: its source, its `node` or `instance`
@@ -1281,5 +1258,65 @@ pub(crate) mod tests {
         assert_eq!(recordings.len(), 1);
         use metriken_query::MetricsSource;
         assert_eq!(recordings[0].1.file_metadata().get("source"), Some(&source));
+    }
+
+    /// A parquet file naming one source, whose series carry no `source`
+    /// label, is labelled `source=<name>` by the viewers' conversion as by
+    /// `recording upgrade` (`dashboard::combined::parquet_source_label`).
+    #[test]
+    fn a_viewer_labels_a_one_source_parquet_as_the_upgrade_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("svc.parquet");
+        write_parquet(
+            &input,
+            &[(
+                "queue_depth",
+                meta(&[("metric_type", "gauge"), ("metric", "queue_depth")]),
+                3,
+            )],
+            &[("source", "llm-perf".to_string())],
+        );
+        let labels = |readers: ::rez::reader::LabeledRecordings| -> Vec<_> {
+            readers.into_iter().map(|(l, _)| l).collect()
+        };
+        let pool = || metriken_storage::BufferPool::new(8 << 20);
+        let upgraded = dir.path().join("svc.dendro");
+        super::super::legacy::convert(&input, &upgraded).unwrap();
+        let want = labels(::rez::reader::RezReader::open_recordings(&upgraded, pool()).unwrap());
+        assert_eq!(want[0].get("source").map(String::as_str), Some("llm-perf"));
+        let converted = ::rez::legacy::to_dendro_bytes(
+            std::fs::read(&input).unwrap(),
+            "svc.parquet",
+            "rezolus",
+        )
+        .unwrap();
+        let got = labels(
+            ::rez::reader::RezReader::open_recordings_from_bytes(converted.bytes, pool()).unwrap(),
+        );
+        assert_eq!(got, want);
+    }
+
+    /// The viewers convert a parquet file when they open it, but not a
+    /// combined one, whose converter is this module's: it is refused with
+    /// the upgrade command.
+    #[test]
+    fn a_viewer_refuses_to_convert_a_combined_parquet() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = combined_parquet(dir.path());
+        let err = ::rez::legacy::to_dendro_bytes(
+            std::fs::read(&input).unwrap(),
+            "both.parquet",
+            "rezolus",
+        )
+        .err()
+        .unwrap();
+        assert!(
+            err.starts_with("both.parquet is a combined parquet recording"),
+            "{err}"
+        );
+        assert!(
+            err.contains("rezolus recording upgrade both.parquet"),
+            "{err}"
+        );
     }
 }

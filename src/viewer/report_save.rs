@@ -226,9 +226,10 @@ mod tests {
     }
 
     /// A report of an archive with two sources under one uuid (written before
-    /// 6.0.0-alpha.169) is refused with the reason: a report is a copy.
+    /// 6.0.0-alpha.169) keeps the second under a fresh uuid, and opens as
+    /// one recording, as the archive does.
     #[test]
-    fn a_report_of_two_sources_under_one_uuid_is_refused() {
+    fn a_report_of_two_sources_under_one_uuid_is_one_recording() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
@@ -236,15 +237,13 @@ mod tests {
         let old = dir.path().join("old.dendro");
         crate::parquet_tools::combine::run_combine_for_test(&[a, b], &old).unwrap();
         ::rez::fixtures::one_uuid(&old);
-        let uuid = dendro::archive::Archive::open(&old)
-            .unwrap()
-            .read_sources()
-            .unwrap()[0]
-            .uuid
-            .clone()
-            .unwrap();
-        let err = build_report(&[&old], None, None, None, "{}", None).unwrap_err();
-        assert_eq!(err, ::rez::container::duplicate_source(&uuid));
+        let bytes = build_report(&[&old], None, None, None, "{}", None).unwrap();
+        let opened = ::rez::reader::RezReader::open_recordings_from_bytes(
+            bytes,
+            metriken_storage::BufferPool::new(16 << 20),
+        )
+        .unwrap();
+        assert_eq!(opened.len(), 1);
     }
 
     /// An untrimmed dendro report copies every stream and carries no report

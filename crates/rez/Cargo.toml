@@ -10,6 +10,9 @@ publish = false
 [dependencies]
 arrow = "60.0.0"
 bytes = "1"
+# `combined::parquet_source_label` and `keys`, for the parquet conversion
+# `legacy` runs.
+dashboard.workspace = true
 # Reader-only by default (see the workspace entry); `write` below turns
 # dendro's append side on alongside rez's own.
 dendro = { workspace = true, features = ["archive"] }
@@ -19,7 +22,10 @@ metriken-exposition = { workspace = true, optional = true }
 # `archive`: `MetricsSource` for `ArchiveReader` and `eval_timestamps_for`,
 # which the read path needs in every configuration, the wasm viewer's included.
 metriken-query = { workspace = true, features = ["archive"] }
-metriken-storage = { workspace = true, features = ["rez"] }
+# `write` for the converters (`to_dendro`, `ParquetToArchive`), which the
+# viewers run on a `.rez` or parquet file they load (`legacy`). They write an
+# in-memory `ArchiveMut` and spawn no thread, so they run in the browser.
+metriken-storage = { workspace = true, features = ["rez", "write"] }
 parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "simdutf8",
@@ -38,23 +44,23 @@ tracing = "0.1"
 [features]
 default = ["write"]
 # Everything that turns an agent snapshot into archive rows: the ingest path
-# and both writers. Off, the crate is a READER — which is the configuration
-# that compiles for wasm32, since `metriken`'s registry (`metriken-core`)
-# declares a `linkme` distributed slice and `linkme` has no wasm32
-# implementation.
+# and the stream subscription. Off, the crate reads archives and converts a
+# `.rez` or parquet file in memory (`legacy`), with no `metriken` registry,
+# which is the configuration that compiles for wasm32: `metriken`'s registry
+# (`metriken-core`) declares a `linkme` distributed slice and `linkme` has no
+# wasm32 implementation.
 write = [
     "dep:metriken",
     "dep:metriken-exposition",
     "metriken-query/ingest",
-    # dendro's append side, for the same reason as the rest of this list: it
-    # is what does not compile for wasm32. Replication needs no feature of its
-    # own as of dendro 0.2.0 — it is always compiled in, and the parts of it
-    # that need a writer are gated on `write` inside dendro.
+    # dendro's append side. The converters in `legacy` need it too, so the
+    # base `metriken-storage` dependency turns it on in every configuration
+    # (its `write`); it compiles for wasm32, and the converters and in-memory
+    # archives use no writer thread.
     "dendro/write",
     # `StreamRow` for `wire::AgentRow` and `Pass` for `wire::AgentRows`, so
     # the agent's stream subscriptions read the rows it already built for
     # `/metrics/rows` without converting them.
-    "metriken-storage/write",
     "metriken-storage/stream",
 ]
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,

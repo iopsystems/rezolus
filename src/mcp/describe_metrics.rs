@@ -2,12 +2,34 @@ use metriken_query::MetricsSource;
 use metriken_storage::{is_internal_label, is_storage_key};
 
 /// Format metrics description for display
-pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
+/// `errata` are the known errata of the recording, or of each joined recording
+/// when `combined`; each is printed under the metrics it covers.
+pub fn format_metrics_description(
+    data: &dyn MetricsSource,
+    errata: &[super::RecordingErrata],
+    combined: bool,
+) -> String {
     let mut output = String::new();
     output.push_str("Available Metrics in Recording\n");
     output.push_str("===============================\n\n");
 
     let descriptions = crate::common::metric_descriptions();
+
+    let errata_lines = |output: &mut String, name: &str| {
+        for rec in errata {
+            for f in ::dashboard::errata::for_metric(&rec.findings, name) {
+                if combined {
+                    output.push_str(&format!(
+                        "  Erratum [{}]: {}\n",
+                        super::render_labels(&rec.labels),
+                        f.describe()
+                    ));
+                } else {
+                    output.push_str(&format!("  Erratum: {}\n", f.describe()));
+                }
+            }
+        }
+    };
 
     let helper = |output: &mut String,
                   name: &str,
@@ -39,6 +61,7 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
             if let Some(desc) = descriptions.get(name.as_str()) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
+            errata_lines(&mut output, name);
             let labels_list = data.counter_labels(name);
             helper(&mut output, name, &labels_list);
             output.push('\n');
@@ -55,6 +78,7 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
             if let Some(desc) = descriptions.get(name.as_str()) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
+            errata_lines(&mut output, name);
             let labels_list = data.gauge_labels(name);
             helper(&mut output, name, &labels_list);
             output.push('\n');
@@ -71,6 +95,7 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
             if let Some(desc) = descriptions.get(name.as_str()) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
+            errata_lines(&mut output, name);
             let labels_list = data.histogram_labels(name);
             helper(&mut output, name, &labels_list);
             output.push('\n');
@@ -87,6 +112,7 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
             if let Some(desc) = descriptions.get(name.as_str()) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
+            errata_lines(&mut output, name);
             let labels_list = data.gauge_histogram_labels(name);
             helper(&mut output, name, &labels_list);
             output.push('\n');
@@ -216,7 +242,7 @@ mod tests {
             metriken_storage::BufferPool::new(8 << 20),
         )
         .unwrap();
-        let text = super::format_metrics_description(&readers[0].1);
+        let text = super::format_metrics_description(&readers[0].1, &[], false);
         assert!(text.contains("GAUGE HISTOGRAMS"), "{text}");
         assert!(text.contains("• depth"), "{text}");
         assert!(text.contains("Gauge histograms: 1"), "{text}");

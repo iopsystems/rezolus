@@ -4,8 +4,9 @@
 //! Recordings opened anywhere (the viewers, `mcp`, the `recording` tools)
 //! are dendro archives. The formats earlier releases wrote (`.rez` archives
 //! in both containers, standalone parquet files, `.parquet.ab.tar` A/B
-//! tarballs) are converted once, by `recording upgrade`, and the readers
-//! refuse them with the command that does it.
+//! tarballs) are converted by `recording upgrade`, and by the viewers when
+//! they open one ([`crate::legacy`] in the browser); `mcp` and the
+//! `recording` tools refuse them with the upgrade command.
 
 use std::io::Read;
 use std::path::Path;
@@ -207,29 +208,6 @@ fn unused_name(stem: &str, taken: &[&str]) -> String {
         .chain((2..).map(|i| format!("{stem}-{i}.dendro")))
         .find(|name| !taken.iter().any(|t| t.eq_ignore_ascii_case(name)))
         .expect("an unbounded sequence")
-}
-
-/// The refusal for an archive holding two sources with one uuid, which a
-/// build before 6.0.0-alpha.169 wrote when it combined a recording with a
-/// copy of it. dendro holds each source once in an archive, so a copy of
-/// that archive is refused at the second source.
-pub fn duplicate_source(uuid: &str) -> String {
-    format!(
-        "the archive holds two sources with uuid {uuid}, which a build before \
-         6.0.0-alpha.169 wrote when it combined a recording with a copy of it. A new \
-         archive holds each source once, so this one cannot be copied: `snapshot`, \
-         `filter`, an edit with -o, `combine` and Save as Report refuse it; `annotate`, \
-         `check --annotate` and the MCP event tools edit it in place"
-    )
-}
-
-/// `e` as a message, with [`duplicate_source`] for
-/// `dendro::Error::DuplicateSource`: the error a copy of an archive returns.
-pub fn copy_error(e: dendro::Error) -> String {
-    match e {
-        dendro::Error::DuplicateSource { uuid } => duplicate_source(&uuid),
-        e => e.to_string(),
-    }
 }
 
 /// `path` as a command-line argument for a POSIX shell: single-quoted

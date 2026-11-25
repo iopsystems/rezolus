@@ -3087,3 +3087,23 @@ main {
     margin-top: 1.5rem;
 }
 
+
+/* Known errata on a chart (viewer_core.js chartErrata). */
+.chart-errata {
+    border-left: 3px solid var(--warning);
+    padding: 4px 8px;
+    margin: 0 0 6px 0;
+    font-size: 0.85em;
+}
+.chart-erratum {
+    margin: 2px 0;
+}
+.chart-erratum strong {
+    color: var(--warning);
+}
+.chart-erratum-condition {
+    opacity: 0.8;
+}
+.chart-erratum a {
+    color: var(--accent);
+}
